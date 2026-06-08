@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Install TaxWise Nigeria</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --navy:#0B1628;
+  --blue:#1D4ED8;
+  --green:#059669;
+  --green-light:#4ADE80;
+  --amber:#D97706;
+  --white:#ffffff;
+  --muted:rgba(255,255,255,.55);
+  --border:rgba(255,255,255,.12);
+}
+html{scroll-behavior:smooth;}
+body{
+  background:var(--navy);
+  color:var(--white);
+  font-family:'DM Sans',sans-serif;
+  min-height:100vh;
+  overflow-x:hidden;
+}
+
+/* Background mesh */
+body::before{
+  content:"";
+  position:fixed;inset:0;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 20%, rgba(29,78,216,.25) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 80% at 80% 80%, rgba(5,150,105,.2) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 40% at 60% 30%, rgba(74,222,128,.08) 0%, transparent 50%);
+  pointer-events:none;
+  z-index:0;
+}
+
+.wrap{position:relative;z-index:1;max-width:480px;margin:0 auto;padding:0 20px 60px;}
+
+/* Hero */
+.hero{text-align:center;padding:52px 0 40px;}
+.logo{
+  width:80px;height:80px;border-radius:22px;
+  background:linear-gradient(135deg,#1E3A5F,#0B1628);
+  border:1.5px solid rgba(74,222,128,.35);
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:38px;font-weight:800;color:var(--green-light);
+  margin-bottom:20px;
+  box-shadow:0 0 40px rgba(74,222,128,.15),0 8px 32px rgba(0,0,0,.4);
+}
+.hero h1{
+  font-family:'Syne',sans-serif;
+  font-size:clamp(28px,7vw,38px);
+  font-weight:800;
+  letter-spacing:-.03em;
+  line-height:1.1;
+  margin-bottom:12px;
+}
+.hero h1 span{color:var(--green-light);}
+.hero p{
+  font-size:15px;
+  color:var(--muted);
+  line-height:1.65;
+  max-width:340px;
+  margin:0 auto 28px;
+}
+.badge{
+  display:inline-flex;align-items:center;gap:6px;
+  background:rgba(74,222,128,.1);
+  border:1px solid rgba(74,222,128,.25);
+  border-radius:100px;padding:6px 14px;
+  font-size:11px;font-weight:600;color:var(--green-light);
+  letter-spacing:.04em;margin-bottom:28px;
+}
+
+/* Features */
+.features{
+  display:grid;grid-template-columns:1fr 1fr;
+  gap:10px;margin-bottom:36px;
+}
+.feat{
+  background:rgba(255,255,255,.05);
+  border:1px solid var(--border);
+  border-radius:14px;padding:14px 13px;
+}
+.feat-icon{font-size:20px;margin-bottom:8px;}
+.feat-title{font-size:12px;font-weight:700;color:var(--white);margin-bottom:3px;line-height:1.3;}
+.feat-desc{font-size:11px;color:var(--muted);line-height:1.5;}
+
+/* Install card */
+.install-card{
+  background:rgba(255,255,255,.06);
+  border:1px solid var(--border);
+  border-radius:20px;
+  padding:24px 20px;
+  margin-bottom:12px;
+}
+.install-card.active{
+  background:rgba(74,222,128,.06);
+  border-color:rgba(74,222,128,.3);
+}
+.device-header{
+  display:flex;align-items:center;gap:12px;margin-bottom:18px;
+}
+.device-icon{
+  width:44px;height:44px;border-radius:12px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:22px;flex-shrink:0;
+}
+.device-icon.android{background:rgba(74,222,128,.15);}
+.device-icon.ios{background:rgba(147,197,253,.15);}
+.device-label{font-family:'Syne',sans-serif;font-size:15px;font-weight:700;}
+.device-sub{font-size:11px;color:var(--muted);margin-top:1px;}
+
+/* Steps */
+.steps{display:flex;flex-direction:column;gap:10px;}
+.step{display:flex;gap:12px;align-items:flex-start;}
+.step-num{
+  width:26px;height:26px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:700;flex-shrink:0;margin-top:1px;
+}
+.step-num.green{background:rgba(74,222,128,.2);color:var(--green-light);border:1px solid rgba(74,222,128,.3);}
+.step-num.blue{background:rgba(147,197,253,.2);color:#93C5FD;border:1px solid rgba(147,197,253,.3);}
+.step-text{font-size:13px;color:rgba(255,255,255,.8);line-height:1.55;}
+.step-text strong{color:var(--white);}
+.step-text .tag{
+  display:inline-block;
+  background:rgba(255,255,255,.1);
+  border:1px solid rgba(255,255,255,.15);
+  border-radius:6px;padding:1px 7px;
+  font-size:11px;font-weight:600;margin:0 2px;
+}
+
+/* CTA inside cards */
+.cta-android{
+  display:block;width:100%;padding:15px;
+  background:linear-gradient(180deg,#22C55E,#16A34A);
+  border:none;border-radius:12px;
+  color:#fff;font-size:15px;font-weight:700;
+  font-family:'Syne',sans-serif;
+  cursor:pointer;text-align:center;text-decoration:none;
+  box-shadow:0 6px 0 #15803D, 0 8px 16px rgba(21,128,61,.4);
+  margin-top:18px;
+  transition:transform .1s,box-shadow .1s;
+  -webkit-tap-highlight-color:transparent;
+  user-select:none;
+}
+.cta-android:active{
+  transform:translateY(4px);
+  box-shadow:0 2px 0 #15803D, 0 4px 8px rgba(21,128,61,.3);
+}
+.cta-ios{
+  display:block;width:100%;padding:15px;
+  background:linear-gradient(180deg,#3B82F6,#1D4ED8);
+  border:none;border-radius:12px;
+  color:#fff;font-size:15px;font-weight:700;
+  font-family:'Syne',sans-serif;
+  cursor:pointer;text-align:center;text-decoration:none;
+  box-shadow:0 6px 0 #1E40AF, 0 8px 16px rgba(30,64,175,.4);
+  margin-top:18px;
+  transition:transform .1s,box-shadow .1s;
+  -webkit-tap-highlight-color:transparent;
+  user-select:none;
+}
+.cta-ios:active{
+  transform:translateY(4px);
+  box-shadow:0 2px 0 #1E40AF, 0 4px 8px rgba(30,64,175,.3);
+}
+
+/* Bottom CTA removed — now inside cards */
+.cta{display:none;}
+
+/* Divider */
+.divider{
+  display:flex;align-items:center;gap:12px;
+  margin:28px 0;color:var(--muted);font-size:12px;
+}
+.divider::before,.divider::after{
+  content:"";flex:1;height:1px;background:var(--border);
+}
+
+/* Detected banner */
+.detected{
+  display:flex;align-items:center;gap:10px;
+  background:rgba(74,222,128,.08);
+  border:1px solid rgba(74,222,128,.2);
+  border-radius:12px;padding:11px 14px;
+  margin-bottom:20px;font-size:12px;color:var(--green-light);font-weight:600;
+}
+
+/* Stats */
+.stats{
+  display:grid;grid-template-columns:repeat(3,1fr);
+  gap:10px;margin:32px 0;
+}
+.stat{text-align:center;}
+.stat-val{font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:var(--green-light);}
+.stat-label{font-size:10px;color:var(--muted);margin-top:3px;letter-spacing:.04em;font-weight:600;}
+
+/* Law badge */
+.law{
+  text-align:center;padding:20px;
+  border:1px solid var(--border);border-radius:14px;
+  background:rgba(255,255,255,.03);margin-top:28px;
+}
+.law p{font-size:11px;color:var(--muted);line-height:1.8;}
+.law strong{color:rgba(255,255,255,.6);}
+
+/* Animations */
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.hero{animation:fadeUp .5s ease both;}
+.features{animation:fadeUp .5s .1s ease both;}
+#install-section{animation:fadeUp .5s .2s ease both;}
+
+/* Detected device highlight */
+.highlight-ring{
+  box-shadow:0 0 0 2px rgba(74,222,128,.4),0 8px 32px rgba(74,222,128,.1);
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Hero -->
+  <div class="hero">
+    <div class="logo">₦</div>
+    <div class="badge">✦ Free to install · No app store needed</div>
+    <h1>TaxWise <span>Nigeria</span></h1>
+    <p>Your AI-powered tax manager built on the <strong style="color:rgba(255,255,255,.8)">Nigeria Tax Act 2025</strong> — compute PAYE, VAT, WHT and CIT from your transactions automatically.</p>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-val">4</div>
+      <div class="stat-label">TAX LAWS</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val">6</div>
+      <div class="stat-label">TAX HEADS</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val">100%</div>
+      <div class="stat-label">FREE</div>
+    </div>
+  </div>
+
+  <!-- Features -->
+  <div class="features">
+    <div class="feat">
+      <div class="feat-icon">🧮</div>
+      <div class="feat-title">Auto Tax Compute</div>
+      <div class="feat-desc">PAYE, VAT, WHT, CIT from your transactions</div>
+    </div>
+    <div class="feat">
+      <div class="feat-icon">📊</div>
+      <div class="feat-title">Live Tax Position</div>
+      <div class="feat-desc">Turnover & obligations updated in real time</div>
+    </div>
+    <div class="feat">
+      <div class="feat-icon">🏭</div>
+      <div class="feat-title">Asset Register</div>
+      <div class="feat-desc">NRS-compliant CA schedule & depreciation</div>
+    </div>
+    <div class="feat">
+      <div class="feat-icon">💬</div>
+      <div class="feat-title">AI Tax Agent</div>
+      <div class="feat-desc">Ask any tax question in plain English</div>
+    </div>
+    <div class="feat">
+      <div class="feat-icon">👥</div>
+      <div class="feat-title">Full Payroll</div>
+      <div class="feat-desc">PAYE, pension, NHF, NHIS computed per staff</div>
+    </div>
+    <div class="feat">
+      <div class="feat-icon">☁️</div>
+      <div class="feat-title">Cloud Sync</div>
+      <div class="feat-desc">Your data backed up securely across devices</div>
+    </div>
+  </div>
+
+  <!-- Install section -->
+  <div id="install-section">
+    <div id="detected-banner" style="display:none"></div>
+
+    <!-- Android card -->
+    <div class="install-card" id="android-card">
+      <div class="device-header">
+        <div class="device-icon android">🤖</div>
+        <div>
+          <div class="device-label">Android</div>
+          <div class="device-sub">Chrome browser · 2 taps to install</div>
+        </div>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num green">1</div>
+          <div class="step-text">Tap <strong>"Open App"</strong> below — it opens TaxWise in Chrome</div>
+        </div>
+        <div class="step">
+          <div class="step-num green">2</div>
+          <div class="step-text">A banner appears at the bottom: <strong>"Install TaxWise Nigeria"</strong> — tap <span class="tag">Install</span></div>
+        </div>
+        <div class="step">
+          <div class="step-num green">3</div>
+          <div class="step-text">Done — TaxWise is on your home screen. Create your account and start filing.</div>
+        </div>
+      </div>
+      <a class="cta-android" id="android-btn" href="#" target="_blank">Install TaxWise Nigeria →</a>
+    </div>
+
+    <div class="divider">or</div>
+
+    <!-- iOS card -->
+    <div class="install-card" id="ios-card">
+      <div class="device-header">
+        <div class="device-icon ios">🍎</div>
+        <div>
+          <div class="device-label">iPhone / iPad</div>
+          <div class="device-sub">Safari browser · 3 taps to install</div>
+        </div>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num blue">1</div>
+          <div class="step-text">Tap <strong>"Open App"</strong> below — opens in Safari <em style="color:rgba(255,255,255,.5)">(must be Safari, not Chrome)</em></div>
+        </div>
+        <div class="step">
+          <div class="step-num blue">2</div>
+          <div class="step-text">Tap the <strong>Share button</strong> <span class="tag">⎙</span> at the bottom of Safari</div>
+        </div>
+        <div class="step">
+          <div class="step-num blue">3</div>
+          <div class="step-text">Scroll down and tap <span class="tag">Add to Home Screen</span> → tap <span class="tag">Add</span></div>
+        </div>
+      </div>
+      <a class="cta-ios" id="ios-btn" href="#" target="_blank">Open in Safari →</a>
+    </div>
+
+    <!-- CTA -->
+    <a class="cta" id="open-btn" href="#" target="_blank">Open TaxWise Nigeria →</a>
+
+    <div class="law">
+      <p>
+        <strong>Nigeria Tax Act 2025 (No. 3)</strong> · <strong>Tax Administration Act 2025 (No. 5)</strong><br>
+        NRS Establishment Act 2025 (No. 4) · Joint Revenue Board Act 2025 (No. 6)<br><br>
+        Your data is encrypted and stored securely via Supabase.<br>
+        For informational purposes — consult a registered tax consultant for binding advice.
+      </p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── Device detection & personalisation ──────────────────────────────────────
+(function(){
+  const ua = navigator.userAgent;
+  const isIOS = /iphone|ipad|ipod/i.test(ua);
+  const isAndroid = /android/i.test(ua);
+
+  const APP_URL = "https://taxwise-nigeria.netlify.app";
+
+  // Set both button hrefs
+  document.getElementById("android-btn").href = APP_URL;
+  document.getElementById("ios-btn").href = APP_URL;
+  // Remove old open-btn if present
+  const oldBtn = document.getElementById("open-btn");
+  if(oldBtn) oldBtn.style.display="none";
+
+  const banner = document.getElementById("detected-banner");
+  const androidCard = document.getElementById("android-card");
+  const iosCard = document.getElementById("ios-card");
+  const divider = document.querySelector(".divider");
+
+  if(isAndroid){
+    banner.style.display = "flex";
+    banner.innerHTML = `<span style="font-size:18px">🤖</span> Android detected — tap Install below`;
+    androidCard.classList.add("highlight-ring");
+    iosCard.style.opacity = "0.35";
+    iosCard.style.pointerEvents = "none";
+  } else if(isIOS){
+    banner.style.display = "flex";
+    banner.style.background = "rgba(147,197,253,.08)";
+    banner.style.borderColor = "rgba(147,197,253,.25)";
+    banner.style.color = "#93C5FD";
+    banner.innerHTML = `<span style="font-size:18px">🍎</span> iPhone detected — tap Open in Safari below`;
+    iosCard.classList.add("highlight-ring");
+    androidCard.style.opacity = "0.35";
+    androidCard.style.pointerEvents = "none";
+    // Move iOS card first
+    const section = document.getElementById("install-section");
+    section.insertBefore(iosCard, androidCard);
+    section.insertBefore(divider, androidCard);
+    // iOS opens in same tab (no target=_blank) so Safari handles it
+    document.getElementById("ios-btn").removeAttribute("target");
+  } else {
+    banner.style.display = "flex";
+    banner.innerHTML = `<span style="font-size:18px">💻</span> Open this page on your phone to install TaxWise`;
+  }
+})();
+</script>
+</body>
+</html>

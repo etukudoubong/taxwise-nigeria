@@ -535,11 +535,31 @@ function computePenalty(tax,days,isCompany=false){
 }
 
 function getDaysLeft(type){
-  const now=new Date(),y=now.getFullYear(),m=now.getMonth();
-  const map={PAYE:new Date(y,m+1,10),VAT:new Date(y,m+1,21),WHT:new Date(y,m+1,21),
-    PIT:new Date(y,6,31),CIT:new Date(y,5,30),ANNUAL:new Date(y,0,31)};
-  return Math.ceil(((map[type]||map.PAYE)-now)/86400000);
+  const now = new Date();
+  now.setHours(0,0,0,0);
+  const y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
+
+  // Compute this month's deadline date
+  const thisMonthDeadlines = {
+    PAYE:   new Date(y, m, 10),
+    VAT:    new Date(y, m, 21),
+    WHT:    new Date(y, m, 21),
+    PIT:    new Date(y, 6, 31),   // July 31
+    CIT:    new Date(y, 5, 30),   // June 30 (6 months after Dec year end)
+    ANNUAL: new Date(y, 0, 31),   // Jan 31
+  };
+
+  let deadline = thisMonthDeadlines[type] || thisMonthDeadlines.PAYE;
+
+  // If this month's deadline has passed, move to next month
+  if(["PAYE","VAT","WHT"].includes(type) && deadline < now){
+    const next = new Date(y, m+1, type==="PAYE"?10:21);
+    deadline = next;
+  }
+
+  return Math.ceil((deadline - now) / 86400000);
 }
+
 
 // ── TAX CLASSIFICATION ENGINE ─────────────────────────────────────────────────
 // Every transaction is classified into a tax head with full obligation detail.
@@ -4242,8 +4262,9 @@ function TeamScreen({profile, authUser, sub, onBack}){
   const [inviting, setInviting] = useState(false);
   const [msg, setMsg] = useState("");
 
-  const maxUsers = (sub?.included_users||2) + (sub?.extra_users||0);
-  const maxMembers = maxUsers - 1; // subtract admin — admin is always user #1
+  const isCompany = profile.mode === "company";
+  const maxUsers = (sub?.included_users || (isCompany ? 2 : 1)) + (sub?.extra_users || 0);
+  const maxMembers = maxUsers - 1;
 
   useEffect(()=>{
     loadMembers();
@@ -4414,20 +4435,36 @@ function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAsse
     setMode("processing"); setError("");
     setProgress("Reading document…");
     try {
+      // File size check — Anthropic API limit is ~5MB for base64
+      const maxSize = 4 * 1024 * 1024; // 4MB
+      if(file.size > maxSize){
+        throw new Error(`File too large (${(file.size/1024/1024).toFixed(1)}MB). Maximum size is 4MB. Please scan a smaller section or compress the PDF.`);
+      }
+
+      // Validate file type
+      const validTypes = ["application/pdf","image/jpeg","image/jpg","image/png","image/webp","image/gif"];
+      if(!validTypes.includes(file.type)){
+        throw new Error(`Unsupported file type: ${file.type}. Please use PDF, JPG, or PNG.`);
+      }
+
       const base64 = await new Promise((res,rej)=>{
         const reader = new FileReader();
         reader.onload = ()=>res(reader.result.split(",")[1]);
-        reader.onerror = rej;
+        reader.onerror = ()=>rej(new Error("Could not read file"));
         reader.readAsDataURL(file);
       });
 
       setProgress("AI is analysing your document…");
       const isPDF = file.type==="application/pdf";
-      const mediaType = isPDF ? "application/pdf" : file.type;
+      const mediaType = isPDF ? "application/pdf" : (file.type || "image/jpeg");
 
       const res = await fetch(`${SUPA_URL}/functions/v1/taxwise-ai`,{
         method:"POST",
-        headers:{"Content-Type":"application/json","Authorization":`Bearer ${SUPA_KEY}`},
+        headers:{
+          "Content-Type":"application/json",
+          "Authorization":`Bearer ${SUPA_KEY}`,
+          "apikey": SUPA_KEY,
+        },
         body: JSON.stringify({
           system:`You are a Nigerian tax accountant and document processor. Extract ALL transactions from the document provided.
 
@@ -4444,7 +4481,7 @@ Return ONLY a valid JSON array. Each item must have:
 
 CRITICAL CLASSIFICATION RULES for Nigerian accounting:
 - Bank credits = income. Bank debits = expense (or asset if capital).
-- Capital assets (type="asset"): purchases of land, buildings, vehicles, computers, machinery, equipment, furniture — anything with useful life > 1 year. These go to the asset register, NOT expenses.
+- Capital assets (type="asset"): purchases of land, buildings, vehicles, computers, machinery, equipment, furniture — anything with useful life > 1 year.
 - Revenue expenses (type="expense"): rent, salaries, utilities, bank charges, repairs, consumables, stationery.
 - WHT applies to: professional fees, consulting, rent, dividends, interest, royalties, commissions.
 - VAT (7.5%) applies to: most goods and services supplied in Nigeria.
@@ -4453,27 +4490,36 @@ Return ONLY the JSON array, no other text or markdown.`,
           messages:[{
             role:"user",
             content:[
-              {type: isPDF?"document":"image",
-               source:{type:"base64", media_type:mediaType, data:base64}},
+              {
+                type: isPDF ? "document" : "image",
+                source:{type:"base64", media_type:mediaType, data:base64}
+              },
               {type:"text", text:`Extract and classify all transactions from this ${docType.replace(/_/g," ")}. Identify capital assets separately. Return only the JSON array.`}
             ]
           }]
         })
       });
 
-      if(!res.ok) throw new Error("AI extraction failed — please try again");
+      if(!res.ok){
+        const errData = await res.json().catch(()=>({}));
+        throw new Error(errData?.error || `Server error ${res.status} — please try again`);
+      }
+
       const data = await res.json();
+      if(data.error) throw new Error(data.error);
       setProgress("Parsing results…");
 
       let txnList = [];
       try {
         const raw = data.reply||"[]";
         const clean = raw.replace(/```json|```/g,"").trim();
-        txnList = JSON.parse(clean);
+        // Handle case where AI returns object instead of array
+        const parsed = JSON.parse(clean);
+        txnList = Array.isArray(parsed) ? parsed : (parsed.transactions || parsed.items || []);
       } catch(e){ throw new Error("Could not read AI response — please try again"); }
 
       if(!Array.isArray(txnList)||txnList.length===0)
-        throw new Error("No transactions found in document");
+        throw new Error("No transactions found in document. Make sure the document contains financial transactions.");
 
       const formatted = txnList.map((t,i)=>({
         id: `doc_${Date.now()}_${i}`,

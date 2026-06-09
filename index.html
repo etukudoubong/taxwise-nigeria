@@ -279,6 +279,8 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden;background:#0B1628;}
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://js.paystack.co/v1/inline.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script type="text/babel">
 const {useState,useEffect,useRef,useCallback,useMemo}=React;
 
@@ -3993,7 +3995,7 @@ function App(){
       case "faq":        return <FAQScreen onBack={back}/>;
       case "subscribe":  return <SubscriptionScreen profile={profile} authUser={authUser} sub={sub} onBack={back} onSubscribed={()=>{getSubscription(authUser.id).then(setSub);back();}}/>;
       case "team":       return canManageTeam ? <TeamScreen profile={profile} authUser={authUser} sub={sub} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Admin only</div>;
-      case "upload":     return canEdit ? <CSVUploadScreen setTxns={setTxns} txns={txns} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted</div>;
+      case "upload":     return canEdit ? <CSVUploadScreen setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} profile={profile} authUser={authUser} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted</div>;
       case "import":     return canEdit ? <DocumentUploadScreen profile={profile} authUser={authUser} setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Data Entry or above</div>;
       case "agent":      return <AgentScreen profile={profile} txns={txns} onBack={back}/>;
       case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")}/>;
@@ -4479,135 +4481,305 @@ function TeamScreen({profile, authUser, sub, onBack}){
   );
 }
 
-// ── CSV UPLOAD SCREEN ─────────────────────────────────────────────────────────
-function CSVUploadScreen({setTxns, txns, onBack}){
-  const [mode, setMode]       = useState("select"); // select | mapping | review | done
-  const [rows, setRows]       = useState([]);       // raw parsed CSV rows
-  const [headers, setHeaders] = useState([]);       // CSV column headers
-  const [mapping, setMapping] = useState({date:"",desc:"",amount:"",type:"",credit:"",debit:""});
-  const [preview, setPreview] = useState([]);       // mapped transactions for review
-  const [error, setError]     = useState("");
-  const [fileName, setFileName] = useState("");
 
-  // Parse CSV text into rows
-  const parseCSV = (text) => {
+// ── UNIVERSAL IMPORT SCREEN ───────────────────────────────────────────────────
+// Supports: CSV, Excel (.xlsx/.xls), PDF, Images, ZIP (auto-extracts)
+function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, onBack}){
+  const [mode, setMode]         = useState("select");
+  const [rows, setRows]         = useState([]);
+  const [headers, setHeaders]   = useState([]);
+  const [mapping, setMapping]   = useState({date:"",desc:"",amount:"",credit:"",debit:"",type:""});
+  const [preview, setPreview]   = useState([]);
+  const [error, setError]       = useState("");
+  const [fileName, setFileName] = useState("");
+  const [fileType, setFileType] = useState(""); // csv | excel | pdf | image
+  const [processing, setProcessing] = useState(false);
+  const [progress, setProgress] = useState("");
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+  const parseCSVText = (text) => {
     const lines = text.split(/\r?\n/).filter(l=>l.trim());
     if(lines.length < 2) return {headers:[], rows:[]};
     const parseRow = (line) => {
-      const cells = []; let cur = ""; let inQ = false;
+      const cells=[]; let cur=""; let inQ=false;
       for(let i=0;i<line.length;i++){
-        const c = line[i];
+        const c=line[i];
         if(c==='"'){inQ=!inQ;}
-        else if(c===","&&!inQ){cells.push(cur.trim());cur="";}
+        else if(c===","&&!inQ){cells.push(cur.trim().replace(/^"|"$/g,""));cur="";}
         else cur+=c;
       }
-      cells.push(cur.trim());
+      cells.push(cur.trim().replace(/^"|"$/g,""));
       return cells;
     };
-    const hdrs = parseRow(lines[0]).map(h=>h.replace(/"/g,""));
-    const data = lines.slice(1).map(l=>parseRow(l));
+    const hdrs = parseRow(lines[0]);
+    const data = lines.slice(1).map(l=>parseRow(l)).filter(r=>r.some(c=>c));
     return {headers:hdrs, rows:data};
   };
 
-  const handleFile = (e) => {
-    const file = e.target.files[0];
-    if(!file) return;
-    setError("");
-    setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const {headers:hdrs, rows:data} = parseCSV(ev.target.result);
-      if(hdrs.length===0) return setError("Could not read CSV. Make sure it's a valid CSV file.");
-      setHeaders(hdrs);
-      setRows(data);
-      // Auto-detect common column names
-      const find = (...terms) => hdrs.find(h=>terms.some(t=>h.toLowerCase().includes(t.toLowerCase())))||"";
-      setMapping({
-        date:   find("date","time","trans","value date","txn date"),
-        desc:   find("desc","narrat","detail","remark","particulars","reference","note"),
-        amount: find("amount","value","sum"),
-        credit: find("credit","cr","deposit","money in"),
-        debit:  find("debit","dr","withdrawal","money out"),
-        type:   find("type","dr/cr","cr/dr","direction"),
-      });
-      setMode("mapping");
+  const autoMap = (hdrs) => {
+    const find = (...terms) => hdrs.find(h=>terms.some(t=>h.toLowerCase().trim()===t.toLowerCase().trim())) ||
+      hdrs.find(h=>terms.some(t=>h.toLowerCase().includes(t.toLowerCase()))) || "";
+    return {
+      // Date variants — MoniePoint uses "Date"
+      date:   find("Date","Transaction Date","Trans Date","Value Date","Txn Date","Posting Date","date","time"),
+      // Description — MoniePoint uses "Narration"
+      desc:   find("Narration","Description","Details","Remarks","Particulars","Reference","Notes","Transaction","narration","description","details","remarks"),
+      // Single amount
+      amount: find("Amount","Value","Sum","Total","amount","value"),
+      // Credit — MoniePoint uses "Credit"
+      credit: find("Credit","Cr","Deposit","Money In","Inflow","Receipts","credit","cr","deposit"),
+      // Debit — MoniePoint uses "Debit"
+      debit:  find("Debit","Dr","Withdrawal","Money Out","Outflow","Payments","debit","dr","withdrawal"),
+      // Type
+      type:   find("Type","Dr/Cr","Cr/Dr","Direction","DR_CR","type"),
     };
-    reader.onerror = ()=>setError("Failed to read file");
-    reader.readAsText(file);
   };
 
-  const buildPreview = () => {
-    if(!mapping.date&&!mapping.desc) return setError("Please map at least Date and Description columns");
-    const dateIdx  = headers.indexOf(mapping.date);
-    const descIdx  = headers.indexOf(mapping.desc);
-    const amtIdx   = headers.indexOf(mapping.amount);
-    const crIdx    = headers.indexOf(mapping.credit);
-    const drIdx    = headers.indexOf(mapping.debit);
-    const typeIdx  = headers.indexOf(mapping.type);
+  const parseDate = (date) => {
+    if(!date) return new Date().toISOString().split("T")[0];
+    date = String(date).trim();
+    // Excel serial number
+    if(/^\d{5}$/.test(date)){
+      const d = new Date((parseInt(date)-25569)*86400*1000);
+      return d.toISOString().split("T")[0];
+    }
+    // DD/MM/YYYY or DD-MM-YYYY
+    const dm = date.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if(dm){
+      const [,a,b,c]=dm; const yr=c.length===2?`20${c}`:c;
+      return `${yr}-${b.padStart(2,"0")}-${a.padStart(2,"0")}`;
+    }
+    // DD MMM YYYY or DD-MMM-YYYY
+    const dm2 = date.match(/^(\d{1,2})[\s\-]([A-Za-z]{3})[\s\-](\d{2,4})$/);
+    if(dm2){
+      const months={jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",
+        jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12"};
+      const [,d,m,y]=dm2;
+      return `${y.length===2?"20"+y:y}-${months[m.toLowerCase()]||"01"}-${d.padStart(2,"0")}`;
+    }
+    // Already YYYY-MM-DD
+    if(/^\d{4}-\d{2}-\d{2}/.test(date)) return date.slice(0,10);
+    return new Date().toISOString().split("T")[0];
+  };
 
-    const getNonAllowable = (desc) =>
-      /loan.*principal|capital repayment|depreciation|income tax|penalty|drawing|dividend paid/i.test(desc);
+  const getNonAllowable = (desc) =>
+    /loan.*principal|capital repayment|depreciation|income tax|penalty.*tax|drawing|dividend paid/i.test(String(desc));
 
-    const mapped = rows.map((row,i)=>{
-      const date = dateIdx>=0 ? (row[dateIdx]||"").replace(/"/g,"").trim() : "";
-      const desc = descIdx>=0 ? (row[descIdx]||"").replace(/"/g,"").trim() : `Row ${i+1}`;
-      let amount = 0, type = "expense";
+  // ── File handler ─────────────────────────────────────────────────────────────
+  const handleFile = async (e) => {
+    const file = e.target.files[0];
+    if(!file) return;
+    setError(""); setProcessing(true); setProgress("Reading file…");
+    setFileName(file.name);
 
-      if(crIdx>=0&&drIdx>=0){
-        const cr = parseFloat((row[crIdx]||"").replace(/[^0-9.]/g,""))||0;
-        const dr = parseFloat((row[drIdx]||"").replace(/[^0-9.]/g,""))||0;
-        if(cr>0){amount=cr;type="income";}
-        else if(dr>0){amount=dr;type="expense";}
-      } else if(amtIdx>=0){
-        const raw = (row[amtIdx]||"").replace(/[^0-9.-]/g,"");
-        amount = Math.abs(parseFloat(raw)||0);
-        if(typeIdx>=0){
-          const t = (row[typeIdx]||"").toLowerCase();
-          type = (t.includes("cr")||t.includes("credit")||t.includes("in")) ? "income" : "expense";
-        } else {
-          type = parseFloat(raw)<0 ? "expense" : "income";
+    try {
+      const ext = file.name.split(".").pop().toLowerCase();
+
+      // ── ZIP — could be an xlsx file OR a zip containing xlsx/csv ──
+      if(ext==="zip"){
+        setProgress("Reading file…");
+        // First try to parse as Excel directly (xlsx files ARE zip files)
+        try {
+          const ab = await file.arrayBuffer();
+          if(window.XLSX){
+            const wb = window.XLSX.read(ab, {type:"array"});
+            if(wb.SheetNames.length>0){
+              setFileName(file.name.replace(".zip",".xlsx"));
+              processExcelBuffer(ab);
+              return;
+            }
+          }
+        } catch(e){ /* not a direct xlsx — try as archive */ }
+
+        // Try as actual zip archive containing csv/xlsx
+        setProgress("Extracting ZIP…");
+        if(window.JSZip){
+          const zip = await window.JSZip.loadAsync(file);
+          const entries = Object.entries(zip.files).filter(([n,f])=>!f.dir);
+          const csvFile = entries.find(([n])=>/\.(csv|txt)$/i.test(n));
+          const xlsFile = entries.find(([n])=>/\.(xlsx|xls)$/i.test(n));
+          if(csvFile){
+            const text = await csvFile[1].async("text");
+            setFileName(csvFile[0]);
+            processParsed(parseCSVText(text), "csv");
+            return;
+          } else if(xlsFile){
+            const ab = await xlsFile[1].async("arraybuffer");
+            setFileName(xlsFile[0]);
+            processExcelBuffer(ab);
+            return;
+          }
         }
+        throw new Error("Could not read file. Please extract the ZIP and upload the Excel or CSV file directly.");
       }
 
-      // Parse date formats: DD/MM/YYYY, MM/DD/YYYY, YYYY-MM-DD, DD-MM-YYYY, DD MMM YYYY
-      let parsedDate = date;
-      if(date){
-        const dm = date.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-        if(dm){
-          const [,a,b,c] = dm;
-          const yr = c.length===2?`20${c}`:c;
-          // Assume DD/MM/YYYY for Nigerian banks
-          parsedDate = `${yr}-${b.padStart(2,"0")}-${a.padStart(2,"0")}`;
-        }
-        const dm2 = date.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2,4})$/);
-        if(dm2){
-          const months={jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",
-            jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12"};
-          const [,d,m,y] = dm2;
-          parsedDate = `${y.length===2?"20"+y:y}-${months[m.toLowerCase()]||"01"}-${d.padStart(2,"0")}`;
-        }
+      // ── CSV / TXT ──
+      if(ext==="csv"||ext==="txt"){
+        setProgress("Parsing CSV…");
+        const text = await file.text();
+        processParsed(parseCSVText(text), "csv");
+        return;
       }
 
-      const nonAllowable = getNonAllowable(desc);
+      // ── Excel ──
+      if(ext==="xlsx"||ext==="xls"||ext==="xlsm"){
+        setProgress("Reading Excel file…");
+        if(!window.XLSX) throw new Error("Excel library loading — please try again in a moment");
+        const ab = await file.arrayBuffer();
+        processExcelBuffer(ab);
+        return;
+      }
+
+      // ── PDF / Image — send to AI ──
+      if(ext==="pdf"||/^image\//.test(file.type)||["jpg","jpeg","png","webp","gif"].includes(ext)){
+        setProgress("Sending to AI for extraction…");
+        setFileType("pdf");
+        await processViaAI(file);
+        return;
+      }
+
+      throw new Error(`Unsupported file type: .${ext}. Please use CSV, Excel, PDF, or image files.`);
+
+    } catch(e){
+      setError(e.message||"Failed to read file");
+      setProcessing(false);
+    }
+  };
+
+  const processExcelBuffer = (ab) => {
+    try {
+      const wb = window.XLSX.read(ab, {type:"array"});
+      let bestSheet = null, bestRows = 0;
+      wb.SheetNames.forEach(name=>{
+        const ws = wb.Sheets[name];
+        const data = window.XLSX.utils.sheet_to_json(ws, {header:1, raw:false, defval:""});
+        if(data.length > bestRows){ bestRows=data.length; bestSheet={name,data}; }
+      });
+      if(!bestSheet||bestSheet.data.length<2) throw new Error("No data found in Excel file");
+
+      // Find the actual header row — look for row containing "Date" or "Narration" or "Amount"
+      // MoniePoint has several info rows before the actual data table
+      const dataKeywords = ["date","narration","description","amount","credit","debit","balance","transaction"];
+      let headerIdx = 0;
+      for(let i=0;i<Math.min(20,bestSheet.data.length);i++){
+        const row = bestSheet.data[i];
+        const rowText = row.map(c=>String(c||"").toLowerCase()).join(" ");
+        const matchCount = dataKeywords.filter(k=>rowText.includes(k)).length;
+        if(matchCount >= 2){ headerIdx=i; break; }
+      }
+
+      const hdrs = bestSheet.data[headerIdx].map(h=>String(h||"").trim()).filter(h=>h);
+      const dataRows = bestSheet.data.slice(headerIdx+1)
+        .filter(r=>r.some(c=>String(c||"").trim()))
+        .map(r=>r.map(c=>String(c||"").trim()));
+
+      if(hdrs.length===0) throw new Error("Could not find column headers in Excel file");
+      processParsed({headers:hdrs, rows:dataRows}, "excel");
+    } catch(e){ throw new Error("Could not read Excel file: " + e.message); }
+  };
+
+  const processParsed = (parsed, type) => {
+    const {headers:hdrs, rows:data} = parsed;
+    if(hdrs.length===0) throw new Error("Could not read file — no columns found");
+    setHeaders(hdrs);
+    setRows(data);
+    setFileType(type);
+    setMapping(autoMap(hdrs));
+    setProcessing(false);
+    setMode("mapping");
+  };
+
+  // ── AI extraction for PDF/image ───────────────────────────────────────────
+  const processViaAI = async (file) => {
+    const maxSize = 4*1024*1024;
+    if(file.size>maxSize) throw new Error(`File too large (${(file.size/1024/1024).toFixed(1)}MB). Max 4MB.`);
+    const base64 = await new Promise((res,rej)=>{
+      const reader=new FileReader();
+      reader.onload=()=>res(reader.result.split(",")[1]);
+      reader.onerror=()=>rej(new Error("Could not read file"));
+      reader.readAsDataURL(file);
+    });
+    const isPDF = file.type==="application/pdf"||file.name.endsWith(".pdf");
+    const mediaType = isPDF?"application/pdf":(file.type||"image/jpeg");
+    setProgress("AI is reading your document…");
+    const res = await fetch(`${SUPA_URL}/functions/v1/taxwise-ai`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":`Bearer ${SUPA_KEY}`,"apikey":SUPA_KEY},
+      body:JSON.stringify({
+        system:`You are a Nigerian bank statement and document processor. Extract ALL transactions.
+Return ONLY a valid JSON array. Each item: date (YYYY-MM-DD), desc, amount (positive number), type (income/expense/asset), taxAllowable (true/false), confidence (high/medium/low), vatFlag (bool), whtFlag (bool).
+NON-ALLOWABLE (taxAllowable=false): loan principal, depreciation, fines, income tax paid, drawings, dividends paid.
+Nigerian bank: credits=income, debits=expense. Return ONLY JSON array.`,
+        messages:[{role:"user",content:[
+          {type:isPDF?"document":"image",source:{type:"base64",media_type:mediaType,data:base64}},
+          {type:"text",text:"Extract all transactions. Return only the JSON array."}
+        ]}]
+      })
+    });
+    if(!res.ok) throw new Error("AI extraction failed — please try again");
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    let txnList=[];
+    try {
+      const raw=data.reply||"[]";
+      const parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      txnList=Array.isArray(parsed)?parsed:(parsed.transactions||[]);
+    } catch(e){ throw new Error("Could not read AI response"); }
+    if(!txnList.length) throw new Error("No transactions found in document");
+    const formatted = txnList.map((t,i)=>{
+      const nonAllowable = t.taxAllowable===false||getNonAllowable(t.desc||"");
       return {
-        id:`csv_${Date.now()}_${i}`,
-        date: parsedDate||new Date().toISOString().split("T")[0],
-        desc, amount, type,
-        source:"csv",
-        compliance_status:"pending",
-        taxAllowable: !nonAllowable,
-        included: amount>0 && !nonAllowable,
-        _raw: row,
+        id:`import_${Date.now()}_${i}`,
+        date:parseDate(t.date), desc:t.desc||"Transaction",
+        amount:Math.abs(parseFloat(t.amount)||0),
+        type:t.type==="asset"?"asset":t.type==="income"?"income":"expense",
+        source:"import", compliance_status:"pending",
+        taxAllowable:!nonAllowable, included:!nonAllowable&&Math.abs(parseFloat(t.amount)||0)>0,
+        confidence:t.confidence||"medium", vatFlag:!!t.vatFlag, whtFlag:!!t.whtFlag,
+        assetClass:t.assetClass||"other", category:t.category||"other",
       };
     }).filter(t=>t.amount>0);
+    setPreview(formatted);
+    setProcessing(false);
+    setMode("review");
+  };
 
-    if(mapped.length===0) return setError("No valid transactions found. Check your column mapping.");
+  // ── Build preview from column mapping ────────────────────────────────────
+  const buildPreview = () => {
+    if(!mapping.date&&!mapping.desc) return setError("Please map at least Date and Description");
+    const idx = (f) => headers.indexOf(mapping[f]);
+    const [dI,nI,aI,cI,drI,tI] = ["date","desc","amount","credit","debit","type"].map(idx);
+    const mapped = rows.map((row,i)=>{
+      const date = parseDate(dI>=0?row[dI]:"");
+      const desc = nI>=0?(row[nI]||`Row ${i+1}`):`Row ${i+1}`;
+      let amount=0, type="expense";
+      if(cI>=0&&drI>=0){
+        const cr=parseFloat(String(row[cI]||"").replace(/[^0-9.]/g,""))||0;
+        const dr=parseFloat(String(row[drI]||"").replace(/[^0-9.]/g,""))||0;
+        if(cr>0){amount=cr;type="income";}
+        else if(dr>0){amount=dr;type="expense";}
+      } else if(aI>=0){
+        const raw=String(row[aI]||"").replace(/[^0-9.-]/g,"");
+        amount=Math.abs(parseFloat(raw)||0);
+        if(tI>=0){
+          const t=String(row[tI]||"").toLowerCase();
+          type=(t.includes("cr")||t.includes("credit")||t.includes("in"))?"income":"expense";
+        } else {
+          type=parseFloat(raw)<0?"expense":"income";
+        }
+      }
+      const nonAllowable = getNonAllowable(desc);
+      return {id:`csv_${Date.now()}_${i}`,date,desc,amount,type,
+        source:"import",compliance_status:"pending",
+        taxAllowable:!nonAllowable, included:amount>0&&!nonAllowable};
+    }).filter(t=>t.amount>0);
+    if(!mapped.length) return setError("No valid transactions found. Check your column mapping.");
     setPreview(mapped);
     setMode("review");
   };
 
   const postSelected = () => {
-    const toPost = preview.filter(t=>t.included).map(({_raw,taxAllowable,...t})=>t);
+    const toPost = preview.filter(t=>t.included).map(({taxAllowable,...t})=>t);
     setTxns([...txns,...toPost]);
     setMode("done");
   };
@@ -4622,6 +4794,7 @@ function CSVUploadScreen({setTxns, txns, onBack}){
     </div>
   );
 
+  // ── DONE ──
   if(mode==="done") return(
     <div style={{paddingBottom:100}}>
       <Hdr title="Import Complete" onBack={onBack}/>
@@ -4630,9 +4803,7 @@ function CSVUploadScreen({setTxns, txns, onBack}){
         <div style={{fontSize:20,fontWeight:700,color:C.ink,marginBottom:8}}>
           {preview.filter(t=>t.included).length} transactions imported
         </div>
-        <div style={{fontSize:13,color:C.muted,lineHeight:1.6,marginBottom:24}}>
-          From <strong>{fileName}</strong>
-        </div>
+        <div style={{fontSize:13,color:C.muted,lineHeight:1.6,marginBottom:24}}>From <strong>{fileName}</strong></div>
         <button onClick={onBack} style={{padding:"13px 32px",background:C.blue,border:"none",
           borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
           View Journal →
@@ -4641,30 +4812,30 @@ function CSVUploadScreen({setTxns, txns, onBack}){
     </div>
   );
 
+  // ── REVIEW ──
   if(mode==="review") return(
     <div style={{paddingBottom:100}}>
-      <Hdr title="Review CSV Import" onBack={()=>setMode("mapping")}
+      <Hdr title="Review Transactions" onBack={()=>setMode(fileType==="pdf"?"select":"mapping")}
         right={<button className="btn-sm btn-sm-blue" onClick={()=>setPreview(p=>p.map(t=>({...t,included:t.amount>0})))}>All</button>}/>
       <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,padding:"16px",color:"#fff"}}>
-        <div style={{fontSize:10,opacity:.6,letterSpacing:".1em",marginBottom:4}}>FROM {fileName.toUpperCase()}</div>
-        <div style={{fontSize:24,fontWeight:800}}>{preview.length} transactions</div>
+        <div style={{fontSize:10,opacity:.6,letterSpacing:".1em",marginBottom:4}}>{fileName.toUpperCase()}</div>
+        <div style={{fontSize:24,fontWeight:800}}>{preview.length} transactions found</div>
         <div style={{fontSize:12,opacity:.65,marginTop:4}}>
-          {preview.filter(t=>t.included).length} selected · {preview.filter(t=>!t.taxAllowable).length} non-deductible (unchecked)
+          {preview.filter(t=>t.included).length} selected · {preview.filter(t=>!t.taxAllowable).length} non-deductible unchecked
         </div>
       </div>
       <div style={{padding:"12px 12px 0"}}>
         {preview.filter(t=>!t.taxAllowable).length>0&&(
           <div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:10,
             padding:"10px 12px",marginBottom:12,fontSize:11,color:"#DC2626",lineHeight:1.6}}>
-            ⚠ <strong>{preview.filter(t=>!t.taxAllowable).length} non-tax-deductible items</strong> have been unchecked automatically (e.g. loan repayments). Check them manually only if needed for accounting records.
+            ⚠ <strong>{preview.filter(t=>!t.taxAllowable).length} non-deductible items</strong> unchecked automatically. Check manually only if needed for accounting records.
           </div>
         )}
         {preview.map((t,i)=>(
           <div key={t.id} style={{background:"#fff",
             border:`1.5px solid ${t.included?(t.type==="income"?C.green:C.border):C.border}`,
             borderRadius:10,padding:"10px 12px",marginBottom:6,
-            display:"flex",gap:10,alignItems:"flex-start",
-            opacity:t.included?1:0.5}}>
+            display:"flex",gap:10,alignItems:"flex-start",opacity:t.included?1:0.5}}>
             <input type="checkbox" checked={!!t.included}
               onChange={()=>setPreview(p=>p.map((x,j)=>j===i?{...x,included:!x.included}:x))}
               style={{marginTop:3,accentColor:C.blue,width:16,height:16,flexShrink:0}}/>
@@ -4680,64 +4851,51 @@ function CSVUploadScreen({setTxns, txns, onBack}){
                 <span style={{fontSize:10,color:C.muted}}>{t.date}</span>
                 <span style={{fontSize:9,padding:"1px 6px",borderRadius:100,fontWeight:700,
                   background:t.type==="income"?C.greenBg:C.redBg,
-                  color:t.type==="income"?C.green:C.red}}>
-                  {t.type.toUpperCase()}
-                </span>
-                {!t.taxAllowable&&(
-                  <span style={{fontSize:9,background:"#FEF2F2",color:"#DC2626",
-                    padding:"1px 6px",borderRadius:100,fontWeight:700}}>⚠ NOT DEDUCTIBLE</span>
-                )}
+                  color:t.type==="income"?C.green:C.red}}>{t.type.toUpperCase()}</span>
+                {!t.taxAllowable&&<span style={{fontSize:9,background:"#FEF2F2",color:"#DC2626",
+                  padding:"1px 6px",borderRadius:100,fontWeight:700}}>⚠ NOT DEDUCTIBLE</span>}
               </div>
             </div>
           </div>
         ))}
-        <button onClick={postSelected} disabled={preview.filter(t=>t.included).length===0}
+        <button onClick={postSelected} disabled={!preview.filter(t=>t.included).length}
           style={{width:"100%",padding:"14px",
-            background:preview.filter(t=>t.included).length===0?"#94A3B8":C.green,
+            background:!preview.filter(t=>t.included).length?"#94A3B8":C.green,
             border:"none",borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,
-            cursor:"pointer",fontFamily:"inherit",marginTop:4,
-            boxShadow:"0 6px 0 #047857"}}>
+            cursor:"pointer",fontFamily:"inherit",marginTop:4,boxShadow:"0 6px 0 #047857"}}>
           Import {preview.filter(t=>t.included).length} Transactions →
         </button>
       </div>
     </div>
   );
 
+  // ── COLUMN MAPPING ──
   if(mode==="mapping") return(
     <div style={{paddingBottom:100}}>
-      <Hdr title="Map CSV Columns" onBack={()=>setMode("select")} subtitle={fileName}/>
+      <Hdr title="Map Columns" onBack={()=>setMode("select")} subtitle={fileName}/>
       <div style={{padding:"12px 12px 0"}}>
         <div className="ibox blue" style={{marginBottom:12}}>
           <div className="ititle" style={{color:C.blue}}>Column Mapping</div>
           <p style={{fontSize:11,color:C.ink,lineHeight:1.6}}>
-            Match your CSV columns to TaxWise fields. For bank statements with separate Credit/Debit columns, map both. For single Amount column, map Amount only.
+            TaxWise has auto-detected your columns. Confirm or adjust the mapping below.
           </p>
         </div>
         <div className="card">
-          <div className="ctitle">REQUIRED FIELDS</div>
+          <div className="ctitle">REQUIRED</div>
           <ColSelect label="DATE" field="date" required/>
           <ColSelect label="DESCRIPTION / NARRATION" field="desc" required/>
         </div>
         <div className="card">
-          <div className="ctitle">AMOUNT — choose one option</div>
-          <div className="ibox slate" style={{marginBottom:10}}>
-            <p style={{fontSize:11,color:C.ink}}>Option A: Single amount column (+ for income, - for expense)</p>
-          </div>
+          <div className="ctitle">AMOUNT — SEPARATE CREDIT/DEBIT (Nigerian banks)</div>
+          <ColSelect label="CREDIT / DEPOSITS" field="credit"/>
+          <ColSelect label="DEBIT / WITHDRAWALS" field="debit"/>
+          <div style={{textAlign:"center",color:C.muted,fontSize:11,margin:"6px 0"}}>— OR single amount column —</div>
           <ColSelect label="AMOUNT (single column)" field="amount"/>
-          <div style={{textAlign:"center",color:C.muted,fontSize:11,margin:"8px 0"}}>— OR —</div>
-          <div className="ibox slate" style={{marginBottom:10}}>
-            <p style={{fontSize:11,color:C.ink}}>Option B: Separate Credit and Debit columns (Nigerian bank statements)</p>
-          </div>
-          <ColSelect label="CREDIT / DEPOSITS (income)" field="credit"/>
-          <ColSelect label="DEBIT / WITHDRAWALS (expense)" field="debit"/>
-        </div>
-        <div className="card">
-          <div className="ctitle">OPTIONAL</div>
-          <ColSelect label="TRANSACTION TYPE (CR/DR)" field="type"/>
+          <ColSelect label="TYPE (CR/DR)" field="type"/>
         </div>
         <div style={{background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:10,
-          padding:"10px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
-          Preview: {rows.length} rows detected from {headers.length} columns
+          padding:"8px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
+          {rows.length} rows · {headers.length} columns detected
         </div>
         {error&&<div style={{background:C.redBg,border:`1px solid ${C.red}30`,borderRadius:10,
           padding:"10px 12px",fontSize:12,color:C.red,marginBottom:12}}>⚠️ {error}</div>}
@@ -4751,39 +4909,71 @@ function CSVUploadScreen({setTxns, txns, onBack}){
     </div>
   );
 
-  // Select mode
+  // ── SELECT ──
   return(
     <div style={{paddingBottom:100}}>
-      <Hdr title="CSV Upload" onBack={onBack} subtitle="Import from bank statement or accounting software"/>
+      <Hdr title="Import Transactions" onBack={onBack} subtitle="CSV · Excel · PDF · Image"/>
       <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,padding:"20px 16px",color:"#fff"}}>
-        <div style={{fontSize:10,opacity:.6,letterSpacing:".1em",marginBottom:4}}>CSV IMPORT</div>
-        <div style={{fontSize:20,fontWeight:800,marginBottom:6}}>Upload a CSV File</div>
+        <div style={{fontSize:10,opacity:.6,letterSpacing:".1em",marginBottom:4}}>SMART IMPORT</div>
+        <div style={{fontSize:20,fontWeight:800,marginBottom:6}}>Upload Any File</div>
         <div style={{fontSize:12,opacity:.65,lineHeight:1.7}}>
-          Import transactions from your bank statement export or accounting software. Supports any CSV format — you map the columns yourself.
+          Bank statements, accounting exports, receipts — TaxWise reads all formats automatically.
         </div>
       </div>
       <div style={{padding:"12px 12px 0"}}>
+        {processing&&(
+          <div style={{background:C.blueLight,border:`1px solid ${C.blueBorder}`,borderRadius:10,
+            padding:"14px 16px",marginBottom:12,fontSize:13,color:C.blue,fontWeight:600,textAlign:"center"}}>
+            ⏳ {progress}
+          </div>
+        )}
         {error&&<div style={{background:C.redBg,border:`1px solid ${C.red}30`,borderRadius:10,
           padding:"10px 12px",fontSize:12,color:C.red,marginBottom:12}}>⚠️ {error}</div>}
 
-        <label style={{display:"block",marginBottom:12}}>
-          <input type="file" accept=".csv,.txt" onChange={handleFile} style={{display:"none"}}/>
-          <div style={{background:"#fff",border:`2px dashed ${C.blue}`,borderRadius:16,
-            padding:"36px 20px",textAlign:"center",cursor:"pointer"}}>
-            <div style={{fontSize:40,marginBottom:12}}>📊</div>
-            <div style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:4}}>Tap to select CSV file</div>
-            <div style={{fontSize:12,color:C.muted}}>Bank statement export · Accounting software · Any CSV</div>
+        <label style={{display:"block",marginBottom:10}}>
+          <input type="file"
+            accept=".csv,.xlsx,.xls,.xlsm,.pdf,.jpg,.jpeg,.png,.webp,.zip,.txt"
+            onChange={handleFile} style={{display:"none"}}/>
+          <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,borderRadius:16,
+            padding:"32px 20px",textAlign:"center",cursor:"pointer",
+            boxShadow:"0 4px 16px rgba(11,22,40,.3)"}}>
+            <div style={{fontSize:44,marginBottom:12}}>📂</div>
+            <div style={{fontSize:16,fontWeight:700,color:"#fff",marginBottom:6}}>
+              Tap to select a file
+            </div>
+            <div style={{fontSize:12,color:"rgba(255,255,255,.6)"}}>
+              CSV · Excel · PDF · Image · ZIP
+            </div>
           </div>
         </label>
 
-        <div className="ibox blue">
-          <div className="ititle" style={{color:C.blue}}>Supported formats</div>
+        <div className="card">
+          <div className="ctitle">SUPPORTED FILE TYPES</div>
+          {[
+            {icon:"📊",type:"CSV (.csv)",desc:"Any bank or accounting software export"},
+            {icon:"📗",type:"Excel (.xlsx, .xls)",desc:"MoniePoint, GTBank, Access Bank exports"},
+            {icon:"📄",type:"PDF (.pdf)",desc:"Bank statement PDF — AI reads and extracts"},
+            {icon:"📷",type:"Image (.jpg, .png)",desc:"Photo of statement — AI reads and extracts"},
+            {icon:"🗜️",type:"ZIP (.zip)",desc:"Automatically extracts and reads contents"},
+          ].map(f=>(
+            <div key={f.type} style={{display:"flex",gap:10,alignItems:"center",padding:"8px 0",
+              borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontSize:18,flexShrink:0}}>{f.icon}</span>
+              <div>
+                <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{f.type}</div>
+                <div style={{fontSize:10,color:C.muted}}>{f.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="ibox blue" style={{marginTop:12}}>
+          <div className="ititle" style={{color:C.blue}}>How to export from your bank</div>
           <p style={{fontSize:11,color:C.ink,lineHeight:1.8}}>
-            ✓ Nigerian bank statement CSV (GTBank, Access, Zenith, UBA, First Bank, etc.){"\n"}
-            ✓ Sage, QuickBooks, Zoho Books export{"\n"}
-            ✓ Any CSV with Date, Description, and Amount columns{"\n"}
-            ✓ Separate Credit/Debit columns supported{"\n\n"}
-            <strong>How to get your CSV:</strong> In your bank's mobile app or internet banking, go to Statements → Download → Select CSV or Excel format.
+            <strong>MoniePoint:</strong> App → Transactions → Filter → Download Statement → Excel{"\n"}
+            <strong>GTBank:</strong> Internet banking → Accounts → Statement → Download CSV{"\n"}
+            <strong>Access/Zenith/UBA:</strong> Mobile app → History → Export → CSV or Excel{"\n"}
+            <strong>First Bank:</strong> Internet banking → Account Statement → CSV format
           </p>
         </div>
       </div>

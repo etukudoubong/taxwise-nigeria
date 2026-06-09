@@ -445,14 +445,7 @@ const DEFAULT_STORE={
     dataSources:["manual"],
     onboarded:false,
   },
-  transactions:[
-    {id:1,date:"2026-06-01",desc:"Salary credit — employer",         amount:350000,type:"income", source:"manual",compliance_status:"na"},
-    {id:2,date:"2026-06-02",desc:"Consulting fee from ABC Ltd",      amount:180000,type:"income", source:"manual",compliance_status:"na"},
-    {id:3,date:"2026-06-03",desc:"Office rent paid to landlord",     amount:80000, type:"expense",source:"manual",compliance_status:"done"},
-    {id:4,date:"2026-06-04",desc:"Electricity bill IKEDC",           amount:22000, type:"expense",source:"manual",compliance_status:"na"},
-    {id:5,date:"2026-06-05",desc:"GTBank interest earned",           amount:6800,  type:"income", source:"manual",compliance_status:"na"},
-    {id:6,date:"2026-06-06",desc:"Dividend from Access Bank shares", amount:45000, type:"income", source:"manual",compliance_status:"na"},
-  ],
+  transactions:[],
   kiv:[],
   employees:[],
   assets:[],
@@ -3860,6 +3853,21 @@ function App(){
     return null;
   });
 
+  // ── Onboarding gate ─────────────────────────────────────────────────────────
+  // Onboarding shows ONLY once — on first use after signup.
+  // After completion it is saved to cloud. Subsequent logins go straight to dashboard.
+  useEffect(()=>{
+    if(authUser && !profile.onboarded){
+      // Verify against cloud — localStorage may be stale or cleared
+      sb.from("profiles").select("onboarded").eq("id", authUser.id).single()
+        .then(({data})=>{
+          if(data?.onboarded === true){
+            setProfileRaw(p=>({...p, onboarded:true}));
+          }
+        }).catch(()=>{});
+    }
+  },[authUser, profile.onboarded]);
+
   // Show onboarding if not completed — but skip for invited members
   if(!profile.onboarded){
     // If user arrived via invite link — show invite welcome instead of onboarding
@@ -3940,7 +3948,12 @@ function App(){
       <OnboardingScreen onComplete={p=>{
         const newProfile={...DEFAULT_STORE.profile,...p,onboarded:true};
         setProfileRaw(newProfile);
-        saveStore({profile:newProfile,transactions:txns,kiv,employees,assets,connectedBanks});
+        saveStore({profile:newProfile,transactions:[],kiv:[],employees:[],assets:[],connectedBanks:[]});
+        // Immediately persist onboarded=true to cloud so it survives localStorage clear
+        if(authUser){
+          sb.from("profiles").upsert({id:authUser.id, onboarded:true, updated_at:new Date().toISOString()})
+            .catch(()=>{});
+        }
       }}/>
     );
   }
@@ -4537,10 +4550,11 @@ CRITICAL CLASSIFICATION RULES for Nigerian accounting (NTA 2025):
 - Bank credits = income. Bank debits = expense (or asset if capital).
 - Capital assets (type="asset"): purchases of land, buildings, vehicles, computers, machinery, equipment, furniture — anything with useful life > 1 year. Goes to Asset Register NOT expenses.
 - Revenue expenses (type="expense"): rent, salaries, utilities, bank charges, repairs, consumables, stationery, professional fees, insurance.
-- NON-ALLOWABLE items — still classify as expense but note in desc: loan CAPITAL repayments, accounting depreciation, fines/penalties, personal expenses, dividends paid, income tax payments, drawings. These are NOT tax deductible.
+- NON-ALLOWABLE items — still classify as expense but set taxAllowable=false and note in desc: loan CAPITAL repayments, accounting depreciation, fines/penalties, personal expenses, dividends paid, income tax payments, drawings. These are NOT tax deductible.
 - WHT applies to: professional fees, consulting, rent, dividends, interest, royalties, commissions.
 - VAT (7.5%) applies to: most goods and services supplied in Nigeria.
-- Loan repayment: Split into interest (allowable expense) and principal (NOT allowable — balance sheet item).
+- Loan repayment: Split into interest (allowable expense, taxAllowable=true) and principal (NOT allowable — taxAllowable=false, type="expense", desc should say "Loan principal repayment — NOT tax deductible").
+- Add taxAllowable field: true for allowable expenses/income/assets, false for non-allowable items.
 
 Return ONLY the JSON array, no other text or markdown.`,
           messages:[{
@@ -4577,21 +4591,28 @@ Return ONLY the JSON array, no other text or markdown.`,
       if(!Array.isArray(txnList)||txnList.length===0)
         throw new Error("No transactions found in document. Make sure the document contains financial transactions.");
 
-      const formatted = txnList.map((t,i)=>({
-        id: `doc_${Date.now()}_${i}`,
-        date: t.date||new Date().toISOString().split("T")[0],
-        desc: t.desc||"Imported transaction",
-        amount: Math.abs(parseFloat(t.amount)||0),
-        type: t.type==="asset"?"asset": t.type==="income"?"income":"expense",
-        category: t.category||"other",
-        assetClass: t.assetClass||"other",
-        source: "document",
-        compliance_status: "pending",
-        confidence: t.confidence||"medium",
-        vatFlag: !!t.vatFlag,
-        whtFlag: !!t.whtFlag,
-        included: true,
-      }));
+      const formatted = txnList.map((t,i)=>{
+        // Non-allowable expenses default to unchecked — taxpayer must manually include
+        const isNonAllowable = t.taxAllowable === false ||
+          t.category === "loan_repayment" ||
+          /loan.*principal|capital repayment|depreciation|income tax paid|penalty.*tax|drawing|dividend paid/i.test(t.desc||"");
+        return {
+          id: `doc_${Date.now()}_${i}`,
+          date: t.date||new Date().toISOString().split("T")[0],
+          desc: t.desc||"Imported transaction",
+          amount: Math.abs(parseFloat(t.amount)||0),
+          type: t.type==="asset"?"asset": t.type==="income"?"income":"expense",
+          category: t.category||"other",
+          assetClass: t.assetClass||"other",
+          source: "document",
+          compliance_status: "pending",
+          confidence: t.confidence||"medium",
+          vatFlag: !!t.vatFlag,
+          whtFlag: !!t.whtFlag,
+          taxAllowable: !isNonAllowable,
+          included: !isNonAllowable, // ← NON-ALLOWABLE defaults to UNCHECKED
+        };
+      });
 
       setExtracted(formatted);
       setMode("review");
@@ -4797,7 +4818,8 @@ Return ONLY the JSON array, no other text or markdown.`,
         <div className="ibox blue" style={{marginBottom:12}}>
           <p style={{fontSize:11,color:C.ink,lineHeight:1.6}}>
             ✏️ <strong>Tap any transaction to edit</strong> — correct descriptions, amounts, dates, or classification.{"\n"}
-            🏭 Items marked <strong style={{color:C.blue}}>ASSET</strong> go to your Asset Register (not expenses). Change to Expense if misclassified.{"\n"}
+            🏭 Items marked <strong style={{color:C.blue}}>ASSET</strong> go to your Asset Register (not expenses).{"\n"}
+            ⚠️ Items marked <strong style={{color:"#DC2626"}}>NOT TAX DEDUCTIBLE</strong> are <strong>unchecked by default</strong> — tick them only if you want them in your records for accounting purposes. They will NOT reduce your tax liability.{"\n"}
             ☑️ Uncheck items you don't want to import.
           </p>
         </div>
@@ -4841,6 +4863,12 @@ Return ONLY the JSON array, no other text or markdown.`,
                         </div>
                         <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                           <span style={{fontSize:10,color:C.muted}}>{t.date}</span>
+                          {!t.taxAllowable&&(
+                            <span style={{fontSize:9,background:"#FEF2F2",color:"#DC2626",
+                              padding:"2px 8px",borderRadius:100,fontWeight:700,border:"1px solid #FECACA"}}>
+                              ⚠ NOT TAX DEDUCTIBLE
+                            </span>
+                          )}
                           {typeGroup==="asset"&&(
                             <span style={{fontSize:9,background:C.blueLight,color:C.blue,
                               padding:"2px 7px",borderRadius:100,fontWeight:700}}>
@@ -4854,6 +4882,12 @@ Return ONLY the JSON array, no other text or markdown.`,
                           </span>
                           <span style={{fontSize:9,color:C.blue,fontWeight:600}}>✏️ tap to edit</span>
                         </div>
+                        {!t.taxAllowable&&t.included&&(
+                          <div style={{marginTop:6,padding:"5px 8px",background:"#FEF2F2",
+                            border:"1px solid #FECACA",borderRadius:6,fontSize:10,color:"#DC2626",lineHeight:1.4}}>
+                            ⚠ You have manually included a non-deductible item. This will appear in your records but will NOT reduce your tax liability.
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>

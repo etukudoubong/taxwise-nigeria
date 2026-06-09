@@ -4770,19 +4770,29 @@ Nigerian bank: credits=income, debits=expense. Return ONLY JSON array.`,
     if(!mapping.date&&!mapping.desc) return setError("Please map at least Date and Description");
     const idx = (f) => headers.indexOf(mapping[f]);
     const [dI,nI,aI,cI,drI,tI] = ["date","desc","amount","credit","debit","type"].map(idx);
+
+    // Helper to parse amount — ignores Excel serial dates (large numbers > 40000)
+    const parseAmt = (val) => {
+      const n = parseFloat(String(val||"").replace(/[^0-9.,-]/g,"").replace(",",""));
+      if(isNaN(n)||n>40000) return 0; // skip serial dates
+      return Math.abs(n);
+    };
+
     const mapped = rows.map((row,i)=>{
       const date = parseDate(dI>=0?row[dI]:"");
-      const desc = nI>=0?(row[nI]||`Row ${i+1}`):`Row ${i+1}`;
+      const desc = nI>=0?(row[nI]||"").trim()||`Row ${i+1}`:`Row ${i+1}`;
+      if(!desc||desc===`Row ${i+1}`&&!row[nI]) return null; // skip empty rows
       let amount=0, type="expense";
+
       if(cI>=0&&drI>=0){
-        const cr=parseFloat(String(row[cI]||"").replace(/[^0-9.]/g,""))||0;
-        const dr=parseFloat(String(row[drI]||"").replace(/[^0-9.]/g,""))||0;
-        if(cr>0&&cr!==dr){amount=cr;type="income";}
-        else if(dr>0){amount=dr;type="expense";}
+        const cr = parseAmt(row[cI]);
+        const dr = parseAmt(row[drI]);
+        if(dr>0){amount=dr;type="expense";}
         else if(cr>0){amount=cr;type="income";}
       } else if(aI>=0){
-        const raw=String(row[aI]||"").replace(/[^0-9.-]/g,"");
+        const raw=String(row[aI]||"").replace(/[^0-9.,-]/g,"").replace(",","");
         amount=Math.abs(parseFloat(raw)||0);
+        if(amount>40000) amount=0; // skip serial dates
         if(tI>=0){
           const t=String(row[tI]||"").toLowerCase();
           type=(t.includes("cr")||t.includes("credit")||t.includes("in"))?"income":"expense";
@@ -4790,12 +4800,17 @@ Nigerian bank: credits=income, debits=expense. Return ONLY JSON array.`,
           type=parseFloat(raw)<0?"expense":"income";
         }
       }
+
       const nonAllowable = getNonAllowable(desc);
       return {id:`csv_${Date.now()}_${i}`,date,desc,amount,type,
         source:"import",compliance_status:"pending",
         taxAllowable:!nonAllowable, included:amount>0&&!nonAllowable};
-    }).filter(t=>t.amount>0);
-    if(!mapped.length) return setError("No valid transactions found. Check your column mapping.");
+    }).filter(t=>t&&t.amount>0);
+
+    if(!mapped.length) return setError(
+      `No valid transactions found. Make sure Credit and Debit columns are correctly mapped. ` +
+      `Detected columns: ${headers.join(", ")}`
+    );
     setPreview(mapped);
     setMode("review");
   };

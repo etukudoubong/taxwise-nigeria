@@ -4648,32 +4648,53 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
 
   const processExcelBuffer = (ab) => {
     try {
-      const wb = window.XLSX.read(ab, {type:"array"});
+      const wb = window.XLSX.read(ab, {type:"array", cellDates:true});
       let bestSheet = null, bestRows = 0;
       wb.SheetNames.forEach(name=>{
         const ws = wb.Sheets[name];
-        const data = window.XLSX.utils.sheet_to_json(ws, {header:1, raw:false, defval:""});
-        if(data.length > bestRows){ bestRows=data.length; bestSheet={name,data}; }
+        const data = window.XLSX.utils.sheet_to_json(ws, {header:1, raw:false, defval:"", dateNF:"YYYY-MM-DD"});
+        if(data.length > bestRows){ bestRows=data.length; bestSheet={name,data,ws}; }
       });
       if(!bestSheet||bestSheet.data.length<2) throw new Error("No data found in Excel file");
 
-      // Find the actual header row — look for row containing "Date" or "Narration" or "Amount"
-      // MoniePoint has several info rows before the actual data table
-      const dataKeywords = ["date","narration","description","amount","credit","debit","balance","transaction"];
-      let headerIdx = 0;
-      for(let i=0;i<Math.min(20,bestSheet.data.length);i++){
-        const row = bestSheet.data[i];
-        const rowText = row.map(c=>String(c||"").toLowerCase()).join(" ");
-        const matchCount = dataKeywords.filter(k=>rowText.includes(k)).length;
-        if(matchCount >= 2){ headerIdx=i; break; }
+      // Re-read with raw values to get proper dates
+      const rawData = window.XLSX.utils.sheet_to_json(bestSheet.ws, {header:1, raw:true, defval:""});
+
+      // Find header row — look for row where ALL of these appear: date + (narration OR description) + (debit OR credit OR amount)
+      const dataKeywords = [
+        ["date","trans date","value date","txn date"],
+        ["narration","description","details","narr","trans description","transaction"],
+        ["debit","dr","withdrawal","amount","credit","cr"]
+      ];
+      let headerIdx = -1;
+      for(let i=0;i<Math.min(20,rawData.length);i++){
+        const rowLower = rawData[i].map(c=>String(c||"").toLowerCase().trim());
+        const matches = dataKeywords.filter(group=>
+          group.some(k=>rowLower.some(cell=>cell===k||cell.startsWith(k)))
+        ).length;
+        if(matches >= 2){ headerIdx=i; break; }
       }
+      if(headerIdx<0) headerIdx=0;
 
-      const hdrs = bestSheet.data[headerIdx].map(h=>String(h||"").trim()).filter(h=>h);
-      const dataRows = bestSheet.data.slice(headerIdx+1)
+      // Get clean headers — strip trailing colons and whitespace
+      const hdrs = rawData[headerIdx].map(h=>String(h||"").trim().replace(/:+$/,"")).filter(h=>h);
+
+      // Build data rows — convert Excel serial dates to YYYY-MM-DD
+      const dataRows = rawData.slice(headerIdx+1)
         .filter(r=>r.some(c=>String(c||"").trim()))
-        .map(r=>r.map(c=>String(c||"").trim()));
+        .map(r=>r.map((c,colIdx)=>{
+          // Check if this column is the date column (index 0 usually)
+          if(colIdx===0 && typeof c==="number" && c>40000 && c<60000){
+            // Excel serial date — convert to YYYY-MM-DD
+            const d = new Date(Math.round((c-25569)*86400*1000));
+            return d.toISOString().split("T")[0];
+          }
+          // Convert 0 to empty string for debit/credit columns
+          if(c===0||c==="0") return "";
+          return String(c||"").trim();
+        }));
 
-      if(hdrs.length===0) throw new Error("Could not find column headers in Excel file");
+      if(hdrs.length===0) throw new Error("Could not find column headers");
       processParsed({headers:hdrs, rows:dataRows}, "excel");
     } catch(e){ throw new Error("Could not read Excel file: " + e.message); }
   };
@@ -4756,8 +4777,9 @@ Nigerian bank: credits=income, debits=expense. Return ONLY JSON array.`,
       if(cI>=0&&drI>=0){
         const cr=parseFloat(String(row[cI]||"").replace(/[^0-9.]/g,""))||0;
         const dr=parseFloat(String(row[drI]||"").replace(/[^0-9.]/g,""))||0;
-        if(cr>0){amount=cr;type="income";}
+        if(cr>0&&cr!==dr){amount=cr;type="income";}
         else if(dr>0){amount=dr;type="expense";}
+        else if(cr>0){amount=cr;type="income";}
       } else if(aI>=0){
         const raw=String(row[aI]||"").replace(/[^0-9.-]/g,"");
         amount=Math.abs(parseFloat(raw)||0);

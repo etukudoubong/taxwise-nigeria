@@ -815,6 +815,7 @@ function computeAggregates(txns){
     vatIn:[],     // Input VAT on your purchases
     payeOut:[],   // PAYE you must deduct & remit
     payeIn:[],    // PAYE deducted from your salary (credit)
+    cgtEvents:[],  // CGT-flagged asset disposal transactions
   };
 
   for(const t of txns){
@@ -842,6 +843,10 @@ function computeAggregates(txns){
         const paye=t.amount*.15; // estimated at 15%
         payeIn+=paye;
         schedules.payeIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE Credit",law:"TAA 2025 Sec 13"});
+      }
+      // CGT-flagged asset disposal — flag for review, no tax computed here (user must use CGT calculator)
+      if(r.head==="CGT-EVENT"){
+        schedules.cgtEvents.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:0,rate:"CGT — check calculator",type:"Asset Disposal",status:t.compliance_status||"pending",law:"NTA 2025 S.34-S.46"});
       }
     } else {
       expenses+=t.amount;
@@ -875,7 +880,7 @@ function computeAggregates(txns){
     income, expenses, net:income-expenses,
     // Tax amounts only:
     vatOut, vatIn, vatNet, vatPayable:Math.max(0,vatNet), vatRefund:Math.max(0,-vatNet),
-    whtIn, whtOut, payeIn, payeOut,
+    whtIn, whtOut, payeIn, payeOut, cgtEvents:schedules.cgtEvents.length,
     estCIT:Math.max(0,income-expenses)*.30,
     schedules,  // line-by-line breakdown per tax head
     txnCount:txns.length,
@@ -1531,7 +1536,7 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
 
   if(editTxn) return <TxnEditScreen txn={editTxn} onSave={onSaveEdit} onDelete={onDeleteTxn} onBack={()=>setEditTxn(null)}/>;
 
-  const filtered=filter==="all"?txns:filter==="kiv"?[]:txns.filter(t=>t.type===filter||classifyTxn(t.desc,t.type).head.toLowerCase().includes(filter));
+  const filtered=filter==="all"?txns:filter==="kiv"?[]:filter==="cgt"?txns.filter(t=>classifyTxn(t.desc,t.type).head==="CGT-EVENT"):txns.filter(t=>t.type===filter||classifyTxn(t.desc,t.type).head.toLowerCase().includes(filter));
 
   return(
     <div style={{paddingBottom:80}}>
@@ -1588,9 +1593,13 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
             {newTxn.desc.length>3&&(()=>{
               const r=classifyTxn(newTxn.desc,newTxn.type);
               const needsAction=["WHT-out","PAYE-out"].includes(r.head);
+              const isCGTEvent=r.head==="CGT-EVENT";
               return(
-                <div className={`ibox ${needsAction?"amber":"blue"}`} style={{marginBottom:10}}>
-                  <div className="ititle" style={{color:needsAction?C.amber:C.blue}}>{r.icon} {r.head} {needsAction&&"⚠ Compliance action will be required"}</div>
+                <div style={{marginBottom:10,background:isCGTEvent?"#EDE9FE":needsAction?"#FFFBEB":"#EFF6FF",
+                  border:`1px solid ${isCGTEvent?"#C4B5FD":needsAction?"#FDE68A":"#BFDBFE"}`,borderRadius:8,padding:"10px 12px"}}>
+                  <div className="ititle" style={{color:isCGTEvent?"#7C3AED":needsAction?C.amber:C.blue}}>
+                    {r.icon} {r.head} {needsAction&&"⚠ Compliance action required"}{isCGTEvent&&"⚠ Possible CGT event"}
+                  </div>
                   <div style={{fontSize:11,color:C.ink,lineHeight:1.5}}>{r.obligation}</div>
                 </div>
               );
@@ -1601,12 +1610,12 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
       )}
 
       <div className="tabs" style={{padding:"10px 12px 0"}}>
-        {["all","income","expense","vat","wht","paye","kiv"].map(f=>(
+        {["all","income","expense","vat","wht","paye","cgt","kiv"].map(f=>(
           <button key={f} className="tab" onClick={()=>setFilter(f)} style={{
             background:filter===f?C.blue:"#fff",color:filter===f?"#fff":C.slate,
             borderColor:filter===f?C.blue:C.border,
           }}>
-            {f==="kiv"?`⏸ KIV${kivTxns&&kivTxns.length>0?` (${kivTxns.length})`:""}`:f.toUpperCase()}
+            {f==="kiv"?`⏸ KIV${kivTxns&&kivTxns.length>0?` (${kivTxns.length})`:""}`:f==="cgt"?"📊 CGT":f.toUpperCase()}
           </button>
         ))}
       </div>
@@ -2425,12 +2434,13 @@ function TaxScheduleScreen({scheduleKey, schedules, profile, onBack}){
   const grossTotal = lines.reduce((s,l)=>s+l.gross,0);
 
   const labels={
-    whtOut: {title:"WHT Remittance Schedule", sub:"Withholding Tax deducted — to remit to NRS by 21st", color:C.red,    icon:"📋"},
-    whtIn:  {title:"WHT Credit Schedule",     sub:"WHT deducted from your income by payers",            color:C.green,  icon:"✅"},
-    vatOut: {title:"Output VAT Schedule",      sub:"VAT charged on your taxable supplies",               color:C.amber,  icon:"🧾"},
-    vatIn:  {title:"Input VAT Schedule",       sub:"VAT paid on qualifying purchases — deductible",      color:C.green,  icon:"🧾"},
-    payeOut:{title:"PAYE Remittance Schedule", sub:"PAYE deducted from staff salaries — remit by 10th",  color:C.blue,   icon:"👥"},
-    payeIn: {title:"PAYE Credit Schedule",     sub:"PAYE deducted from your salary by employer",         color:C.green,  icon:"💼"},
+    whtOut:    {title:"WHT Remittance Schedule",  sub:"Withholding Tax deducted — to remit to NRS by 21st", color:C.red,      icon:"📋"},
+    whtIn:     {title:"WHT Credit Schedule",      sub:"WHT deducted from your income by payers",            color:C.green,    icon:"✅"},
+    vatOut:    {title:"Output VAT Schedule",       sub:"VAT charged on your taxable supplies",               color:C.amber,    icon:"🧾"},
+    vatIn:     {title:"Input VAT Schedule",        sub:"VAT paid on qualifying purchases — deductible",      color:C.green,    icon:"🧾"},
+    payeOut:   {title:"PAYE Remittance Schedule",  sub:"PAYE deducted from staff salaries — remit by 10th", color:C.blue,     icon:"👥"},
+    payeIn:    {title:"PAYE Credit Schedule",      sub:"PAYE deducted from your salary by employer",         color:C.green,    icon:"💼"},
+    cgtEvents: {title:"CGT Events — Asset Disposals", sub:"Possible Capital Gains Tax transactions — check CGT calculator for each", color:"#7C3AED", icon:"📊"},
   };
   const meta = labels[scheduleKey]||{title:"Tax Schedule",sub:"",color:C.blue,icon:"📊"};
 
@@ -3697,7 +3707,8 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
       vatOut:{title:"Output VAT Schedule",    law:"NTA 2025 Ch.Four — Sec 54",     due:"21st of next month",note:"VAT charged on taxable supplies"},
       vatIn: {title:"Input VAT Schedule",     law:"NTA 2025 Ch.Four — Sec 59",     due:"Deductible from output VAT",note:"VAT on qualifying purchases"},
       payeOut:{title:"PAYE Remittance Schedule",law:"TAA 2025 Sec 13",             due:"10th of next month",note:"PAYE deducted from staff salaries"},
-      payeIn: {title:"PAYE Credit Schedule",  law:"TAA 2025 Sec 13",              due:"Credit on annual PIT return",note:"PAYE deducted by employer"},
+      payeIn:     {title:"PAYE Credit Schedule",      law:"TAA 2025 Sec 13",              due:"Credit on annual PIT return",note:"PAYE deducted by employer"},
+      cgtEvents:  {title:"CGT Events — Asset Disposals",law:"NTA 2025 S.34-S.46",           due:"31 March following year",    note:"Possible Capital Gains Tax transactions"},
     };
     const m=META[key]||{title:key,law:"NTA 2025",due:"",note:""};
     const grossTotal=lines.reduce((s,l)=>s+l.gross,0);
@@ -3742,8 +3753,8 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
   function downloadAll(){
     // All six schedules concatenated into one CSV with section breaks
     const keys=isCompany
-      ?["whtOut","whtIn","vatOut","vatIn","payeOut"]
-      :["whtIn","vatIn","payeIn"];
+      ?["whtOut","whtIn","vatOut","vatIn","payeOut","cgtEvents"]
+      :["whtIn","vatIn","payeIn","cgtEvents"];
     const sections=keys.map(k=>{
       const lines=agg.schedules[k]||[];
       return buildCSV(k,lines);
@@ -3911,6 +3922,13 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
             color={C.green} due="Offset on annual PIT return"
             law="TAA 2025 Sec 13"/>
         )}
+
+        <div style={{fontSize:10,fontWeight:700,letterSpacing:".1em",color:C.muted,marginBottom:8,marginTop:14}}>CAPITAL GAINS TAX</div>
+        <SchedCard schedKey="cgtEvents" icon="📊"
+          title="CGT Events — Asset Disposals"
+          subtitle="Possible CGT transactions — use CGT Calculator to compute tax due"
+          color="#7C3AED" due="31 March following year"
+          law="NTA 2025 S.34-S.46"/>
 
         {/* ── SUMMARY FIGURES ── */}
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".1em",color:C.muted,marginBottom:8,marginTop:16}}>TAX POSITION SUMMARY</div>

@@ -471,17 +471,35 @@ function computePIT(p){
     const t=pitBands(Math.max(0,p-p*.08));
     return{annual:t,monthly:t/12,eff:p?(t/p)*100:0,exempt:false};
   }
-  const{category="A",monthlyIncome=0,payeDeducted=0,otherIncome=0,rentPaid=0}=p;
-  const annual=monthlyIncome*12,total=annual+otherIncome;
+  const{
+    category="A", monthlyIncome=0, payeDeducted=0, otherIncome=0,
+    rentPaid=0,            // S.30(2)(a)(vi) 20% of annual rent, max 500k
+    nhfAnnual=0,           // S.30(2)(a)(i)  NHF contributions
+    nhisAnnual=0,          // S.30(2)(a)(ii) NHIS contributions
+    pensionAnnual=0,       // S.30(2)(a)(iii) employee pension 8%
+    lifeInsAnnual=0,       // S.30(2)(a)(v)  life insurance premiums
+    housingLoanInterest=0, // S.30(2)(a)(iv) interest on owner-occupied housing loan
+  }=p;
+  const annual=monthlyIncome*12, total=annual+otherIncome;
   if(category==="E"||monthlyIncome<=70000&&otherIncome===0)
     return{annual:0,monthly:0,eff:0,exempt:true,totalGross:total,payeCredit:payeDeducted*12,balanceDue:0,refund:payeDeducted*12};
-  const rentRelief=Math.min(rentPaid*.2,500000);
-  const deductions=annual*.08+rentRelief;
-  const taxable=Math.max(0,total-deductions);
-  const tax=pitBands(taxable);
-  const bal=tax-(payeDeducted*12);
-  return{annual:tax,monthly:tax/12,eff:total?(tax/total)*100:0,exempt:false,totalGross:total,taxable,
-    payeCredit:payeDeducted*12,balanceDue:Math.max(0,bal),refund:Math.max(0,-bal),category,rentRelief,deductions};
+  const rentRelief        = Math.min(rentPaid*.2, 500000);
+  const pensionDeduction  = pensionAnnual>0 ? pensionAnnual : annual*.08;
+  const nhfDeduction      = nhfAnnual;
+  const nhisDeduction     = nhisAnnual;
+  const lifeInsDeduction  = lifeInsAnnual;
+  const housingDeduction  = housingLoanInterest;
+  const totalDeductions   = pensionDeduction+nhfDeduction+nhisDeduction+lifeInsDeduction+housingDeduction+rentRelief;
+  const taxable = Math.max(0, total-totalDeductions);
+  const tax     = pitBands(taxable);
+  const bal     = tax-(payeDeducted*12);
+  return{
+    annual:tax, monthly:tax/12, eff:total?(tax/total)*100:0, exempt:false,
+    totalGross:total, taxable,
+    payeCredit:payeDeducted*12, balanceDue:Math.max(0,bal), refund:Math.max(0,-bal),
+    category, rentRelief, pensionDeduction, nhfDeduction, nhisDeduction,
+    lifeInsDeduction, housingDeduction, totalDeductions,
+  };
 }
 
 function computeCIT(profit,turnover,assets=0,isPro=false){
@@ -2670,7 +2688,7 @@ function CITScreen({profile, txns, assets, onBack}){
 
 function CalculateScreen({profile,onBack}){
   const[tab,setTab]=useState("pit");
-  const[pitData,setPitData]=useState({monthlyIncome:0,payeDeducted:0,otherIncome:0,rentPaid:0,category:profile.empCategory||"A"});
+  const[pitData,setPitData]=useState({monthlyIncome:0,payeDeducted:0,otherIncome:0,rentPaid:0,nhfAnnual:0,nhisAnnual:0,pensionAnnual:0,lifeInsAnnual:0,housingLoanInterest:0,category:profile.empCategory||"A"});
   const[whtData,setWhtData]=useState({amount:200000,type:"professional"});
   const[vatData,setVatData]=useState({amount:500000,tier:"standard"});
   const[penData,setPenData]=useState({tax:500000,days:30});
@@ -2711,7 +2729,16 @@ function CalculateScreen({profile,onBack}){
                   {pitData.category!=="C"&&<div className="fg"><label className="lbl">MONTHLY SALARY (₦)</label><input className="inp" type="number" value={pitData.monthlyIncome||""} onChange={e=>setPitData(p=>({...p,monthlyIncome:parseFloat(e.target.value)||0}))}/></div>}
                   {(pitData.category==="A"||pitData.category==="D")&&<div className="fg"><label className="lbl">MONTHLY PAYE EMPLOYER DEDUCTS (₦)</label><input className="inp" type="number" value={pitData.payeDeducted||""} onChange={e=>setPitData(p=>({...p,payeDeducted:parseFloat(e.target.value)||0}))}/></div>}
                   {(pitData.category==="C"||pitData.category==="D")&&<div className="fg"><label className="lbl">OTHER MONTHLY INCOME — freelance/rent/dividends (₦)</label><input className="inp" type="number" value={pitData.otherIncome||""} onChange={e=>setPitData(p=>({...p,otherIncome:parseFloat(e.target.value)||0}))}/></div>}
-                  <div className="fg"><label className="lbl">ANNUAL RENT PAID (₦) — 20% deductible, max ₦500k</label><input className="inp" type="number" value={pitData.rentPaid||""} onChange={e=>setPitData(p=>({...p,rentPaid:parseFloat(e.target.value)||0}))}/></div>
+                  <div className="ibox blue" style={{marginTop:8,marginBottom:4}}>
+                    <div className="ititle" style={{color:C.blue}}>ELIGIBLE DEDUCTIONS — S.30(2)(a) NTA 2025</div>
+                    <p style={{fontSize:11,color:C.muted,marginBottom:0}}>Enter annual amounts. Only what you actually paid qualifies.</p>
+                  </div>
+                  <div className="fg"><label className="lbl">ANNUAL RENT PAID (₦) — 20% deductible, max ₦500,000 [S.30(2)(a)(vi)]</label><input className="inp" type="number" value={pitData.rentPaid||""} onChange={e=>setPitData(p=>({...p,rentPaid:parseFloat(e.target.value)||0}))}/></div>
+                  <div className="fg"><label className="lbl">ANNUAL PENSION CONTRIBUTION (₦) — employee 8% of basic+housing+transport [S.30(2)(a)(iii)]</label><input className="inp" type="number" value={pitData.pensionAnnual||""} onChange={e=>setPitData(p=>({...p,pensionAnnual:parseFloat(e.target.value)||0}))}/></div>
+                  <div className="fg"><label className="lbl">ANNUAL NHF CONTRIBUTION (₦) — 2.5% of basic salary [S.30(2)(a)(i)]</label><input className="inp" type="number" value={pitData.nhfAnnual||""} onChange={e=>setPitData(p=>({...p,nhfAnnual:parseFloat(e.target.value)||0}))}/></div>
+                  <div className="fg"><label className="lbl">ANNUAL NHIS / HMO CONTRIBUTION (₦) [S.30(2)(a)(ii)]</label><input className="inp" type="number" value={pitData.nhisAnnual||""} onChange={e=>setPitData(p=>({...p,nhisAnnual:parseFloat(e.target.value)||0}))}/></div>
+                  <div className="fg"><label className="lbl">ANNUAL LIFE INSURANCE PREMIUM (₦) — own or spouse life / deferred annuity [S.30(2)(a)(v)]</label><input className="inp" type="number" value={pitData.lifeInsAnnual||""} onChange={e=>setPitData(p=>({...p,lifeInsAnnual:parseFloat(e.target.value)||0}))}/></div>
+                  <div className="fg"><label className="lbl">ANNUAL HOUSING LOAN INTEREST (₦) — owner-occupied only, not principal [S.30(2)(a)(iv)]</label><input className="inp" type="number" value={pitData.housingLoanInterest||""} onChange={e=>setPitData(p=>({...p,housingLoanInterest:parseFloat(e.target.value)||0}))}/></div>
                 </>
               )}
             </div>
@@ -2723,9 +2750,14 @@ function CalculateScreen({profile,onBack}){
                 <>
                   {pitData.category==="A"&&<div className="ibox blue"><div className="ititle" style={{color:C.blue}}>ℹ Salary already taxed via PAYE — not taxed again</div><p style={{fontSize:12,color:C.ink}}>Only additional income outside employment creates further liability.</p></div>}
                   <DataRow label="Total Gross Income" value={fmt(pitR.totalGross||pitData.monthlyIncome*12)}/>
-                  {pitR.rentRelief>0&&<DataRow label="Rent Relief (20%)" value={`-${fmt(pitR.rentRelief)}`} color={C.green}/>}
-                  {pitR.deductions>0&&<DataRow label="Total Deductions" value={`-${fmt(pitR.deductions)}`} color={C.green}/>}
-                  {pitR.taxable>0&&<DataRow label="Taxable Income" value={fmt(pitR.taxable)}/>}
+                  {pitR.pensionDeduction>0&&<DataRow label="Pension Contribution [S.30(2)(a)(iii)]" value={`-${fmt(pitR.pensionDeduction)}`} color={C.green}/>}
+                  {pitR.nhfDeduction>0&&<DataRow label="NHF Contribution [S.30(2)(a)(i)]" value={`-${fmt(pitR.nhfDeduction)}`} color={C.green}/>}
+                  {pitR.nhisDeduction>0&&<DataRow label="NHIS Contribution [S.30(2)(a)(ii)]" value={`-${fmt(pitR.nhisDeduction)}`} color={C.green}/>}
+                  {pitR.lifeInsDeduction>0&&<DataRow label="Life Insurance Premium [S.30(2)(a)(v)]" value={`-${fmt(pitR.lifeInsDeduction)}`} color={C.green}/>}
+                  {pitR.housingDeduction>0&&<DataRow label="Housing Loan Interest [S.30(2)(a)(iv)]" value={`-${fmt(pitR.housingDeduction)}`} color={C.green}/>}
+                  {pitR.rentRelief>0&&<DataRow label={`Rent Relief 20% of ${fmt(pitData.rentPaid)} [S.30(2)(a)(vi)]`} value={`-${fmt(pitR.rentRelief)}`} color={C.green}/>}
+                  {pitR.totalDeductions>0&&<DataRow label="Total Eligible Deductions" value={`-${fmt(pitR.totalDeductions)}`} color={C.green} total={true}/>}
+                  {pitR.taxable>0&&<DataRow label="Taxable (Chargeable) Income" value={fmt(pitR.taxable)}/>}
                   <DataRow label="Annual PIT Liability" value={fmt(pitR.annual)} color={C.blue}/>
                   <DataRow label="Monthly PAYE" value={fmt(pitR.monthly)} color={C.blue}/>
                   <DataRow label="Effective Rate" value={`${pitR.eff?.toFixed(1)||"0"}%`} color={C.amber}/>
@@ -3039,6 +3071,17 @@ CGT: 30% companies, PIT rates individuals. ₦50M exemption threshold.
 Capital Allowance: Straight-line only. Buildings/masts/agric/heavy plant = 10%. Plant/furniture/mining = 20%. Vehicles/software/intangibles = 25%. 1% residual retained. IA abolished.
 Penalties: Individual ₦50k first month + ₦25k/month. Company ₦250k + ₦50k/month. Interest: CBN MPR + 15% ≈ 41.75% p.a.
 
+── INDIVIDUAL PERSONAL RELIEF DEDUCTIONS — Section 30(2)(a) NTA 2025 ──
+These 6 deductions reduce chargeable income for ALL individuals (salaried AND self-employed):
+1. NHF Contributions — 2.5% of basic salary [S.30(2)(a)(i)]
+2. NHIS Contributions — full amount paid [S.30(2)(a)(ii)]
+3. Pension — employee's 8% of (basic+housing+transport) ONLY; employer 10% excluded [S.30(2)(a)(iii)]
+4. Housing Loan Interest — ONLY interest on loan for owner-occupied home; principal is NOT deductible [S.30(2)(a)(iv)]
+5. Life Insurance Premiums — own/spouse life or deferred annuity [S.30(2)(a)(v)]
+6. Rent Relief — 20% of annual rent paid, MAXIMUM ₦500,000 [S.30(2)(a)(vi)] — replaces old CRA
+Formula: Chargeable Income = Total Income − (all applicable deductions above)
+First ₦800,000 of chargeable income = 0% (tax-free band)
+
 ── ALLOWABLE DEDUCTIONS (Tax) — NTA 2025 Sec 20–27 ──
 FULLY ALLOWABLE (deductible from assessable profit):
 ✓ Salaries, wages, bonuses — if wholly and exclusively for business
@@ -3077,6 +3120,12 @@ FULLY ALLOWABLE (deductible from assessable profit):
 ✗ Provisions not yet crystallised (e.g. general provisions for bad debts)
 ✗ Pre-trading/pre-incorporation expenses (unless specifically approved)
 ✗ Expenses not wholly and exclusively for business purposes
+✗ Expenses on which VAT or import duty is outstanding (non-deductible until VAT is settled — NTA 2025)
+
+── SELF-EMPLOYED / FREELANCER EXPENSE RULE ──
+Test: expenses must be WHOLLY AND EXCLUSIVELY incurred to generate business income.
+Mixed-use expenses (fuel, phone, home office used partly for personal use): ONLY the business proportion is deductible. User must confirm the split. Never assume 100% business use.
+Personal drawings/withdrawals by sole traders are NOT salary and are NOT deductible.
 
 ── ACCOUNTING vs TAX TREATMENT — KEY DIFFERENCES ──
 • Loan repayment: Accounting = reduce liability (balance sheet). Tax = NOT deductible. Only interest expense is deductible.

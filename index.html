@@ -2940,17 +2940,13 @@ function CGTPanel({cgtData, setCgtData, profile}){
             {/* Guidance note */}
             <div className="ibox amber">
               <div className="ititle" style={{color:C.amber}}>⚠ Important Notes</div>
-              <p style={{fontSize:11,color:C.ink,lineHeight:1.7}}>
-                • Keep all acquisition documents (receipts, agreements, share certificates) — the NRS can request proof of your cost base.{"
-"}
-                • If CA was ever claimed on this asset, TWDV is your cost base, NOT the original price.{"
-"}
-                • Digital asset gains (crypto, NFTs) are now fully taxable — keep transaction histories from exchanges.{"
-"}
-                • Offshore share disposals involving Nigerian assets may trigger CGT even if the sale happened abroad.{"
-"}
-                • For complex disposals, consult a registered tax consultant before filing.
-              </p>
+              <div style={{fontSize:11,color:C.ink,lineHeight:1.9}}>
+                <div>• Keep all acquisition documents (receipts, agreements, share certificates) — the NRS can request proof of your cost base.</div>
+                <div>• If CA was ever claimed on this asset, TWDV is your cost base, NOT the original price.</div>
+                <div>• Digital asset gains (crypto, NFTs) are now fully taxable — keep transaction histories from exchanges.</div>
+                <div>• Offshore share disposals involving Nigerian assets may trigger CGT even if the sale happened abroad.</div>
+                <div>• For complex disposals, consult a registered tax consultant before filing.</div>
+              </div>
             </div>
 </>
   );

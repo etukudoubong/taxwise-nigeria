@@ -1036,9 +1036,9 @@ function ScoreRing({score}){
 // IMPROVEMENT 1: No turnover field (derived from transactions)
 // IMPROVEMENT 2: Data source selection (multi-select)
 // IMPROVEMENT 3: Employer deduction choices for individuals
-function OnboardingScreen({onComplete}){
-  const[step,setStep]=useState(0);
-  const[data,setData]=useState({
+function OnboardingScreen({onComplete, editMode=false, initialData=null}){
+  const[step,setStep]=useState(editMode?1:0);
+  const[data,setData]=useState(initialData||{
     name:"",email:"",phone:"",tin:"",
     mode:"individual",
     empCategory:"A",
@@ -1223,9 +1223,9 @@ function OnboardingScreen({onComplete}){
   // Step 4 — Summary & confirm
   return(
     <div style={{padding:24,paddingTop:32,minHeight:"100vh",display:"flex",flexDirection:"column",justifyContent:"center"}}>
-      <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:".12em",marginBottom:8}}>STEP 4 OF 4</div>
-      <div style={{fontSize:24,fontWeight:800,color:C.ink,marginBottom:6}}>All Set!</div>
-      <div style={{fontSize:13,color:C.muted,marginBottom:24}}>Here's your profile summary. You can edit any of this in Settings later.</div>
+      <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:".12em",marginBottom:8}}>{editMode?"REVIEW CHANGES":"STEP 4 OF 4"}</div>
+      <div style={{fontSize:24,fontWeight:800,color:C.ink,marginBottom:6}}>{editMode?"Review Your Profile":"All Set!"}</div>
+      <div style={{fontSize:13,color:C.muted,marginBottom:24}}>{editMode?"Review your changes below and tap Save to update your profile.":"Here's your profile summary. You can edit any of this in Settings later."}</div>
 
       <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,borderRadius:16,padding:20,color:"#fff",marginBottom:16}}>
         <div style={{fontSize:10,opacity:.6,letterSpacing:".1em",marginBottom:6}}>TAXPAYER PROFILE</div>
@@ -1242,7 +1242,10 @@ function OnboardingScreen({onComplete}){
         <p style={{fontSize:12,color:C.ink,lineHeight:1.6}}>As you enter transactions, your dashboard will show live turnover, income, expenses, VAT position, PAYE obligations and CIT estimate — all computed from your actual transaction data.</p>
       </div>
 
-      <button className="btn btn-green" style={{marginTop:8}} onClick={()=>onComplete(data)}>Start Using TaxWise →</button>
+      <button className="btn btn-green" style={{marginTop:8}} onClick={()=>onComplete(data)}>
+        {editMode?"💾 Save Changes":"Start Using TaxWise →"}
+      </button>
+      {editMode&&<button className="btn btn-ghost" style={{marginTop:8}} onClick={()=>onComplete(null)}>Cancel</button>}
       <button className="btn btn-ghost" style={{marginTop:8}} onClick={()=>setStep(3)}>← Back</button>
     </div>
   );
@@ -3209,7 +3212,7 @@ Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocale
 }
 
 // ── PROFILE SCREEN ────────────────────────────────────────────────────────────
-function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut}){
+function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEditSetup}){
   const[edit,setEdit]=useState({...profile});
   const agg=computeAggregates(txns);
   const [signingOut, setSigningOut] = useState(false);
@@ -3273,6 +3276,21 @@ function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut}){
             ))}
           </div>
           <div style={{fontSize:11,color:C.muted,marginTop:8}}>Switching mode changes your dashboard and tax computations.</div>
+        </div>
+
+        {/* Re-run setup wizard */}
+        <div className="card">
+          <div className="ctitle">PROFILE SETUP</div>
+          <div style={{fontSize:13,color:C.slate,marginBottom:12,lineHeight:1.5}}>
+            Re-run the setup wizard to update your employment category, employer deductions, business sector, data sources, and other profile settings.
+          </div>
+          <button onClick={onEditSetup}
+            style={{width:"100%",padding:"11px",background:C.blueLight,
+              border:`1.5px solid ${C.blueBorder}`,borderRadius:10,
+              color:C.blue,fontSize:13,fontWeight:700,
+              cursor:"pointer",fontFamily:"inherit"}}>
+            ✏️ Edit Full Profile Setup
+          </button>
         </div>
 
         {/* Reset */}
@@ -4047,7 +4065,15 @@ function App(){
       case "upload":     return canEdit ? <CSVUploadScreen setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} profile={profile} authUser={authUser} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted</div>;
       case "import":     return canEdit ? <DocumentUploadScreen profile={profile} authUser={authUser} setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Data Entry or above</div>;
       case "agent":      return <AgentScreen profile={profile} txns={txns} onBack={back}/>;
-      case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")}/>;
+      case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")} onEditSetup={()=>setScreen("editSetup")}/>;
+      case "editSetup":  return <OnboardingScreen
+          editMode={true}
+          initialData={{...profile}}
+          onComplete={p=>{
+            if(p){ setProfile({...profile,...p,onboarded:true}); }
+            setScreen("profile");
+          }}
+        />;
       case "taxsummary": return canViewReports ? <TaxSummaryScreen txns={txns} profile={profile} onNav={nav} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Accountant or above</div>;
       case "reports":    return canViewReports ? <TaxSummaryScreen txns={txns} profile={profile} onNav={nav} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Accountant or above</div>;
       case "bank":       return <BankScreen connectedBanks={connectedBanks} setConnectedBanks={setConnectedBanks} onBack={back}/>;

@@ -537,19 +537,6 @@ function computeCA(cost,cls,years=1){
   return{annual,effective,twdv,residual,rate:rate*100,maxYrs};
 }
 
-// ── CGT COMPUTATION — NTA 2025 ───────────────────────────────────────────────
-// assetType: "land_building"|"shares_listed"|"shares_unlisted"|"vehicle"|
-//            "chattel"|"digital_asset"|"principal_residence"|"other"
-// isCompany: bool
-// isSmallCompany: bool
-// proceeds: sale/disposal proceeds
-// cost: acquisition cost (or TWDV if CA was claimed)
-// caWasClaimed: bool — determines cost base
-// twdv: tax written down value (used as cost base if CA claimed)
-// otherAnnualIncome: individual's other income — determines which PIT band gain falls into
-// reinvestedInNigeria: bool — full exemption if proceeds reinvested in Nigerian company
-// sharesSaleInYear: total share disposal proceeds in 12 months — for ₦150m threshold
-// sharesGain: gain on shares disposal — must be ≤₦10m for low-value exemption
 function computeCGT({
   assetType="other",
   isCompany=false,
@@ -565,58 +552,32 @@ function computeCGT({
 }={}){
   const costBase = caWasClaimed ? twdv : cost;
   const gain = Math.max(0, proceeds - costBase);
-
-  // ── EXEMPTION CHECKS ──────────────────────────────────────────────────────
-  // 1. Reinvestment exemption — full exemption if proceeds reinvested in Nigerian co
-  if(reinvestedInNigeria){
-    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Reinvestment in Nigerian company — fully exempt [NTA 2025 S.34]",costBase};
-  }
-  // 2. Principal private residence — individual only
-  if(assetType==="principal_residence" && !isCompany){
-    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Principal private residence — exempt [NTA 2025 S.34]",costBase};
-  }
-  // 3. Two personal vehicles — individual only
-  if(assetType==="vehicle" && !isCompany){
-    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Personal vehicle (up to 2) — exempt [NTA 2025 S.34]",costBase};
-  }
-  // 4. Low-value chattel — proceeds ≤₦5m
-  if(assetType==="chattel" && proceeds<=5000000){
-    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Personal chattel ≤₦5m — exempt [NTA 2025 S.32]",costBase};
-  }
-  // 5. Share sales low-value exemption — total disposals ≤₦150m in 12 months AND gain ≤₦10m
-  if((assetType==="shares_listed"||assetType==="shares_unlisted") && sharesSaleInYear<=150000000 && sharesGain<=10000000){
-    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Share disposal ≤₦150m proceeds & ≤₦10m gain in 12 months — exempt [NTA 2025 S.45]",costBase};
-  }
-  // 6. Gain within ₦50m individual threshold (general)
-  if(!isCompany && gain<=50000000){
-    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Gain within ₦50m individual exemption threshold [NTA 2025 S.34]",costBase};
-  }
-  // 7. Small company — 0% CGT
-  if(isCompany && isSmallCompany){
-    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Small company — exempt from CGT [NTA 2025 S.202]",costBase};
-  }
-
-  // ── TAXABLE — COMPUTE TAX ─────────────────────────────────────────────────
+  if(reinvestedInNigeria)
+    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Reinvestment in Nigerian company - fully exempt [NTA 2025 S.34]",costBase};
+  if(assetType==="principal_residence"&&!isCompany)
+    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Principal private residence - exempt [NTA 2025 S.34]",costBase};
+  if(assetType==="vehicle"&&!isCompany)
+    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Personal vehicle (up to 2) - exempt [NTA 2025 S.34]",costBase};
+  if(assetType==="chattel"&&proceeds<=5000000)
+    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Personal chattel proceeds below N5m - exempt [NTA 2025 S.32]",costBase};
+  if((assetType==="shares_listed"||assetType==="shares_unlisted")&&sharesSaleInYear<=150000000&&sharesGain<=10000000)
+    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Share disposal below N150m proceeds & N10m gain in 12 months - exempt [NTA 2025 S.45]",costBase};
+  if(!isCompany&&gain<=50000000)
+    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Gain within N50m individual exemption threshold [NTA 2025 S.34]",costBase};
+  if(isCompany&&isSmallCompany)
+    return{gain,tax:0,rate:0,exempt:true,exemptReason:"Small company - exempt from CGT [NTA 2025 S.202]",costBase};
   if(isCompany){
-    // Companies: 30% flat
-    const tax = gain * 0.30;
+    const tax=gain*0.30;
     return{gain,tax,rate:30,exempt:false,exemptReason:null,costBase,tier:"30% (Company Rate)"};
-  } else {
-    // Individuals: gain added to other income, taxed at applicable PIT band
-    // Only the portion of gain ABOVE ₦50m threshold is taxable
-    const taxableGain = Math.max(0, gain - 50000000);
-    const totalIncome = otherAnnualIncome + taxableGain;
-    const taxOnTotal  = pitBands(totalIncome);
-    const taxOnOther  = pitBands(otherAnnualIncome);
-    const taxOnGain   = Math.max(0, taxOnTotal - taxOnOther);
-    const effectiveRate = taxableGain>0 ? (taxOnGain/taxableGain)*100 : 0;
-    return{
-      gain, taxableGain, tax:taxOnGain,
-      rate:effectiveRate, exempt:false, exemptReason:null, costBase,
-      tier:`Progressive PIT rate (~${effectiveRate.toFixed(1)}%)`,
-      totalIncomeForBanding: totalIncome,
-    };
   }
+  const taxableGain=Math.max(0,gain-50000000);
+  const totalIncome=otherAnnualIncome+taxableGain;
+  const taxOnTotal=pitBands(totalIncome);
+  const taxOnOther=pitBands(otherAnnualIncome);
+  const taxOnGain=Math.max(0,taxOnTotal-taxOnOther);
+  const effectiveRate=taxableGain>0?(taxOnGain/taxableGain)*100:0;
+  return{gain,taxableGain,tax:taxOnGain,rate:effectiveRate,exempt:false,exemptReason:null,costBase,
+    tier:"Progressive PIT rate (~"+effectiveRate.toFixed(1)+"%)",totalIncomeForBanding:totalIncome};
 }
 
 function computePenalty(tax,days,isCompany=false){
@@ -2771,184 +2732,194 @@ function CITScreen({profile, txns, assets, onBack}){
   );
 }
 
-function CGTPanel({cgtData, setCgtData, profile}){
-  const cgtR    = computeCGT(cgtData);
-  const set     = (k,v) => setCgtData(p=>({...p,[k]:v}));
-  const isShares = cgtData.assetType==="shares_listed"||cgtData.assetType==="shares_unlisted";
+function CGTPanel({cgtData,setCgtData}){
+  const cgtR=computeCGT(cgtData);
+  const set=(k,v)=>setCgtData(p=>({...p,[k]:v}));
+  const isShares=cgtData.assetType==="shares_listed"||cgtData.assetType==="shares_unlisted";
   return(
-    <>
-            {/* Step 1 — Asset Type */}
-            <div className="card">
-              <div className="ctitle">STEP 1 — ASSET DISPOSED</div>
-              <div style={{fontSize:11,color:C.muted,marginBottom:10}}>What type of asset did you sell or dispose of?</div>
-              <div className="fg">
-                <select className="sel" value={cgtData.assetType} onChange={e=>set("assetType",e.target.value)}>
-                  <option value="land_building">Land or Building</option>
-                  <option value="shares_listed">Shares — Listed (Stock Exchange)</option>
-                  <option value="shares_unlisted">Shares — Unlisted / Private Company</option>
-                  <option value="vehicle">Vehicle (personal use)</option>
-                  <option value="chattel">Personal Chattel (furniture, jewellery, etc.)</option>
-                  <option value="digital_asset">Digital / Virtual Asset (crypto, NFT, etc.)</option>
-                  <option value="principal_residence">Principal Private Residence</option>
-                  <option value="other">Other Asset</option>
-                </select>
-              </div>
-              {/* Contextual guidance per asset type */}
-              {cgtData.assetType==="principal_residence"&&(
-                <div className="ibox green"><div className="ititle" style={{color:C.green}}>✓ Likely Exempt</div>
-                  <p style={{fontSize:11,color:C.ink}}>Your principal private residence is exempt from CGT under NTA 2025 S.34. Only one property qualifies — the one you actually occupy as your main home.</p></div>
-              )}
-              {cgtData.assetType==="vehicle"&&(
-                <div className="ibox green"><div className="ititle" style={{color:C.green}}>✓ Likely Exempt (individuals)</div>
-                  <p style={{fontSize:11,color:C.ink}}>Up to two personal vehicles are exempt from CGT for individuals. If this is a company vehicle, it is NOT exempt — CGT at 30% applies.</p></div>
-              )}
-              {cgtData.assetType==="chattel"&&(
-                <div className="ibox blue"><div className="ititle" style={{color:C.blue}}>ℹ Chattel Threshold</div>
-                  <p style={{fontSize:11,color:C.ink}}>Personal chattels (furniture, jewellery, art, etc.) are exempt if total proceeds do not exceed ₦5,000,000. Above that threshold, CGT applies on the gain.</p></div>
-              )}
-              {cgtData.assetType==="digital_asset"&&(
-                <div className="ibox amber"><div className="ititle" style={{color:C.amber}}>⚠ Fully Taxable — New Under NTA 2025</div>
-                  <p style={{fontSize:11,color:C.ink}}>Crypto, NFTs, tokens and all digital/virtual assets are now explicitly chargeable assets under NTA 2025 S.34. Gains are taxable at your PIT rate (individuals) or 30% (companies). Keep records of all acquisition costs and disposal proceeds.</p></div>
-              )}
-              {isShares&&(
-                <div className="ibox blue"><div className="ititle" style={{color:C.blue}}>ℹ Share Disposal Exemption</div>
-                  <p style={{fontSize:11,color:C.ink}}>Share disposals may be exempt if: total proceeds in the year ≤ ₦150m AND the gain on this disposal ≤ ₦10m. If you reinvest the proceeds into a Nigerian company, full exemption applies regardless of amount.</p></div>
-              )}
+    <div style={{paddingBottom:8}}>
+
+      <div className="card">
+        <div className="ctitle">STEP 1 — ASSET DISPOSED</div>
+        <div style={{fontSize:11,color:C.muted,marginBottom:10}}>What type of asset did you sell or dispose of?</div>
+        <select className="sel" value={cgtData.assetType} onChange={e=>set("assetType",e.target.value)}>
+          <option value="land_building">Land or Building</option>
+          <option value="shares_listed">Shares — Listed (Stock Exchange)</option>
+          <option value="shares_unlisted">Shares — Unlisted / Private Company</option>
+          <option value="vehicle">Vehicle (personal use)</option>
+          <option value="chattel">Personal Chattel (furniture, jewellery, etc.)</option>
+          <option value="digital_asset">Digital / Virtual Asset (crypto, NFT, etc.)</option>
+          <option value="principal_residence">Principal Private Residence</option>
+          <option value="other">Other Asset</option>
+        </select>
+        {cgtData.assetType==="principal_residence"&&(
+          <div className="ibox green" style={{marginTop:8}}>
+            <div className="ititle" style={{color:C.green}}>Likely Exempt</div>
+            <p style={{fontSize:11,color:C.ink}}>Your principal private residence is exempt from CGT [NTA 2025 S.34]. Must be your actual main home.</p>
+          </div>
+        )}
+        {cgtData.assetType==="vehicle"&&(
+          <div className="ibox green" style={{marginTop:8}}>
+            <div className="ititle" style={{color:C.green}}>Likely Exempt (individuals)</div>
+            <p style={{fontSize:11,color:C.ink}}>Up to 2 personal vehicles are exempt for individuals. Company vehicles are NOT exempt — 30% CGT applies.</p>
+          </div>
+        )}
+        {cgtData.assetType==="chattel"&&(
+          <div className="ibox blue" style={{marginTop:8}}>
+            <div className="ititle" style={{color:C.blue}}>Chattel Threshold</div>
+            <p style={{fontSize:11,color:C.ink}}>Personal chattels are exempt if total proceeds do not exceed N5,000,000 [NTA 2025 S.32].</p>
+          </div>
+        )}
+        {cgtData.assetType==="digital_asset"&&(
+          <div className="ibox amber" style={{marginTop:8}}>
+            <div className="ititle" style={{color:C.amber}}>Fully Taxable — New Under NTA 2025</div>
+            <p style={{fontSize:11,color:C.ink}}>Crypto, NFTs and all digital/virtual assets are now explicitly chargeable under NTA 2025 S.34. Keep all transaction records from exchanges.</p>
+          </div>
+        )}
+        {isShares&&(
+          <div className="ibox blue" style={{marginTop:8}}>
+            <div className="ititle" style={{color:C.blue}}>Share Disposal Exemption</div>
+            <p style={{fontSize:11,color:C.ink}}>Exempt if total proceeds in the year are N150m or less AND the gain on this disposal is N10m or less. Reinvesting proceeds into a Nigerian company gives full exemption.</p>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="ctitle">STEP 2 — TAXPAYER TYPE</div>
+        <div style={{display:"flex",gap:8,marginBottom:8}}>
+          {[["individual","Individual"],["company","Company"]].map(([v,l])=>(
+            <button key={v} onClick={()=>set("isCompany",v==="company")}
+              style={{flex:1,padding:9,border:"2px solid "+((!cgtData.isCompany&&v==="individual")||(cgtData.isCompany&&v==="company")?C.blue:C.border),
+                background:(!cgtData.isCompany&&v==="individual")||(cgtData.isCompany&&v==="company")?C.blueLight:"#fff",
+                borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,
+                color:(!cgtData.isCompany&&v==="individual")||(cgtData.isCompany&&v==="company")?C.blue:C.muted,fontFamily:"inherit"}}>{l}</button>
+          ))}
+        </div>
+        {cgtData.isCompany&&(
+          <div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:6}}>Small company? (turnover N100m or less AND fixed assets N250m or less, not a professional services firm)</div>
+            <div style={{display:"flex",gap:8}}>
+              {[["yes","Yes — 0% CGT"],["no","No — 30% CGT"]].map(([v,l])=>(
+                <button key={v} onClick={()=>set("isSmallCompany",v==="yes")}
+                  style={{flex:1,padding:8,border:"2px solid "+((cgtData.isSmallCompany&&v==="yes")||(!cgtData.isSmallCompany&&v==="no")?C.blue:C.border),
+                    background:(cgtData.isSmallCompany&&v==="yes")||(!cgtData.isSmallCompany&&v==="no")?C.blueLight:"#fff",
+                    borderRadius:8,cursor:"pointer",fontSize:11,fontWeight:700,
+                    color:(cgtData.isSmallCompany&&v==="yes")||(!cgtData.isSmallCompany&&v==="no")?C.blue:C.muted,fontFamily:"inherit"}}>{l}</button>
+              ))}
             </div>
+          </div>
+        )}
+      </div>
 
-            {/* Step 2 — Taxpayer type */}
-            <div className="card">
-              <div className="ctitle">STEP 2 — TAXPAYER TYPE</div>
-              <div style={{display:"flex",gap:8,marginBottom:8}}>
-                {[["individual","👤 Individual"],["company","🏢 Company"]].map(([v,l])=>(
-                  <button key={v} onClick={()=>set("isCompany",v==="company")}
-                    style={{flex:1,padding:9,border:`2px solid ${(cgtData.isCompany?(v==="company"):(v==="individual"))?C.blue:C.border}`,
-                      background:(cgtData.isCompany?(v==="company"):(v==="individual"))?C.blueLight:"#fff",
-                      borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,
-                      color:(cgtData.isCompany?(v==="company"):(v==="individual"))?C.blue:C.muted,fontFamily:"inherit"}}>{l}</button>
-                ))}
-              </div>
-              {cgtData.isCompany&&(
-                <div>
-                  <div style={{fontSize:11,color:C.muted,marginBottom:6}}>Is this a small company? (turnover ≤₦100m AND fixed assets ≤₦250m, not a professional services firm)</div>
-                  <div style={{display:"flex",gap:8}}>
-                    {[["yes","Yes — 0% CGT"],["no","No — 30% CGT"]].map(([v,l])=>(
-                      <button key={v} onClick={()=>set("isSmallCompany",v==="yes")}
-                        style={{flex:1,padding:8,border:`2px solid ${(cgtData.isSmallCompany?(v==="yes"):(v==="no"))?C.blue:C.border}`,
-                          background:(cgtData.isSmallCompany?(v==="yes"):(v==="no"))?C.blueLight:"#fff",
-                          borderRadius:8,cursor:"pointer",fontSize:11,fontWeight:700,
-                          color:(cgtData.isSmallCompany?(v==="yes"):(v==="no"))?C.blue:C.muted,fontFamily:"inherit"}}>{l}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
+      <div className="card">
+        <div className="ctitle">STEP 3 — DISPOSAL DETAILS</div>
+        <div className="fg">
+          <label className="lbl">SALE / DISPOSAL PROCEEDS (N)</label>
+          <input className="inp" type="number" value={cgtData.proceeds||""} onChange={e=>set("proceeds",parseFloat(e.target.value)||0)}/>
+        </div>
+        <div style={{fontSize:11,color:C.muted,marginBottom:6,marginTop:4}}>Was Capital Allowance ever claimed on this asset?</div>
+        <div style={{display:"flex",gap:8,marginBottom:10}}>
+          {[["no","No — use original cost"],["yes","Yes — use TWDV as cost base"]].map(([v,l])=>(
+            <button key={v} onClick={()=>set("caWasClaimed",v==="yes")}
+              style={{flex:1,padding:7,border:"2px solid "+((!cgtData.caWasClaimed&&v==="no")||(cgtData.caWasClaimed&&v==="yes")?C.blue:C.border),
+                background:(!cgtData.caWasClaimed&&v==="no")||(cgtData.caWasClaimed&&v==="yes")?C.blueLight:"#fff",
+                borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:700,
+                color:(!cgtData.caWasClaimed&&v==="no")||(cgtData.caWasClaimed&&v==="yes")?C.blue:C.muted,fontFamily:"inherit"}}>{l}</button>
+          ))}
+        </div>
+        {!cgtData.caWasClaimed
+          ? <div className="fg">
+              <label className="lbl">ORIGINAL ACQUISITION COST (N)</label>
+              <input className="inp" type="number" value={cgtData.cost||""} onChange={e=>set("cost",parseFloat(e.target.value)||0)}/>
             </div>
-
-            {/* Step 3 — Proceeds & Cost */}
-            <div className="card">
-              <div className="ctitle">STEP 3 — DISPOSAL DETAILS</div>
-              <div className="fg"><label className="lbl">SALE / DISPOSAL PROCEEDS (₦)</label>
-                <input className="inp" type="number" value={cgtData.proceeds||""} onChange={e=>set("proceeds",parseFloat(e.target.value)||0)}/></div>
-
-              <div style={{fontSize:11,color:C.muted,marginBottom:6,marginTop:4}}>Was Capital Allowance ever claimed on this asset?</div>
-              <div style={{display:"flex",gap:8,marginBottom:10}}>
-                {[["no","No — use original cost"],["yes","Yes — use TWDV as cost base"]].map(([v,l])=>(
-                  <button key={v} onClick={()=>set("caWasClaimed",v==="yes")}
-                    style={{flex:1,padding:7,border:`2px solid ${(cgtData.caWasClaimed?(v==="yes"):(v==="no"))?C.blue:C.border}`,
-                      background:(cgtData.caWasClaimed?(v==="yes"):(v==="no"))?C.blueLight:"#fff",
-                      borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:700,
-                      color:(cgtData.caWasClaimed?(v==="yes"):(v==="no"))?C.blue:C.muted,fontFamily:"inherit"}}>{l}</button>
-                ))}
-              </div>
-              {!cgtData.caWasClaimed
-                ? <div className="fg"><label className="lbl">ORIGINAL ACQUISITION COST (₦) — what you paid for it</label>
-                    <input className="inp" type="number" value={cgtData.cost||""} onChange={e=>set("cost",parseFloat(e.target.value)||0)}/></div>
-                : <div className="fg"><label className="lbl">TAX WRITTEN DOWN VALUE / TWDV (₦) — from your asset register</label>
-                    <input className="inp" type="number" value={cgtData.twdv||""} onChange={e=>set("twdv",parseFloat(e.target.value)||0)}/>
-                    <div style={{fontSize:10,color:C.muted,marginTop:3}}>NTA 2025: if CA was claimed, cost base = TWDV (not original cost). This prevents a double deduction.</div>
-                  </div>
-              }
-
-              {/* Reinvestment question */}
-              <div style={{marginTop:8,padding:"10px 12px",background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:8}}>
-                <div style={{fontSize:12,fontWeight:700,color:C.green,marginBottom:6}}>💡 Reinvestment Exemption</div>
-                <div style={{fontSize:11,color:C.ink,marginBottom:8}}>Are you reinvesting the disposal proceeds into a Nigerian company? If yes, the FULL gain is exempt from CGT — no tax.</div>
-                <div style={{display:"flex",gap:8}}>
-                  {[["yes","Yes — Reinvesting"],["no","No"]].map(([v,l])=>(
-                    <button key={v} onClick={()=>set("reinvestedInNigeria",v==="yes")}
-                      style={{flex:1,padding:7,border:`2px solid ${(cgtData.reinvestedInNigeria?(v==="yes"):(v==="no"))?C.green:C.border}`,
-                        background:(cgtData.reinvestedInNigeria?(v==="yes"):(v==="no"))?"#DCFCE7":"#fff",
-                        borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:700,
-                        color:(cgtData.reinvestedInNigeria?(v==="yes"):(v==="no"))?C.green:C.muted,fontFamily:"inherit"}}>{l}</button>
-                  ))}
-                </div>
-              </div>
+          : <div className="fg">
+              <label className="lbl">TAX WRITTEN DOWN VALUE / TWDV (N) — from your asset register</label>
+              <input className="inp" type="number" value={cgtData.twdv||""} onChange={e=>set("twdv",parseFloat(e.target.value)||0)}/>
+              <div style={{fontSize:10,color:C.muted,marginTop:3}}>If CA was claimed, cost base = TWDV not original cost. This prevents double deduction.</div>
             </div>
+        }
+        <div style={{marginTop:8,padding:"10px 12px",background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:8}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.green,marginBottom:6}}>Reinvestment Exemption</div>
+          <div style={{fontSize:11,color:C.ink,marginBottom:8}}>Reinvesting proceeds into a Nigerian company? If yes, the FULL gain is exempt — no CGT.</div>
+          <div style={{display:"flex",gap:8}}>
+            {[["yes","Yes — Reinvesting"],["no","No"]].map(([v,l])=>(
+              <button key={v} onClick={()=>set("reinvestedInNigeria",v==="yes")}
+                style={{flex:1,padding:7,border:"2px solid "+((cgtData.reinvestedInNigeria&&v==="yes")||(!cgtData.reinvestedInNigeria&&v==="no")?C.green:C.border),
+                  background:(cgtData.reinvestedInNigeria&&v==="yes")||(!cgtData.reinvestedInNigeria&&v==="no")?"#DCFCE7":"#fff",
+                  borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:700,
+                  color:(cgtData.reinvestedInNigeria&&v==="yes")||(!cgtData.reinvestedInNigeria&&v==="no")?C.green:C.muted,fontFamily:"inherit"}}>{l}</button>
+            ))}
+          </div>
+        </div>
+      </div>
 
-            {/* Step 4 — Shares specific */}
-            {isShares&&(
-              <div className="card">
-                <div className="ctitle">STEP 4 — SHARE DISPOSAL DETAILS</div>
-                <div className="ibox blue" style={{marginBottom:10}}><p style={{fontSize:11,color:C.ink}}>
-                  Share disposals are exempt if total proceeds in the year ≤ ₦150m AND gain on this disposal ≤ ₦10m [NTA 2025 S.45]. Enter the totals below so TaxWise can check the exemption for you.
-                </p></div>
-                <div className="fg"><label className="lbl">TOTAL SHARE DISPOSAL PROCEEDS THIS YEAR (₦) — all disposals in last 12 months</label>
-                  <input className="inp" type="number" value={cgtData.sharesSaleInYear||""} onChange={e=>set("sharesSaleInYear",parseFloat(e.target.value)||0)}/></div>
-                <div className="fg"><label className="lbl">GAIN ON THIS SPECIFIC DISPOSAL (₦)</label>
-                  <input className="inp" type="number" value={cgtData.sharesGain||""} onChange={e=>set("sharesGain",parseFloat(e.target.value)||0)}/></div>
-                <div style={{fontSize:10,color:C.muted,marginTop:4}}>
-                  CGT on indirect transfers: if you disposed of shares in an offshore holding company that owns Nigerian assets, Nigerian CGT applies. Consult a tax consultant for treaty analysis.
-                </div>
-              </div>
-            )}
+      {isShares&&(
+        <div className="card">
+          <div className="ctitle">STEP 4 — SHARE DISPOSAL DETAILS</div>
+          <div className="ibox blue" style={{marginBottom:10}}>
+            <p style={{fontSize:11,color:C.ink}}>Exempt if total year proceeds are N150m or less AND gain on this disposal is N10m or less [NTA 2025 S.45].</p>
+          </div>
+          <div className="fg">
+            <label className="lbl">TOTAL SHARE DISPOSAL PROCEEDS THIS YEAR (N)</label>
+            <input className="inp" type="number" value={cgtData.sharesSaleInYear||""} onChange={e=>set("sharesSaleInYear",parseFloat(e.target.value)||0)}/>
+          </div>
+          <div className="fg">
+            <label className="lbl">GAIN ON THIS SPECIFIC DISPOSAL (N)</label>
+            <input className="inp" type="number" value={cgtData.sharesGain||""} onChange={e=>set("sharesGain",parseFloat(e.target.value)||0)}/>
+          </div>
+          <div style={{fontSize:10,color:C.muted,marginTop:4}}>
+            Note: disposing of shares in an offshore holding company that owns Nigerian assets also triggers Nigerian CGT [S.46]. Consult a tax consultant for treaty analysis.
+          </div>
+        </div>
+      )}
 
-            {/* Step 5 — PIT banding for individuals */}
-            {!cgtData.isCompany&&!cgtR.exempt&&(
-              <div className="card">
-                <div className="ctitle">STEP {isShares?"5":"4"} — YOUR OTHER ANNUAL INCOME</div>
-                <div style={{fontSize:11,color:C.muted,marginBottom:8}}>For individuals, CGT is taxed at your PIT rate. Enter your other income so TaxWise can determine which band your gain falls into.</div>
-                <div className="fg"><label className="lbl">TOTAL OTHER ANNUAL INCOME (₦) — salary, business profit, rent, dividends etc.</label>
-                  <input className="inp" type="number" value={cgtData.otherAnnualIncome||""} onChange={e=>set("otherAnnualIncome",parseFloat(e.target.value)||0)}/></div>
-              </div>
-            )}
+      {!cgtData.isCompany&&!cgtR.exempt&&(
+        <div className="card">
+          <div className="ctitle">STEP {isShares?"5":"4"} — YOUR OTHER ANNUAL INCOME</div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:8}}>CGT for individuals is taxed at your PIT rate. Enter other income so TaxWise can determine the right band.</div>
+          <div className="fg">
+            <label className="lbl">TOTAL OTHER ANNUAL INCOME (N) — salary, business profit, rent, dividends</label>
+            <input className="inp" type="number" value={cgtData.otherAnnualIncome||""} onChange={e=>set("otherAnnualIncome",parseFloat(e.target.value)||0)}/>
+          </div>
+        </div>
+      )}
 
-            {/* Result */}
-            <div className="card" style={{background:cgtR.exempt?`linear-gradient(135deg,#064E3B,#065F46)`:`linear-gradient(135deg,${C.navy},#1E3A5F)`,border:"none"}}>
-              <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,.5)",letterSpacing:".08em",marginBottom:10}}>CGT RESULT — NTA 2025</div>
-              <DataRow label="Disposal Proceeds" value={fmt(cgtData.proceeds)} color="#fff"/>
-              <DataRow label="Cost Base" value={`-${fmt(cgtR.costBase)}`} color="rgba(255,255,255,.7)"/>
-              <DataRow label="Chargeable Gain" value={fmt(cgtR.gain)} color="#93C5FD"/>
-              {!cgtR.exempt&&cgtR.taxableGain!=null&&cgtR.taxableGain<cgtR.gain&&(
-                <DataRow label="Less: ₦50m Exemption" value={`-${fmt(cgtR.gain-cgtR.taxableGain)}`} color="#4ADE80"/>
-              )}
-              {cgtR.exempt?(
-                <div style={{marginTop:10,padding:"10px 12px",background:"rgba(74,222,128,.15)",border:"1px solid rgba(74,222,128,.3)",borderRadius:8}}>
-                  <div style={{fontSize:13,fontWeight:700,color:"#4ADE80",marginBottom:4}}>✓ EXEMPT — NO CGT DUE</div>
-                  <div style={{fontSize:11,color:"rgba(255,255,255,.7)"}}>{cgtR.exemptReason}</div>
-                </div>
-              ):(
-                <>
-                  <DataRow label={`CGT Rate (${cgtR.tier})`} value={`${cgtR.rate?.toFixed(1)}%`} color="#FCD34D"/>
-                  <DataRow label="CGT PAYABLE" value={fmt(cgtR.tax)} color="#F87171" total={true}/>
-                  <div style={{marginTop:10,padding:"8px 10px",background:"rgba(255,255,255,.08)",borderRadius:7}}>
-                    <div style={{fontSize:10,color:"rgba(255,255,255,.6)"}}>CGT is due on or before 31 March of the following year. Late payment attracts interest at CBN MPR + 15% (~41.75% p.a.).</div>
-                  </div>
-                </>
-              )}
+      <div className="card" style={{background:cgtR.exempt?"linear-gradient(135deg,#064E3B,#065F46)":"linear-gradient(135deg,"+C.navy+",#1E3A5F)",border:"none"}}>
+        <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,.5)",letterSpacing:".08em",marginBottom:10}}>CGT RESULT — NTA 2025</div>
+        <DataRow label="Disposal Proceeds" value={fmt(cgtData.proceeds)} color="#fff"/>
+        <DataRow label="Cost Base" value={"-"+fmt(cgtR.costBase)} color="rgba(255,255,255,.7)"/>
+        <DataRow label="Chargeable Gain" value={fmt(cgtR.gain)} color="#93C5FD"/>
+        {!cgtR.exempt&&cgtR.taxableGain!=null&&cgtR.taxableGain<cgtR.gain&&(
+          <DataRow label="Less N50m Exemption" value={"-"+fmt(cgtR.gain-cgtR.taxableGain)} color="#4ADE80"/>
+        )}
+        {cgtR.exempt?(
+          <div style={{marginTop:10,padding:"10px 12px",background:"rgba(74,222,128,.15)",border:"1px solid rgba(74,222,128,.3)",borderRadius:8}}>
+            <div style={{fontSize:13,fontWeight:700,color:"#4ADE80",marginBottom:4}}>EXEMPT — NO CGT DUE</div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,.7)"}}>{cgtR.exemptReason}</div>
+          </div>
+        ):(
+          <>
+            <DataRow label={"CGT Rate ("+cgtR.tier+")"} value={(cgtR.rate||0).toFixed(1)+"%"} color="#FCD34D"/>
+            <DataRow label="CGT PAYABLE" value={fmt(cgtR.tax)} color="#F87171" total={true}/>
+            <div style={{marginTop:10,padding:"8px 10px",background:"rgba(255,255,255,.08)",borderRadius:7}}>
+              <div style={{fontSize:10,color:"rgba(255,255,255,.6)"}}>CGT is due by 31 March of the following year. Late payment attracts interest at approx 41.75% p.a.</div>
             </div>
+          </>
+        )}
+      </div>
 
-            {/* Guidance note */}
-            <div className="ibox amber">
-              <div className="ititle" style={{color:C.amber}}>⚠ Important Notes</div>
-              <div style={{fontSize:11,color:C.ink,lineHeight:1.9}}>
-                <div>• Keep all acquisition documents (receipts, agreements, share certificates) — the NRS can request proof of your cost base.</div>
-                <div>• If CA was ever claimed on this asset, TWDV is your cost base, NOT the original price.</div>
-                <div>• Digital asset gains (crypto, NFTs) are now fully taxable — keep transaction histories from exchanges.</div>
-                <div>• Offshore share disposals involving Nigerian assets may trigger CGT even if the sale happened abroad.</div>
-                <div>• For complex disposals, consult a registered tax consultant before filing.</div>
-              </div>
-            </div>
-</>
+      <div className="ibox amber">
+        <div className="ititle" style={{color:C.amber}}>Important Notes</div>
+        <div style={{fontSize:11,color:C.ink,lineHeight:1.9}}>
+          <div>Keep all acquisition documents — the NRS can request proof of your cost base.</div>
+          <div>If CA was ever claimed on this asset, TWDV is your cost base, NOT the original price.</div>
+          <div>Digital asset gains (crypto, NFTs) are now fully taxable — keep transaction histories from exchanges.</div>
+          <div>Offshore share disposals involving Nigerian assets may trigger CGT even if the sale happened abroad.</div>
+          <div>For complex disposals, consult a registered tax consultant before filing.</div>
+        </div>
+      </div>
+
+    </div>
   );
 }
 
@@ -2958,17 +2929,7 @@ function CalculateScreen({profile,onBack}){
   const[whtData,setWhtData]=useState({amount:200000,type:"professional"});
   const[vatData,setVatData]=useState({amount:500000,tier:"standard"});
   const[penData,setPenData]=useState({tax:500000,days:30});
-  const[cgtData,setCgtData]=useState({
-    assetType:"other",
-    isCompany:profile.mode==="company",
-    isSmallCompany:false,
-    proceeds:0, cost:0,
-    caWasClaimed:false, twdv:0,
-    otherAnnualIncome:0,
-    reinvestedInNigeria:false,
-    sharesSaleInYear:0, sharesGain:0,
-  });
-
+  const[cgtData,setCgtData]=useState({assetType:"other",isCompany:profile.mode==="company",isSmallCompany:false,proceeds:0,cost:0,caWasClaimed:false,twdv:0,otherAnnualIncome:0,reinvestedInNigeria:false,sharesSaleInYear:0,sharesGain:0});
   const pitR=computePIT(pitData);
   const whtR=computeWHT(whtData.amount,whtData.type);
   const vatR=computeVAT(vatData.amount,vatData.tier);
@@ -3050,7 +3011,7 @@ function CalculateScreen({profile,onBack}){
           </>
         )}
 
-        {tab==="cgt"&&<CGTPanel cgtData={cgtData} setCgtData={setCgtData} profile={profile}/>}
+        {tab==="cgt"&&<CGTPanel cgtData={cgtData} setCgtData={setCgtData}/>}
 
         {tab==="wht"&&(
           <>

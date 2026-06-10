@@ -4756,7 +4756,9 @@ Nigerian bank: credits=income, debits=expense. Return ONLY JSON array.`,
         type:t.type==="asset"?"asset":t.type==="income"?"income":"expense",
         source:"import", compliance_status:"pending",
         taxAllowable:!nonAllowable, included:!nonAllowable&&Math.abs(parseFloat(t.amount)||0)>0,
-        confidence:t.confidence||"medium", vatFlag:!!t.vatFlag, whtFlag:!!t.whtFlag,
+        confidence:t.confidence||"medium",
+        vatFlag: (profile?.mode==="company") ? !!t.vatFlag : false,
+        whtFlag:!!t.whtFlag,
         assetClass:t.assetClass||"other", category:t.category||"other",
       };
     }).filter(t=>t.amount>0);
@@ -5101,7 +5103,7 @@ Return ONLY a valid JSON array. Each item must have:
 - category: one of "revenue" | "salary" | "rent" | "professional_fee" | "supplies" | "utility" | "tax_payment" | "bank_charge" | "loan" | "capital_asset" | "other"
 - assetClass: ONLY if type="asset" — one of "buildings" | "plant" | "vehicles" | "software" | "other"
 - confidence: "high" | "medium" | "low"
-- vatFlag: true if VAT is charged or mentioned on this transaction, else false
+- vatFlag: boolean — see VAT rules below
 - whtFlag: true if WHT is applicable (professional fees, rent, dividends, interest), else false
 - taxAllowable: true for allowable items, false for non-allowable
 
@@ -5110,8 +5112,20 @@ CRITICAL CLASSIFICATION RULES for Nigerian accounting (NTA 2025):
 - Capital assets (type="asset"): purchases of land, buildings, vehicles, computers, machinery, equipment, furniture — anything with useful life > 1 year.
 - NON-ALLOWABLE items — taxAllowable=false: loan CAPITAL repayments, accounting depreciation, fines/penalties, personal expenses, dividends paid, income tax payments, drawings.
 - WHT applies to: professional fees, consulting, rent, dividends, interest, royalties, commissions.
-- VAT (7.5%) applies to: most goods and services supplied in Nigeria.
 - Loan repayment: Split into interest (taxAllowable=true) and principal (taxAllowable=false).
+- Expenses on which VAT or import duty is outstanding are NON-DEDUCTIBLE (taxAllowable=false) until the VAT is settled.
+
+VAT RULES (NTA 2025) — TAXPAYER PROFILE: ${isCompany ? "COMPANY" : "INDIVIDUAL/SELF-EMPLOYED"}
+${isCompany ? `- This taxpayer is a COMPANY. Flag vatFlag=true on all transactions where 7.5% VAT applies — standard-rated supplies, professional fees, services, goods.
+- Input VAT is now recoverable on goods, services, AND capital asset purchases under NTA 2025.
+- Small company exemption (turnover ≤₦100m AND fixed assets ≤₦250m): if this appears to be a small company, vatFlag=false — they are exempt from charging VAT.
+- Zero-rated supplies (exports, food, medical equipment, educational materials, electricity): vatFlag=true but note zero-rated — input VAT still recoverable.` 
+: `- This taxpayer is an INDIVIDUAL or SELF-EMPLOYED person.
+- INDIVIDUALS DO NOT CHARGE, COLLECT, OR FILE VAT under NTA 2025.
+- Set vatFlag=false on ALL transactions unless turnover clearly exceeds ₦50 million/year.
+- The individual may PAY VAT as a consumer on purchases — but this does not make them a VAT collector.
+- Only flag vatFlag=true if this is clearly a high-turnover self-employed person (turnover > ₦50m/year) who is VAT-registered.
+- When in doubt: vatFlag=false for individuals.`}
 
 Return ONLY the JSON array, no other text or markdown.`;
 
@@ -5148,10 +5162,25 @@ Return ONLY the JSON array, no other text or markdown.`;
     let txnList = [];
     try {
       const raw = data.reply||"[]";
-      const clean = raw.replace(/```json|```/g,"").trim();
+      // Strip markdown fences
+      let clean = raw.replace(/```json|```/g,"").trim();
+      // Extract JSON array — handles preamble/postamble text from Claude
+      const arrStart = clean.indexOf("[");
+      const arrEnd   = clean.lastIndexOf("]");
+      if(arrStart !== -1 && arrEnd > arrStart){
+        clean = clean.slice(arrStart, arrEnd + 1);
+      }
+      // If truncated mid-JSON, close at last complete object
+      if(clean && !clean.endsWith("]")){
+        const lastClose = clean.lastIndexOf("}");
+        clean = lastClose !== -1 ? clean.slice(0, lastClose+1)+"]" : "[]";
+      }
       const parsed = JSON.parse(clean);
       txnList = Array.isArray(parsed) ? parsed : (parsed.transactions || parsed.items || []);
-    } catch(e){ throw new Error("Could not read AI response — please try again"); }
+    } catch(e){
+      const preview = (data.reply||"").slice(0,200);
+      throw new Error("Could not parse AI response — please try again. Preview: "+preview);
+    }
 
     if(!Array.isArray(txnList)||txnList.length===0)
       throw new Error("No transactions found in document. Make sure the document contains financial transactions.");
@@ -5171,7 +5200,8 @@ Return ONLY the JSON array, no other text or markdown.`;
         source: "document",
         compliance_status: "pending",
         confidence: t.confidence||"medium",
-        vatFlag: !!t.vatFlag,
+        // Individuals don't charge/collect VAT under NTA 2025 — override any AI vatFlag
+        vatFlag: isCompany ? !!t.vatFlag : false,
         whtFlag: !!t.whtFlag,
         taxAllowable: !isNonAllowable,
         included: !isNonAllowable,

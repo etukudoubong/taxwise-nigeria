@@ -637,6 +637,14 @@ function classifyTxn(desc, type){
         obligation:"Payer deducts 10% WHT before paying you. You charge 7.5% VAT on your invoice. Obtain WHT credit note from payer.",
         law:"NTA 2025, Ch. Two Pt. IV; Ch. Four Sec 52"};
 
+    // CGT-ELIGIBLE DISPOSALS — must check BEFORE generic sale/sold match
+    // These keywords suggest an asset disposal that may attract CGT
+    if(d.match(/sold.*vehicle|vehicle.*sold|car.*sold|sold.*car|truck.*sold|sold.*truck|van.*sold|sold.*van|sold.*land|land.*sold|sold.*property|property.*sold|sold.*building|building.*sold|sold.*house|house.*sold|sold.*machinery|machinery.*sold|sold.*equipment.*sold|sold.*computer|computer.*sold|sold.*shares|shares.*sold|share.*disposal|disposed.*asset|asset.*disposed|sold.*asset|asset.*sold|sold.*crypto|crypto.*sold|bitcoin.*sold|sold.*bitcoin|nft.*sold|sold.*nft|sold.*furniture|furniture.*sold|disposal.*proceed|proceed.*disposal|sale.*proceed.*asset|asset.*proceed/))
+      return{head:"CGT-EVENT",icon:"📊",color:"#7C3AED",compliance_required:true,
+        obligation:"POSSIBLE CGT EVENT: This looks like an asset disposal. Capital Gains Tax may apply under NTA 2025 S.34. Go to Calculator > Cap. Gains tab to check your exemption status and compute any CGT due. Do NOT treat this as ordinary income.",
+        cgt_flag:true,
+        law:"NTA 2025, S.34-S.46 — Capital Gains Tax"};
+
     if(d.match(/sale|sold|sales revenue|goods sold|product sold|merchandise|supply received|invoice paid|trade income/))
       return{head:"VAT+CIT",icon:"🛒",color:C.green,compliance_required:false,
         obligation:"Charge 7.5% VAT on taxable supplies. Remit VAT by 21st. Include in CIT assessable profit.",
@@ -765,7 +773,14 @@ function classifyTxn(desc, type){
       compliance_prompt:"Deduct 10% WHT (₦{wht}) before paying interest of ₦{net}. Have you made this deduction?",
       law:"NTA 2025, Ch. Two Pt. IV — Interest: 10% WHT"};
 
-  // 11. CAPITAL EXPENDITURE
+  // 11a. ASSET DISPOSAL — CGT EVENT (catches disposals recorded as expenses)
+  if(d.match(/sold.*vehicle|vehicle.*sold|car.*sold|sold.*car|sold.*land|land.*sold|sold.*property|property.*sold|sold.*building|building.*sold|sold.*machinery|machinery.*sold|sold.*equipment|equipment.*sold|sold.*shares|shares.*sold|share.*disposal|disposed.*asset|asset.*disposed|sold.*asset|asset.*sold|sold.*crypto|crypto.*sold|disposal.*proceed|proceed.*disposal/))
+    return{head:"CGT-EVENT",icon:"📊",color:"#7C3AED",compliance_required:true,
+      obligation:"POSSIBLE CGT EVENT: This looks like an asset disposal. Capital Gains Tax may apply under NTA 2025 S.34. Go to Calculator > Cap. Gains tab to check your exemption status and compute any CGT due.",
+      cgt_flag:true,
+      law:"NTA 2025, S.34-S.46 — Capital Gains Tax"};
+
+  // 11b. CAPITAL EXPENDITURE (purchase of new asset)
   if(d.match(/generator|vehicle|car|truck|van|machine|equipment|computer|laptop|furniture|building purchased|asset purchased|software purchased/))
     return{head:"CapEx→CA",icon:"🏭",color:C.green,compliance_required:false,
       obligation:"Capital expenditure — do NOT expense in P&L. Add to asset register and claim Capital Allowance at NTA 2025 rates (10%/20%/25%).",
@@ -1521,7 +1536,7 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
   return(
     <div style={{paddingBottom:80}}>
       {/* IMPROVEMENT 6 — Compliance popup */}
-      {pendingTxn&&<CompliancePopup txn={pendingTxn} rule={pendingTxn.compliance_rule} onDone={onComplianceDone} onWaive={onComplianceWaive} onLater={onComplianceLater}/>}
+      {pendingTxn&&<CompliancePopup txn={pendingTxn} rule={pendingTxn.compliance_rule} onDone={onComplianceDone} onWaive={onComplianceWaive} onLater={onComplianceLater} onNav={onNav}/>}
       <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,padding:"20px 14px 22px",color:"#fff"}}>
         <div style={{fontSize:10,opacity:.6,letterSpacing:".1em",fontWeight:700,marginBottom:4}}>TRANSACTION JOURNAL</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
@@ -1648,10 +1663,67 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
 }
 
 // ── COMPLIANCE ACTION POPUP — IMPROVEMENT 6 ───────────────────────────────────
-function CompliancePopup({txn, rule, onDone, onWaive, onLater}){
+function CompliancePopup({txn, rule, onDone, onWaive, onLater, onNav}){
   const fmt2=n=>"₦"+Number(n||0).toLocaleString("en-NG",{maximumFractionDigits:0});
   const wht = txn.wht || 0;
   const net = txn.net || txn.amount;
+  const isCGT = rule.cgt_flag || rule.head==="CGT-EVENT";
+
+  // CGT-specific popup
+  if(isCGT) return(
+    <div className="overlay" onClick={onLater}>
+      <div className="sheet" onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:14}}>
+          <div style={{width:40,height:40,borderRadius:12,background:"#EDE9FE",border:"1px solid #C4B5FD",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>📊</div>
+          <div>
+            <div className="sheet-title">Possible Capital Gains Tax Event</div>
+            <div style={{fontSize:12,color:C.muted,marginTop:1}}>NTA 2025 S.34-S.46</div>
+          </div>
+        </div>
+
+        <div style={{background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:10,padding:"11px 13px",marginBottom:12}}>
+          <div style={{fontSize:11,color:C.muted,marginBottom:3}}>TRANSACTION</div>
+          <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:2}}>{txn.desc}</div>
+          <div style={{fontSize:13,color:C.slate}}>Proceeds: <strong>{fmt2(txn.amount)}</strong></div>
+        </div>
+
+        <div style={{background:"#EDE9FE",border:"1px solid #C4B5FD",borderRadius:10,padding:"12px 13px",marginBottom:12}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#7C3AED",marginBottom:6}}>Why this was flagged</div>
+          <div style={{fontSize:12,color:C.ink,lineHeight:1.6,marginBottom:8}}>
+            This transaction looks like an asset disposal. Under NTA 2025, gains from selling land, buildings, vehicles, shares, equipment, crypto and other assets may be subject to Capital Gains Tax.
+          </div>
+          <div style={{fontSize:11,fontWeight:700,color:"#7C3AED",marginBottom:4}}>Before you post, TaxWise needs to know:</div>
+          <div style={{fontSize:11,color:C.ink,lineHeight:1.9}}>
+            <div>1. What was your original cost for this asset?</div>
+            <div>2. Was Capital Allowance ever claimed on it?</div>
+            <div>3. Are you reinvesting the proceeds into a Nigerian company?</div>
+            <div>4. Is this a personal vehicle or residence? (may be exempt)</div>
+          </div>
+        </div>
+
+        <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:10,padding:"11px 13px",marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.green,marginBottom:4}}>What to do next</div>
+          <div style={{fontSize:12,color:C.ink,lineHeight:1.6}}>
+            Go to <strong>Calculator &gt; Cap. Gains tab</strong> and enter the details of this disposal. TaxWise will check all exemptions and compute any CGT due. Then return here to post this transaction.
+          </div>
+        </div>
+
+        <button onClick={()=>{onLater();if(onNav)onNav("calculate");}}
+          style={{width:"100%",padding:"13px",background:"#7C3AED",border:"none",borderRadius:10,
+            color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginBottom:8,
+            boxShadow:"0 4px 0 #5B21B6"}}>
+          📊 Go to CGT Calculator
+        </button>
+        <button className="ca-done" onClick={onDone}
+          style={{background:"#F0FDF4",color:C.green,border:"1px solid #BBF7D0"}}>
+          ✓ I have checked — post this transaction (CGT handled separately)
+        </button>
+        <button className="ca-later" onClick={onLater}>
+          ⏸ Hold in KIV — review later
+        </button>
+      </div>
+    </div>
+  );
 
   return(
     <div className="overlay" onClick={onLater}>
@@ -3307,6 +3379,13 @@ VAT: 7.5% standard. Zero-rated: exports, medical goods, food, education, electri
 WHT: 10% on professional/consulting/director fees/dividends/interest/rent/royalties/commission. 5% on contract/supply/construction. Remit by 21st.
 PAYE: Employer deducts and remits by 10th. Salary NOT taxed again in self-assessment. PAYE credited against annual return.
 CGT (NTA 2025 S.34–S.46):
+CGT DETECTION — when a user mentions selling or disposing of: vehicle, car, land, property, building, shares, equipment, machinery, computer, furniture, crypto, NFT, digital asset — ALWAYS flag this as a potential CGT event. Ask:
+1. What was the original acquisition cost?
+2. Was Capital Allowance ever claimed on it (if so, use TWDV as cost base)?
+3. Is this a personal vehicle or principal residence? (may be exempt)
+4. Are the proceeds being reinvested in a Nigerian company? (full exemption)
+5. For shares: what were total share disposal proceeds this year?
+Direct the user to Calculator > Cap. Gains tab. Never treat asset disposal proceeds as ordinary income without checking CGT first.
 INDIVIDUALS — gains taxed at progressive PIT rates (0–25%), NOT flat 10%. Gain added on top of other income to determine band. ₦50m general exemption threshold (gain ≤₦50m = 0%). EXEMPT: principal private residence; up to 2 personal vehicles; personal chattels with proceeds ≤₦5m; share disposals where total proceeds in year ≤₦150m AND gain ≤₦10m; gains reinvested in a Nigerian company (full exemption).
 COMPANIES — CGT at 30% (aligned with CIT). Small companies (turnover ≤₦100m AND fixed assets ≤₦250m, NOT professional services) = 0% CGT. Professional services firms = 30% regardless of size.
 COST BASE: if Capital Allowance was ever claimed on asset → cost base = TWDV (NOT original cost). If no CA claimed → original acquisition cost.

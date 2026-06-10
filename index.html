@@ -5020,13 +5020,14 @@ Nigerian bank: credits=income, debits=expense. Return ONLY JSON array.`,
 
 // ── DOCUMENT UPLOAD SCREEN ────────────────────────────────────────────────────
 function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAssets, onBack}){
-  const [mode, setMode]       = useState("select"); // select | processing | review | edit | done
+  const [mode, setMode]           = useState("select"); // select | camera | processing | review | edit | done
   const [extracted, setExtracted] = useState([]);
-  const [editIdx, setEditIdx] = useState(null);    // index of item being edited
-  const [editForm, setEditForm] = useState({});
-  const [docType, setDocType] = useState("bank_statement");
-  const [progress, setProgress] = useState("");
-  const [error, setError]     = useState("");
+  const [editIdx, setEditIdx]     = useState(null);
+  const [editForm, setEditForm]   = useState({});
+  const [docType, setDocType]     = useState("bank_statement");
+  const [progress, setProgress]   = useState("");
+  const [error, setError]         = useState("");
+  const [capturedPages, setCapturedPages] = useState([]); // [{base64, mediaType, label}]
   const isCompany = profile.mode==="company";
 
   // CA class options for asset classification
@@ -5038,43 +5039,60 @@ function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAsse
     {code:"other",      label:"Other Plant & Equipment (20%)",       rate:20},
   ];
 
+  // ── processFile: single file (PDF or image) ─────────────────────────────
   const processFile = async (file) => {
     setMode("processing"); setError("");
     setProgress("Reading document…");
     try {
-      // File size check — Anthropic API limit is ~5MB for base64
-      const maxSize = 4 * 1024 * 1024; // 4MB
+      const maxSize = 4 * 1024 * 1024;
       if(file.size > maxSize){
         throw new Error(`File too large (${(file.size/1024/1024).toFixed(1)}MB). Maximum size is 4MB. Please scan a smaller section or compress the PDF.`);
       }
-
-      // Validate file type
       const validTypes = ["application/pdf","image/jpeg","image/jpg","image/png","image/webp","image/gif"];
       if(!validTypes.includes(file.type)){
         throw new Error(`Unsupported file type: ${file.type}. Please use PDF, JPG, or PNG.`);
       }
-
       const base64 = await new Promise((res,rej)=>{
         const reader = new FileReader();
         reader.onload = ()=>res(reader.result.split(",")[1]);
         reader.onerror = ()=>rej(new Error("Could not read file"));
         reader.readAsDataURL(file);
       });
-
-      setProgress("AI is analysing your document…");
       const isPDF = file.type==="application/pdf";
       const mediaType = isPDF ? "application/pdf" : (file.type || "image/jpeg");
+      await sendToAI([{base64, mediaType, isPDF}]);
+    } catch(e){
+      setError(e.message||"Failed to process document");
+      setMode("select");
+    }
+  };
 
-      const res = await fetch(`${SUPA_URL}/functions/v1/taxwise-ai`,{
-        method:"POST",
-        headers:{
-          "Content-Type":"application/json",
-          "Authorization":`Bearer ${SUPA_KEY}`,
-          "apikey": SUPA_KEY,
-        },
-        body: JSON.stringify({
-          system:`You are a Nigerian tax accountant and document processor. Extract ALL transactions from the document provided.
+  // ── processPages: multiple camera-captured images ────────────────────────
+  const processPages = async (pages) => {
+    setMode("processing"); setError("");
+    setProgress("AI is reading your document…");
+    try {
+      await sendToAI(pages.map(p=>({base64:p.base64, mediaType:p.mediaType, isPDF:false})));
+    } catch(e){
+      setError(e.message||"Failed to process document");
+      setMode("select");
+    }
+  };
 
+  // ── sendToAI: shared extraction logic ────────────────────────────────────
+  const sendToAI = async (pages) => {
+    setProgress("AI is analysing your document…");
+    const isBankStatement = docType === "bank_statement";
+    const multiPage = pages.length > 1;
+
+    const systemPrompt = `You are a Nigerian tax accountant and document processor. Extract ALL transactions from the document provided.
+${isBankStatement && multiPage ? `
+IMPORTANT — MULTI-PAGE BANK STATEMENT RULES:
+- The FIRST page contains the column headers (Date, Description/Narration, Debit, Credit, Balance, etc.).
+- ALL subsequent pages use the SAME column structure as page 1, even if headers are not repeated.
+- Apply the page-1 header schema to every row on every page.
+- Do NOT skip rows on later pages because headers are missing — they use the same columns.
+` : ""}
 Return ONLY a valid JSON array. Each item must have:
 - date: "YYYY-MM-DD"
 - desc: full description of transaction
@@ -5085,81 +5103,83 @@ Return ONLY a valid JSON array. Each item must have:
 - confidence: "high" | "medium" | "low"
 - vatFlag: true if VAT is charged or mentioned on this transaction, else false
 - whtFlag: true if WHT is applicable (professional fees, rent, dividends, interest), else false
+- taxAllowable: true for allowable items, false for non-allowable
 
 CRITICAL CLASSIFICATION RULES for Nigerian accounting (NTA 2025):
 - Bank credits = income. Bank debits = expense (or asset if capital).
-- Capital assets (type="asset"): purchases of land, buildings, vehicles, computers, machinery, equipment, furniture — anything with useful life > 1 year. Goes to Asset Register NOT expenses.
-- Revenue expenses (type="expense"): rent, salaries, utilities, bank charges, repairs, consumables, stationery, professional fees, insurance.
-- NON-ALLOWABLE items — still classify as expense but set taxAllowable=false and note in desc: loan CAPITAL repayments, accounting depreciation, fines/penalties, personal expenses, dividends paid, income tax payments, drawings. These are NOT tax deductible.
+- Capital assets (type="asset"): purchases of land, buildings, vehicles, computers, machinery, equipment, furniture — anything with useful life > 1 year.
+- NON-ALLOWABLE items — taxAllowable=false: loan CAPITAL repayments, accounting depreciation, fines/penalties, personal expenses, dividends paid, income tax payments, drawings.
 - WHT applies to: professional fees, consulting, rent, dividends, interest, royalties, commissions.
 - VAT (7.5%) applies to: most goods and services supplied in Nigeria.
-- Loan repayment: Split into interest (allowable expense, taxAllowable=true) and principal (NOT allowable — taxAllowable=false, type="expense", desc should say "Loan principal repayment — NOT tax deductible").
-- Add taxAllowable field: true for allowable expenses/income/assets, false for non-allowable items.
+- Loan repayment: Split into interest (taxAllowable=true) and principal (taxAllowable=false).
 
-Return ONLY the JSON array, no other text or markdown.`,
-          messages:[{
-            role:"user",
-            content:[
-              {
-                type: isPDF ? "document" : "image",
-                source:{type:"base64", media_type:mediaType, data:base64}
-              },
-              {type:"text", text:`Extract and classify all transactions from this ${docType.replace(/_/g," ")}. Identify capital assets separately. Return only the JSON array.`}
-            ]
-          }]
-        })
+Return ONLY the JSON array, no other text or markdown.`;
+
+    const contentBlocks = [];
+    pages.forEach((p) => {
+      contentBlocks.push({
+        type: p.isPDF ? "document" : "image",
+        source: {type:"base64", media_type:p.mediaType, data:p.base64}
       });
+    });
+    const pageLabel = pages.length > 1
+      ? `This is a ${pages.length}-page ${docType.replace(/_/g," ")}. Page 1 contains the column headers. Apply the same column structure to all subsequent pages. Extract every transaction from all pages.`
+      : `Extract and classify all transactions from this ${docType.replace(/_/g," ")}.`;
+    contentBlocks.push({type:"text", text: pageLabel + " Return only the JSON array."});
 
-      if(!res.ok){
-        const errData = await res.json().catch(()=>({}));
-        throw new Error(errData?.error || `Server error ${res.status} — please try again`);
-      }
+    const res = await fetch(`${SUPA_URL}/functions/v1/taxwise-ai`,{
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "Authorization":`Bearer ${SUPA_KEY}`,
+        "apikey": SUPA_KEY,
+      },
+      body: JSON.stringify({system: systemPrompt, messages:[{role:"user", content: contentBlocks}]})
+    });
 
-      const data = await res.json();
-      if(data.error) throw new Error(data.error);
-      setProgress("Parsing results…");
-
-      let txnList = [];
-      try {
-        const raw = data.reply||"[]";
-        const clean = raw.replace(/```json|```/g,"").trim();
-        // Handle case where AI returns object instead of array
-        const parsed = JSON.parse(clean);
-        txnList = Array.isArray(parsed) ? parsed : (parsed.transactions || parsed.items || []);
-      } catch(e){ throw new Error("Could not read AI response — please try again"); }
-
-      if(!Array.isArray(txnList)||txnList.length===0)
-        throw new Error("No transactions found in document. Make sure the document contains financial transactions.");
-
-      const formatted = txnList.map((t,i)=>{
-        // Non-allowable expenses default to unchecked — taxpayer must manually include
-        const isNonAllowable = t.taxAllowable === false ||
-          t.category === "loan_repayment" ||
-          /loan.*principal|capital repayment|depreciation|income tax paid|penalty.*tax|drawing|dividend paid/i.test(t.desc||"");
-        return {
-          id: `doc_${Date.now()}_${i}`,
-          date: t.date||new Date().toISOString().split("T")[0],
-          desc: t.desc||"Imported transaction",
-          amount: Math.abs(parseFloat(t.amount)||0),
-          type: t.type==="asset"?"asset": t.type==="income"?"income":"expense",
-          category: t.category||"other",
-          assetClass: t.assetClass||"other",
-          source: "document",
-          compliance_status: "pending",
-          confidence: t.confidence||"medium",
-          vatFlag: !!t.vatFlag,
-          whtFlag: !!t.whtFlag,
-          taxAllowable: !isNonAllowable,
-          included: !isNonAllowable, // ← NON-ALLOWABLE defaults to UNCHECKED
-        };
-      });
-
-      setExtracted(formatted);
-      setMode("review");
-    } catch(e){
-      setError(e.message||"Failed to process document");
-      setMode("select");
+    if(!res.ok){
+      const errData = await res.json().catch(()=>({}));
+      throw new Error(errData?.error || `Server error ${res.status} — please try again`);
     }
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    setProgress("Parsing results…");
+
+    let txnList = [];
+    try {
+      const raw = data.reply||"[]";
+      const clean = raw.replace(/```json|```/g,"").trim();
+      const parsed = JSON.parse(clean);
+      txnList = Array.isArray(parsed) ? parsed : (parsed.transactions || parsed.items || []);
+    } catch(e){ throw new Error("Could not read AI response — please try again"); }
+
+    if(!Array.isArray(txnList)||txnList.length===0)
+      throw new Error("No transactions found in document. Make sure the document contains financial transactions.");
+
+    const formatted = txnList.map((t,i)=>{
+      const isNonAllowable = t.taxAllowable === false ||
+        t.category === "loan_repayment" ||
+        /loan.*principal|capital repayment|depreciation|income tax paid|penalty.*tax|drawing|dividend paid/i.test(t.desc||"");
+      return {
+        id: `doc_${Date.now()}_${i}`,
+        date: t.date||new Date().toISOString().split("T")[0],
+        desc: t.desc||"Imported transaction",
+        amount: Math.abs(parseFloat(t.amount)||0),
+        type: t.type==="asset"?"asset": t.type==="income"?"income":"expense",
+        category: t.category||"other",
+        assetClass: t.assetClass||"other",
+        source: "document",
+        compliance_status: "pending",
+        confidence: t.confidence||"medium",
+        vatFlag: !!t.vatFlag,
+        whtFlag: !!t.whtFlag,
+        taxAllowable: !isNonAllowable,
+        included: !isNonAllowable,
+      };
+    });
+
+    setExtracted(formatted);
+    setMode("review");
   };
 
   const handleFileInput = (e) => {
@@ -5491,36 +5511,111 @@ Return ONLY the JSON array, no other text or markdown.`,
           </select>
         </div>
 
-        {/* Camera */}
-        <label style={{display:"block",marginBottom:12}}>
-          <input type="file" accept="image/*" capture="environment"
-            onChange={handleFileInput} style={{display:"none"}}/>
-          <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,borderRadius:16,
-            padding:"28px 20px",textAlign:"center",cursor:"pointer",
-            boxShadow:"0 4px 16px rgba(11,22,40,.3)"}}>
-            <div style={{fontSize:40,marginBottom:12}}>📷</div>
-            <div style={{fontSize:16,fontWeight:700,color:"#fff",marginBottom:4}}>Scan with Camera</div>
-            <div style={{fontSize:12,color:"rgba(255,255,255,.6)"}}>Take a photo of your document</div>
+        {/* ── CAMERA: multi-page capture mode ── */}
+        {mode==="camera" ? (
+          <div>
+            <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,borderRadius:16,
+              padding:"16px",marginBottom:12,boxShadow:"0 4px 16px rgba(11,22,40,.3)"}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#fff",marginBottom:8}}>
+                📷 Multi-Page Camera Scan
+              </div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,.65)",marginBottom:12,lineHeight:1.6}}>
+                Capture each page one at a time. The AI will read all pages together as a single document.
+              </div>
+              {/* Captured pages thumbnails */}
+              {capturedPages.length>0&&(
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+                  {capturedPages.map((pg,idx)=>(
+                    <div key={idx} style={{position:"relative",width:64,height:80,borderRadius:8,
+                      overflow:"hidden",border:"2px solid rgba(255,255,255,.3)"}}>
+                      <img src={`data:${pg.mediaType};base64,${pg.base64}`}
+                        style={{width:"100%",height:"100%",objectFit:"cover"}} alt={`Page ${idx+1}`}/>
+                      <div style={{position:"absolute",top:0,left:0,right:0,
+                        background:"rgba(0,0,0,.55)",padding:"2px 0",
+                        textAlign:"center",fontSize:9,color:"#fff",fontWeight:700}}>
+                        Pg {idx+1}
+                      </div>
+                      <button onClick={()=>setCapturedPages(p=>p.filter((_,i)=>i!==idx))}
+                        style={{position:"absolute",bottom:0,left:0,right:0,
+                          background:"rgba(220,38,38,.85)",border:"none",color:"#fff",
+                          fontSize:10,fontWeight:700,padding:"3px 0",cursor:"pointer",fontFamily:"inherit"}}>
+                        ✕ Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Add page button */}
+              <label style={{display:"block",marginBottom:10}}>
+                <input type="file" accept="image/*" capture="environment"
+                  onChange={async(e)=>{
+                    const file=e.target.files[0]; if(!file) return;
+                    const b64=await new Promise((res,rej)=>{
+                      const r=new FileReader();
+                      r.onload=()=>res(r.result.split(",")[1]);
+                      r.onerror=()=>rej(new Error("Read failed"));
+                      r.readAsDataURL(file);
+                    });
+                    setCapturedPages(p=>[...p,{base64:b64,mediaType:file.type||"image/jpeg",label:`Page ${p.length+1}`}]);
+                    e.target.value="";
+                  }} style={{display:"none"}}/>
+                <div style={{background:"rgba(255,255,255,.15)",border:"2px dashed rgba(255,255,255,.4)",
+                  borderRadius:10,padding:"12px",textAlign:"center",cursor:"pointer"}}>
+                  <span style={{fontSize:20,marginRight:8}}>📷</span>
+                  <span style={{fontSize:13,fontWeight:700,color:"#fff"}}>
+                    {capturedPages.length===0?"Capture Page 1":`Capture Page ${capturedPages.length+1}`}
+                  </span>
+                </div>
+              </label>
+              {/* Action buttons */}
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>{setCapturedPages([]);setMode("select");}}
+                  style={{flex:1,padding:"10px",background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.25)",
+                    borderRadius:9,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  Cancel
+                </button>
+                {capturedPages.length>0&&(
+                  <button onClick={()=>processPages(capturedPages)}
+                    style={{flex:2,padding:"10px",background:"#059669",border:"none",
+                      borderRadius:9,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                      boxShadow:"0 4px 0 #047857"}}>
+                    ✓ Done — Analyse {capturedPages.length} Page{capturedPages.length!==1?"s":""}
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
-        </label>
+        ) : (
+          <>
+            {/* Camera entry button */}
+            <div onClick={()=>{setCapturedPages([]);setMode("camera");}}
+              style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,borderRadius:16,
+                padding:"28px 20px",textAlign:"center",cursor:"pointer",
+                boxShadow:"0 4px 16px rgba(11,22,40,.3)",marginBottom:12}}>
+              <div style={{fontSize:40,marginBottom:12}}>📷</div>
+              <div style={{fontSize:16,fontWeight:700,color:"#fff",marginBottom:4}}>Scan with Camera</div>
+              <div style={{fontSize:12,color:"rgba(255,255,255,.6)"}}>Capture one or multiple pages</div>
+            </div>
 
-        {/* File */}
-        <label style={{display:"block",marginBottom:12}}>
-          <input type="file" accept=".pdf,image/*"
-            onChange={handleFileInput} style={{display:"none"}}/>
-          <div style={{background:"#fff",border:`2px dashed ${C.border}`,borderRadius:16,
-            padding:"28px 20px",textAlign:"center",cursor:"pointer"}}>
-            <div style={{fontSize:40,marginBottom:12}}>📄</div>
-            <div style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:4}}>Upload PDF or Image</div>
-            <div style={{fontSize:12,color:C.muted}}>Select from your phone storage</div>
-          </div>
-        </label>
+            {/* File upload */}
+            <label style={{display:"block",marginBottom:12}}>
+              <input type="file" accept=".pdf,image/*"
+                onChange={handleFileInput} style={{display:"none"}}/>
+              <div style={{background:"#fff",border:`2px dashed ${C.border}`,borderRadius:16,
+                padding:"28px 20px",textAlign:"center",cursor:"pointer"}}>
+                <div style={{fontSize:40,marginBottom:12}}>📄</div>
+                <div style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:4}}>Upload PDF or Image</div>
+                <div style={{fontSize:12,color:C.muted}}>Select from your phone storage</div>
+              </div>
+            </label>
+          </>
+        )}
 
         <div className="ibox blue">
           <div className="ititle" style={{color:C.blue}}>How it works</div>
           <p style={{fontSize:11,color:C.ink,lineHeight:1.8}}>
-            1️⃣ Upload or scan your document{"\n"}
-            2️⃣ AI extracts all transactions and classifies them{"\n"}
+            1️⃣ Scan each page separately or upload a PDF{"\n"}
+            2️⃣ AI reads all pages together — even without repeated headers{"\n"}
             3️⃣ Capital asset purchases are flagged separately{"\n"}
             4️⃣ You review, edit anything incorrect, then import{"\n"}
             5️⃣ Expenses go to Journal · Assets go to Asset Register

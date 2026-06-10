@@ -2771,110 +2771,12 @@ function CITScreen({profile, txns, assets, onBack}){
   );
 }
 
-function CalculateScreen({profile,onBack}){
-  const[tab,setTab]=useState("pit");
-  const[pitData,setPitData]=useState({monthlyIncome:0,payeDeducted:0,otherIncome:0,rentPaid:0,nhfAnnual:0,nhisAnnual:0,pensionAnnual:0,lifeInsAnnual:0,housingLoanInterest:0,category:profile.empCategory||"A"});
-  const[whtData,setWhtData]=useState({amount:200000,type:"professional"});
-  const[vatData,setVatData]=useState({amount:500000,tier:"standard"});
-  const[penData,setPenData]=useState({tax:500000,days:30});
-  const[cgtData,setCgtData]=useState({
-    assetType:"other",
-    isCompany:profile.mode==="company",
-    isSmallCompany:false,
-    proceeds:0, cost:0,
-    caWasClaimed:false, twdv:0,
-    otherAnnualIncome:0,
-    reinvestedInNigeria:false,
-    sharesSaleInYear:0, sharesGain:0,
-  });
-
-  const pitR=computePIT(pitData);
-  const whtR=computeWHT(whtData.amount,whtData.type);
-  const vatR=computeVAT(vatData.amount,vatData.tier);
-  const penR=computePenalty(penData.tax,penData.days,false);
-
+function CGTPanel({cgtData, setCgtData, profile}){
+  const cgtR    = computeCGT(cgtData);
+  const set     = (k,v) => setCgtData(p=>({...p,[k]:v}));
+  const isShares = cgtData.assetType==="shares_listed"||cgtData.assetType==="shares_unlisted";
   return(
-    <div style={{paddingBottom:80}}>
-      <Hdr title="Tax Calculator" onBack={onBack} subtitle="NTA 2025 — Individual"/>
-      <div className="tabs" style={{padding:"10px 12px 0"}}>
-        {[{id:"pit",l:"Income Tax"},{id:"cgt",l:"Cap. Gains"},{id:"wht",l:"WHT"},{id:"vat",l:"VAT"},{id:"pen",l:"Penalties"}].map(t=>(
-          <button key={t.id} className="tab" onClick={()=>setTab(t.id)} style={{
-            background:tab===t.id?C.blue:"#fff",color:tab===t.id?"#fff":C.slate,borderColor:tab===t.id?C.blue:C.border
-          }}>{t.l}</button>
-        ))}
-      </div>
-
-      <div className="pad-full" style={{paddingTop:12}}>
-        {tab==="pit"&&(
-          <>
-            <div className="card">
-              <div className="ctitle">PERSONAL INCOME TAX — NTA 2025</div>
-              <div className="fg">
-                <label className="lbl">TAXPAYER CATEGORY</label>
-                <select className="sel" value={pitData.category} onChange={e=>setPitData(p=>({...p,category:e.target.value}))}>
-                  <option value="A">A — Employed, employer deducts PAYE</option>
-                  <option value="B">B — Employed, no PAYE deducted</option>
-                  <option value="C">C — Self-employed</option>
-                  <option value="D">D — Mixed (salary + other income)</option>
-                  <option value="E">E — Minimum wage (≤ ₦70k/month)</option>
-                </select>
-              </div>
-              {pitData.category!=="E"&&(
-                <>
-                  {pitData.category!=="C"&&<div className="fg"><label className="lbl">MONTHLY SALARY (₦)</label><input className="inp" type="number" value={pitData.monthlyIncome||""} onChange={e=>setPitData(p=>({...p,monthlyIncome:parseFloat(e.target.value)||0}))}/></div>}
-                  {(pitData.category==="A"||pitData.category==="D")&&<div className="fg"><label className="lbl">MONTHLY PAYE EMPLOYER DEDUCTS (₦)</label><input className="inp" type="number" value={pitData.payeDeducted||""} onChange={e=>setPitData(p=>({...p,payeDeducted:parseFloat(e.target.value)||0}))}/></div>}
-                  {(pitData.category==="C"||pitData.category==="D")&&<div className="fg"><label className="lbl">OTHER MONTHLY INCOME — freelance/rent/dividends (₦)</label><input className="inp" type="number" value={pitData.otherIncome||""} onChange={e=>setPitData(p=>({...p,otherIncome:parseFloat(e.target.value)||0}))}/></div>}
-                  <div className="ibox blue" style={{marginTop:8,marginBottom:4}}>
-                    <div className="ititle" style={{color:C.blue}}>ELIGIBLE DEDUCTIONS — S.30(2)(a) NTA 2025</div>
-                    <p style={{fontSize:11,color:C.muted,marginBottom:0}}>Enter annual amounts. Only what you actually paid qualifies.</p>
-                  </div>
-                  <div className="fg"><label className="lbl">ANNUAL RENT PAID (₦) — 20% deductible, max ₦500,000 [S.30(2)(a)(vi)]</label><input className="inp" type="number" value={pitData.rentPaid||""} onChange={e=>setPitData(p=>({...p,rentPaid:parseFloat(e.target.value)||0}))}/></div>
-                  <div className="fg"><label className="lbl">ANNUAL PENSION CONTRIBUTION (₦) — employee 8% of basic+housing+transport [S.30(2)(a)(iii)]</label><input className="inp" type="number" value={pitData.pensionAnnual||""} onChange={e=>setPitData(p=>({...p,pensionAnnual:parseFloat(e.target.value)||0}))}/></div>
-                  <div className="fg"><label className="lbl">ANNUAL NHF CONTRIBUTION (₦) — 2.5% of basic salary [S.30(2)(a)(i)]</label><input className="inp" type="number" value={pitData.nhfAnnual||""} onChange={e=>setPitData(p=>({...p,nhfAnnual:parseFloat(e.target.value)||0}))}/></div>
-                  <div className="fg"><label className="lbl">ANNUAL NHIS / HMO CONTRIBUTION (₦) [S.30(2)(a)(ii)]</label><input className="inp" type="number" value={pitData.nhisAnnual||""} onChange={e=>setPitData(p=>({...p,nhisAnnual:parseFloat(e.target.value)||0}))}/></div>
-                  <div className="fg"><label className="lbl">ANNUAL LIFE INSURANCE PREMIUM (₦) — own or spouse life / deferred annuity [S.30(2)(a)(v)]</label><input className="inp" type="number" value={pitData.lifeInsAnnual||""} onChange={e=>setPitData(p=>({...p,lifeInsAnnual:parseFloat(e.target.value)||0}))}/></div>
-                  <div className="fg"><label className="lbl">ANNUAL HOUSING LOAN INTEREST (₦) — owner-occupied only, not principal [S.30(2)(a)(iv)]</label><input className="inp" type="number" value={pitData.housingLoanInterest||""} onChange={e=>setPitData(p=>({...p,housingLoanInterest:parseFloat(e.target.value)||0}))}/></div>
-                </>
-              )}
-            </div>
-            <div className="card">
-              <div className="ctitle">RESULT</div>
-              {pitR.exempt?(
-                <div className="ibox green"><div className="ititle" style={{color:C.green}}>🛡 FULLY EXEMPT</div><p style={{fontSize:12,color:C.ink}}>Minimum wage earner — no PAYE or PIT applies.</p></div>
-              ):(
-                <>
-                  {pitData.category==="A"&&<div className="ibox blue"><div className="ititle" style={{color:C.blue}}>ℹ Salary already taxed via PAYE — not taxed again</div><p style={{fontSize:12,color:C.ink}}>Only additional income outside employment creates further liability.</p></div>}
-                  <DataRow label="Total Gross Income" value={fmt(pitR.totalGross||pitData.monthlyIncome*12)}/>
-                  {pitR.pensionDeduction>0&&<DataRow label="Pension Contribution [S.30(2)(a)(iii)]" value={`-${fmt(pitR.pensionDeduction)}`} color={C.green}/>}
-                  {pitR.nhfDeduction>0&&<DataRow label="NHF Contribution [S.30(2)(a)(i)]" value={`-${fmt(pitR.nhfDeduction)}`} color={C.green}/>}
-                  {pitR.nhisDeduction>0&&<DataRow label="NHIS Contribution [S.30(2)(a)(ii)]" value={`-${fmt(pitR.nhisDeduction)}`} color={C.green}/>}
-                  {pitR.lifeInsDeduction>0&&<DataRow label="Life Insurance Premium [S.30(2)(a)(v)]" value={`-${fmt(pitR.lifeInsDeduction)}`} color={C.green}/>}
-                  {pitR.housingDeduction>0&&<DataRow label="Housing Loan Interest [S.30(2)(a)(iv)]" value={`-${fmt(pitR.housingDeduction)}`} color={C.green}/>}
-                  {pitR.rentRelief>0&&<DataRow label={`Rent Relief 20% of ${fmt(pitData.rentPaid)} [S.30(2)(a)(vi)]`} value={`-${fmt(pitR.rentRelief)}`} color={C.green}/>}
-                  {pitR.totalDeductions>0&&<DataRow label="Total Eligible Deductions" value={`-${fmt(pitR.totalDeductions)}`} color={C.green} total={true}/>}
-                  {pitR.taxable>0&&<DataRow label="Taxable (Chargeable) Income" value={fmt(pitR.taxable)}/>}
-                  <DataRow label="Annual PIT Liability" value={fmt(pitR.annual)} color={C.blue}/>
-                  <DataRow label="Monthly PAYE" value={fmt(pitR.monthly)} color={C.blue}/>
-                  <DataRow label="Effective Rate" value={`${pitR.eff?.toFixed(1)||"0"}%`} color={C.amber}/>
-                  {(pitData.category==="A"||pitData.category==="D")&&(
-                    <>
-                      <DataRow label="PAYE Credit" value={`-${fmt(pitR.payeCredit||0)}`} color={C.green}/>
-                      {pitR.balanceDue>0&&<DataRow label="BALANCE DUE" value={fmt(pitR.balanceDue)} color={C.red} total={true}/>}
-                      {pitR.refund>0&&<DataRow label="OVERPAID — REFUND DUE" value={fmt(pitR.refund)} color={C.green} total={true}/>}
-                    </>
-                  )}
-                </>
-              )}
-            </div>
-          </>
-        )}
-
-        {tab==="cgt"&&(()=>{
-          const cgtR = computeCGT(cgtData);
-          const set = (k,v) => setCgtData(p=>({...p,[k]:v}));
-          const isShares = cgtData.assetType==="shares_listed"||cgtData.assetType==="shares_unlisted";
-          return(
-          <>
+    <>
             {/* Step 1 — Asset Type */}
             <div className="card">
               <div className="ctitle">STEP 1 — ASSET DISPOSED</div>
@@ -3050,9 +2952,109 @@ function CalculateScreen({profile,onBack}){
                 • For complex disposals, consult a registered tax consultant before filing.
               </p>
             </div>
+</>
+  );
+}
+
+function CalculateScreen({profile,onBack}){
+  const[tab,setTab]=useState("pit");
+  const[pitData,setPitData]=useState({monthlyIncome:0,payeDeducted:0,otherIncome:0,rentPaid:0,nhfAnnual:0,nhisAnnual:0,pensionAnnual:0,lifeInsAnnual:0,housingLoanInterest:0,category:profile.empCategory||"A"});
+  const[whtData,setWhtData]=useState({amount:200000,type:"professional"});
+  const[vatData,setVatData]=useState({amount:500000,tier:"standard"});
+  const[penData,setPenData]=useState({tax:500000,days:30});
+  const[cgtData,setCgtData]=useState({
+    assetType:"other",
+    isCompany:profile.mode==="company",
+    isSmallCompany:false,
+    proceeds:0, cost:0,
+    caWasClaimed:false, twdv:0,
+    otherAnnualIncome:0,
+    reinvestedInNigeria:false,
+    sharesSaleInYear:0, sharesGain:0,
+  });
+
+  const pitR=computePIT(pitData);
+  const whtR=computeWHT(whtData.amount,whtData.type);
+  const vatR=computeVAT(vatData.amount,vatData.tier);
+  const penR=computePenalty(penData.tax,penData.days,false);
+
+  return(
+    <div style={{paddingBottom:80}}>
+      <Hdr title="Tax Calculator" onBack={onBack} subtitle="NTA 2025 — Individual"/>
+      <div className="tabs" style={{padding:"10px 12px 0"}}>
+        {[{id:"pit",l:"Income Tax"},{id:"cgt",l:"Cap. Gains"},{id:"wht",l:"WHT"},{id:"vat",l:"VAT"},{id:"pen",l:"Penalties"}].map(t=>(
+          <button key={t.id} className="tab" onClick={()=>setTab(t.id)} style={{
+            background:tab===t.id?C.blue:"#fff",color:tab===t.id?"#fff":C.slate,borderColor:tab===t.id?C.blue:C.border
+          }}>{t.l}</button>
+        ))}
+      </div>
+
+      <div className="pad-full" style={{paddingTop:12}}>
+        {tab==="pit"&&(
+          <>
+            <div className="card">
+              <div className="ctitle">PERSONAL INCOME TAX — NTA 2025</div>
+              <div className="fg">
+                <label className="lbl">TAXPAYER CATEGORY</label>
+                <select className="sel" value={pitData.category} onChange={e=>setPitData(p=>({...p,category:e.target.value}))}>
+                  <option value="A">A — Employed, employer deducts PAYE</option>
+                  <option value="B">B — Employed, no PAYE deducted</option>
+                  <option value="C">C — Self-employed</option>
+                  <option value="D">D — Mixed (salary + other income)</option>
+                  <option value="E">E — Minimum wage (≤ ₦70k/month)</option>
+                </select>
+              </div>
+              {pitData.category!=="E"&&(
+                <>
+                  {pitData.category!=="C"&&<div className="fg"><label className="lbl">MONTHLY SALARY (₦)</label><input className="inp" type="number" value={pitData.monthlyIncome||""} onChange={e=>setPitData(p=>({...p,monthlyIncome:parseFloat(e.target.value)||0}))}/></div>}
+                  {(pitData.category==="A"||pitData.category==="D")&&<div className="fg"><label className="lbl">MONTHLY PAYE EMPLOYER DEDUCTS (₦)</label><input className="inp" type="number" value={pitData.payeDeducted||""} onChange={e=>setPitData(p=>({...p,payeDeducted:parseFloat(e.target.value)||0}))}/></div>}
+                  {(pitData.category==="C"||pitData.category==="D")&&<div className="fg"><label className="lbl">OTHER MONTHLY INCOME — freelance/rent/dividends (₦)</label><input className="inp" type="number" value={pitData.otherIncome||""} onChange={e=>setPitData(p=>({...p,otherIncome:parseFloat(e.target.value)||0}))}/></div>}
+                  <div className="ibox blue" style={{marginTop:8,marginBottom:4}}>
+                    <div className="ititle" style={{color:C.blue}}>ELIGIBLE DEDUCTIONS — S.30(2)(a) NTA 2025</div>
+                    <p style={{fontSize:11,color:C.muted,marginBottom:0}}>Enter annual amounts. Only what you actually paid qualifies.</p>
+                  </div>
+                  <div className="fg"><label className="lbl">ANNUAL RENT PAID (₦) — 20% deductible, max ₦500,000 [S.30(2)(a)(vi)]</label><input className="inp" type="number" value={pitData.rentPaid||""} onChange={e=>setPitData(p=>({...p,rentPaid:parseFloat(e.target.value)||0}))}/></div>
+                  <div className="fg"><label className="lbl">ANNUAL PENSION CONTRIBUTION (₦) — employee 8% of basic+housing+transport [S.30(2)(a)(iii)]</label><input className="inp" type="number" value={pitData.pensionAnnual||""} onChange={e=>setPitData(p=>({...p,pensionAnnual:parseFloat(e.target.value)||0}))}/></div>
+                  <div className="fg"><label className="lbl">ANNUAL NHF CONTRIBUTION (₦) — 2.5% of basic salary [S.30(2)(a)(i)]</label><input className="inp" type="number" value={pitData.nhfAnnual||""} onChange={e=>setPitData(p=>({...p,nhfAnnual:parseFloat(e.target.value)||0}))}/></div>
+                  <div className="fg"><label className="lbl">ANNUAL NHIS / HMO CONTRIBUTION (₦) [S.30(2)(a)(ii)]</label><input className="inp" type="number" value={pitData.nhisAnnual||""} onChange={e=>setPitData(p=>({...p,nhisAnnual:parseFloat(e.target.value)||0}))}/></div>
+                  <div className="fg"><label className="lbl">ANNUAL LIFE INSURANCE PREMIUM (₦) — own or spouse life / deferred annuity [S.30(2)(a)(v)]</label><input className="inp" type="number" value={pitData.lifeInsAnnual||""} onChange={e=>setPitData(p=>({...p,lifeInsAnnual:parseFloat(e.target.value)||0}))}/></div>
+                  <div className="fg"><label className="lbl">ANNUAL HOUSING LOAN INTEREST (₦) — owner-occupied only, not principal [S.30(2)(a)(iv)]</label><input className="inp" type="number" value={pitData.housingLoanInterest||""} onChange={e=>setPitData(p=>({...p,housingLoanInterest:parseFloat(e.target.value)||0}))}/></div>
+                </>
+              )}
+            </div>
+            <div className="card">
+              <div className="ctitle">RESULT</div>
+              {pitR.exempt?(
+                <div className="ibox green"><div className="ititle" style={{color:C.green}}>🛡 FULLY EXEMPT</div><p style={{fontSize:12,color:C.ink}}>Minimum wage earner — no PAYE or PIT applies.</p></div>
+              ):(
+                <>
+                  {pitData.category==="A"&&<div className="ibox blue"><div className="ititle" style={{color:C.blue}}>ℹ Salary already taxed via PAYE — not taxed again</div><p style={{fontSize:12,color:C.ink}}>Only additional income outside employment creates further liability.</p></div>}
+                  <DataRow label="Total Gross Income" value={fmt(pitR.totalGross||pitData.monthlyIncome*12)}/>
+                  {pitR.pensionDeduction>0&&<DataRow label="Pension Contribution [S.30(2)(a)(iii)]" value={`-${fmt(pitR.pensionDeduction)}`} color={C.green}/>}
+                  {pitR.nhfDeduction>0&&<DataRow label="NHF Contribution [S.30(2)(a)(i)]" value={`-${fmt(pitR.nhfDeduction)}`} color={C.green}/>}
+                  {pitR.nhisDeduction>0&&<DataRow label="NHIS Contribution [S.30(2)(a)(ii)]" value={`-${fmt(pitR.nhisDeduction)}`} color={C.green}/>}
+                  {pitR.lifeInsDeduction>0&&<DataRow label="Life Insurance Premium [S.30(2)(a)(v)]" value={`-${fmt(pitR.lifeInsDeduction)}`} color={C.green}/>}
+                  {pitR.housingDeduction>0&&<DataRow label="Housing Loan Interest [S.30(2)(a)(iv)]" value={`-${fmt(pitR.housingDeduction)}`} color={C.green}/>}
+                  {pitR.rentRelief>0&&<DataRow label={`Rent Relief 20% of ${fmt(pitData.rentPaid)} [S.30(2)(a)(vi)]`} value={`-${fmt(pitR.rentRelief)}`} color={C.green}/>}
+                  {pitR.totalDeductions>0&&<DataRow label="Total Eligible Deductions" value={`-${fmt(pitR.totalDeductions)}`} color={C.green} total={true}/>}
+                  {pitR.taxable>0&&<DataRow label="Taxable (Chargeable) Income" value={fmt(pitR.taxable)}/>}
+                  <DataRow label="Annual PIT Liability" value={fmt(pitR.annual)} color={C.blue}/>
+                  <DataRow label="Monthly PAYE" value={fmt(pitR.monthly)} color={C.blue}/>
+                  <DataRow label="Effective Rate" value={`${pitR.eff?.toFixed(1)||"0"}%`} color={C.amber}/>
+                  {(pitData.category==="A"||pitData.category==="D")&&(
+                    <>
+                      <DataRow label="PAYE Credit" value={`-${fmt(pitR.payeCredit||0)}`} color={C.green}/>
+                      {pitR.balanceDue>0&&<DataRow label="BALANCE DUE" value={fmt(pitR.balanceDue)} color={C.red} total={true}/>}
+                      {pitR.refund>0&&<DataRow label="OVERPAID — REFUND DUE" value={fmt(pitR.refund)} color={C.green} total={true}/>}
+                    </>
+                  )}
+                </>
+              )}
+            </div>
           </>
-          );
-        })()}
+        )}
+
+        {tab==="cgt"&&<CGTPanel cgtData={cgtData} setCgtData={setCgtData} profile={profile}/>}
 
         {tab==="wht"&&(
           <>

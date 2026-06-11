@@ -2823,6 +2823,28 @@ function CITScreen({profile, txns, assets, onBack}){
 }
 
 // ── OWN ACCOUNTS SCREEN ──────────────────────────────────────────────────────
+// All CBN-licensed Nigerian banks and fintechs
+const NIGERIAN_BANKS = [
+  // International
+  "Access Bank","Citibank Nigeria","Ecobank Nigeria","Fidelity Bank",
+  "First Bank of Nigeria","First City Monument Bank (FCMB)","Guaranty Trust Bank (GTBank)",
+  "Stanbic IBTC Bank","Standard Chartered Bank Nigeria","Union Bank of Nigeria",
+  "United Bank for Africa (UBA)","Zenith Bank",
+  // National
+  "Globus Bank","Keystone Bank","Optimus Bank","Parallex Bank",
+  "Polaris Bank","Premium Trust Bank","Providus Bank","Signature Bank",
+  "Sterling Bank","SunTrust Bank Nigeria","Titan Trust Bank","Unity Bank",
+  "Wema Bank / ALAT",
+  // Fintechs & MFBs
+  "Kuda Bank","MoniePoint","OPay","PalmPay",
+  "Carbon (Paylater)","FairMoney","Renmoney","VFD Microfinance Bank",
+  "LAPO Microfinance Bank","Accion Microfinance Bank",
+  // Others
+  "Jaiz Bank","TAJBank","Lotus Bank", // non-interest
+  "Heritage Bank (in liquidation)",
+  "Other",
+].sort();
+
 function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
   const[form,setForm]=useState({bankName:"",accountName:"",accountNumber:""});
   const[error,setError]=useState("");
@@ -2849,7 +2871,10 @@ function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
           <div className="ctitle">ADD AN ACCOUNT</div>
           <div className="fg">
             <label className="lbl">BANK NAME</label>
-            <input className="inp" placeholder="e.g. GTBank, Access Bank, MoniePoint" value={form.bankName} onChange={e=>set("bankName",e.target.value)}/>
+            <select className="sel" value={form.bankName} onChange={e=>set("bankName",e.target.value)}>
+              <option value="">— Select bank —</option>
+              {NIGERIAN_BANKS.map(b=><option key={b} value={b}>{b}</option>)}
+            </select>
           </div>
           <div className="fg">
             <label className="lbl">ACCOUNT NAME (as it appears in narrations)</label>

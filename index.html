@@ -5468,22 +5468,26 @@ function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAsse
     setMode("processing"); setError("");
     setProgress("Reading document…");
     try {
-      const maxSize = 4 * 1024 * 1024;
+      const maxSize = 10 * 1024 * 1024; // 10MB — covers most bank statement PDFs
       if(file.size > maxSize){
-        throw new Error(`File too large (${(file.size/1024/1024).toFixed(1)}MB). Maximum size is 4MB. Please scan a smaller section or compress the PDF.`);
+        throw new Error(`File too large (${(file.size/1024/1024).toFixed(1)}MB). Maximum is 10MB. Try compressing the PDF or splitting it into smaller sections.`);
       }
       const validTypes = ["application/pdf","image/jpeg","image/jpg","image/png","image/webp","image/gif"];
-      if(!validTypes.includes(file.type)){
-        throw new Error(`Unsupported file type: ${file.type}. Please use PDF, JPG, or PNG.`);
+      // Also check by extension for cases where MIME type is wrong
+      const ext = (file.name||"").split(".").pop().toLowerCase();
+      const validExts = ["pdf","jpg","jpeg","png","webp","gif"];
+      if(!validTypes.includes(file.type) && !validExts.includes(ext)){
+        throw new Error(`Unsupported file type: ${file.type||ext}. Please use PDF, JPG, or PNG.`);
       }
+      const isPDF = file.type==="application/pdf" || ext==="pdf";
+      const mediaType = isPDF ? "application/pdf" : (file.type || "image/jpeg");
+      setProgress("Reading document… this may take a moment for large PDFs");
       const base64 = await new Promise((res,rej)=>{
         const reader = new FileReader();
         reader.onload = ()=>res(reader.result.split(",")[1]);
-        reader.onerror = ()=>rej(new Error("Could not read file"));
+        reader.onerror = ()=>rej(new Error("Could not read file — try a different PDF viewer to re-save it"));
         reader.readAsDataURL(file);
       });
-      const isPDF = file.type==="application/pdf";
-      const mediaType = isPDF ? "application/pdf" : (file.type || "image/jpeg");
       await sendToAI([{base64, mediaType, isPDF}]);
     } catch(e){
       setError(e.message||"Failed to process document");
@@ -5570,7 +5574,7 @@ Return ONLY the JSON array, no other text or markdown.`;
         "Authorization":`Bearer ${SUPA_KEY}`,
         "apikey": SUPA_KEY,
       },
-      body: JSON.stringify({system: systemPrompt, messages:[{role:"user", content: contentBlocks}]})
+      body: JSON.stringify({system: systemPrompt, messages:[{role:"user", content: contentBlocks}], docType, totalPages: pages.length})
     });
 
     if(!res.ok){

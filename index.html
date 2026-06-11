@@ -5134,40 +5134,74 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
 
   // ── AI extraction for PDF/image ───────────────────────────────────────────
   const processViaAI = async (file) => {
-    const maxSize = 4*1024*1024;
-    if(file.size>maxSize) throw new Error(`File too large (${(file.size/1024/1024).toFixed(1)}MB). Max 4MB.`);
+    const maxSize = 10*1024*1024; // 10MB — covers most Nigerian bank statement PDFs
+    if(file.size>maxSize) throw new Error(`File too large (${(file.size/1024/1024).toFixed(1)}MB). Max 10MB. Try compressing the PDF or splitting into sections.`);
+    const isPDF = file.type==="application/pdf"||file.name.endsWith(".pdf");
+    const mediaType = isPDF?"application/pdf":(file.type||"image/jpeg");
+    setProgress("Reading document…");
     const base64 = await new Promise((res,rej)=>{
       const reader=new FileReader();
       reader.onload=()=>res(reader.result.split(",")[1]);
-      reader.onerror=()=>rej(new Error("Could not read file"));
+      reader.onerror=()=>rej(new Error("Could not read file — try re-saving the PDF and uploading again"));
       reader.readAsDataURL(file);
     });
-    const isPDF = file.type==="application/pdf"||file.name.endsWith(".pdf");
-    const mediaType = isPDF?"application/pdf":(file.type||"image/jpeg");
-    setProgress("AI is reading your document…");
+    setProgress("AI is analysing your document — this may take up to 30 seconds for large files…");
+    const systemPrompt = `You are a Nigerian bank statement and document processor. Extract ALL transactions from this document.
+
+MULTI-PAGE BANK STATEMENT: The first page contains column headers (Date, Narration/Description, Debit, Credit, Balance etc.). All subsequent pages use the same column structure even if headers are not repeated.
+
+Return ONLY a valid JSON array. Each item must have:
+- date: "YYYY-MM-DD"
+- desc: transaction description (max 80 chars)
+- amount: positive number
+- type: "income" | "expense" | "asset"
+- category: "revenue"|"salary"|"rent"|"professional_fee"|"supplies"|"utility"|"tax_payment"|"bank_charge"|"loan"|"other"
+- taxAllowable: true for allowable items, false for: loan principal, depreciation, fines, income tax paid, drawings, dividends
+- confidence: "high"|"medium"|"low"
+- vatFlag: false for individuals; true only for VAT-registered businesses
+- whtFlag: true if WHT applies (professional fees, rent, dividends, interest)
+
+Nigerian bank rules: credits = income, debits = expense.
+Be concise in desc fields. Return ONLY the JSON array, no other text.`;
+
     const res = await fetch(`${SUPA_URL}/functions/v1/taxwise-ai`,{
       method:"POST",
       headers:{"Content-Type":"application/json","Authorization":`Bearer ${SUPA_KEY}`,"apikey":SUPA_KEY},
       body:JSON.stringify({
-        system:`You are a Nigerian bank statement and document processor. Extract ALL transactions.
-Return ONLY a valid JSON array. Each item: date (YYYY-MM-DD), desc, amount (positive number), type (income/expense/asset), taxAllowable (true/false), confidence (high/medium/low), vatFlag (bool), whtFlag (bool).
-NON-ALLOWABLE (taxAllowable=false): loan principal, depreciation, fines, income tax paid, drawings, dividends paid.
-Nigerian bank: credits=income, debits=expense. Return ONLY JSON array.`,
+        system: systemPrompt,
+        docType: "bank_statement",
+        totalPages: 1,
         messages:[{role:"user",content:[
           {type:isPDF?"document":"image",source:{type:"base64",media_type:mediaType,data:base64}},
-          {type:"text",text:"Extract all transactions. Return only the JSON array."}
+          {type:"text",text:"Extract all transactions from this bank statement. Return only the JSON array."}
         ]}]
       })
     });
-    if(!res.ok) throw new Error("AI extraction failed — please try again");
+    if(!res.ok){
+      const errData = await res.json().catch(()=>({}));
+      const msg = errData?.error || `Server error ${res.status}`;
+      if(res.status===400) throw new Error(`PDF could not be read: ${msg}. It may be encrypted or password-protected.`);
+      if(res.status===413) throw new Error("PDF is too large for AI processing. Try splitting into 10-page sections.");
+      throw new Error(`AI extraction failed: ${msg}`);
+    }
     const data = await res.json();
-    if(data.error) throw new Error(data.error);
+    if(data.error) throw new Error(`AI error: ${data.error}`);
     let txnList=[];
     try {
       const raw=data.reply||"[]";
-      const parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());
-      txnList=Array.isArray(parsed)?parsed:(parsed.transactions||[]);
-    } catch(e){ throw new Error("Could not read AI response"); }
+      let clean=raw.replace(/```json|```/g,"").trim();
+      const s=clean.indexOf("["), e=clean.lastIndexOf("]");
+      if(s!==-1&&e>s) clean=clean.slice(s,e+1);
+      if(clean&&!clean.endsWith("]")){
+        const lc=clean.lastIndexOf("}");
+        clean=lc!==-1?clean.slice(0,lc+1)+"]":"[]";
+      }
+      const parsed=JSON.parse(clean);
+      txnList=Array.isArray(parsed)?parsed:(parsed.transactions||parsed.items||[]);
+    } catch(e){
+      const preview=(data.reply||"").slice(0,300);
+      throw new Error(`Could not parse AI response. Preview: ${preview}`);
+    }
     if(!txnList.length) throw new Error("No transactions found in document");
     const formatted = txnList.map((t,i)=>{
       const nonAllowable = t.taxAllowable===false||getNonAllowable(t.desc||"");

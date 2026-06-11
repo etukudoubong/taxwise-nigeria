@@ -5134,8 +5134,19 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
 
   // ── AI extraction for PDF/image ───────────────────────────────────────────
   const processViaAI = async (file) => {
-    const maxSize = 10*1024*1024; // 10MB — covers most Nigerian bank statement PDFs
-    if(file.size>maxSize) throw new Error(`File too large (${(file.size/1024/1024).toFixed(1)}MB). Max 10MB. Try compressing the PDF or splitting into sections.`);
+    const fileMB = file.size/1024/1024;
+    const maxSize = 8*1024*1024; // 8MB hard limit
+    if(file.size>maxSize) throw new Error(
+      `File too large (${fileMB.toFixed(1)}MB). Maximum is 8MB for AI processing.\n\n` +
+      `To fix:\n` +
+      `1. Split the PDF — open in any PDF viewer, print pages 1-30 to PDF, upload in sections\n` +
+      `2. Download as Excel instead — faster and more reliable than PDF\n` +
+      `3. For GTBank/Access/UBA — use Excel export from internet banking (no password needed)`
+    );
+    // Warn user if file is large — processing will take time
+    const sizeWarning = fileMB > 3
+      ? `AI is analysing your document (${fileMB.toFixed(1)}MB) — this may take up to 60 seconds…`
+      : "AI is analysing your document — this may take up to 30 seconds for large files…";
     const isPDF = file.type==="application/pdf"||file.name.endsWith(".pdf");
     const mediaType = isPDF?"application/pdf":(file.type||"image/jpeg");
     setProgress("Reading document…");
@@ -5145,7 +5156,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       reader.onerror=()=>rej(new Error("Could not read file — try re-saving the PDF and uploading again"));
       reader.readAsDataURL(file);
     });
-    setProgress("AI is analysing your document — this may take up to 30 seconds for large files…");
+    setProgress(sizeWarning);
     const systemPrompt = `You are a Nigerian bank statement and document processor. Extract ALL transactions from this document.
 
 MULTI-PAGE BANK STATEMENT: The first page contains column headers (Date, Narration/Description, Debit, Credit, Balance etc.). All subsequent pages use the same column structure even if headers are not repeated.
@@ -5183,7 +5194,19 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
       if(res.status===400||msg.toLowerCase().includes("password")||msg.toLowerCase().includes("encrypted")){
         throw new Error("This PDF is password-protected (common with GTBank, Access, UBA statements).\n\nTo fix:\n1. Open the PDF and enter the password (usually your date of birth e.g. 15061985, or last 4 digits of your phone)\n2. Print → Save as PDF to create an unlocked copy\n3. Upload the unlocked copy to TaxWise\n\nAlternatively, download your statement in Excel format from your bank app and upload that instead.");
       }
-      if(res.status===413) throw new Error("PDF is too large for AI processing. Try splitting into 10-page sections.");
+      if(res.status===413||msg.toLowerCase().includes("too large")){
+        throw new Error("PDF is too large for AI processing. Download as Excel from your bank app instead, or split the PDF into sections of 20 pages and upload each section separately.");
+      }
+      if(res.status===546||res.status===504||res.status===524||msg.toLowerCase().includes("timeout")||msg.toLowerCase().includes("time out")){
+        throw new Error(
+          `Processing timed out — the PDF is too large to process in one go.\n\n` +
+          `Solutions:\n` +
+          `1. Download as Excel from your bank app — much faster, no timeout risk\n` +
+          `2. Split the PDF into sections (e.g. 3 months at a time) and upload each section\n` +
+          `3. Use the Camera Scan option — photograph each page separately\n\n` +
+          `For GTBank: Internet banking → Accounts → Statement → Download as Excel`
+        );
+      }
       throw new Error(`AI extraction failed: ${msg}`);
     }
     const data = await res.json();
@@ -5510,88 +5533,130 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
           </div>
 
           {[
-            {
-              bank:"GTBank (Guaranty Trust)",
-              icon:"🟠",
-              recommended:"Excel — no password",
-              steps:[
-                "Internet banking → Accounts → Statement of Account",
-                "Select date range → Download as Excel (.xlsx)",
-                "Upload the Excel file to TaxWise — no password needed",
-              ],
-              pdf:"PDF statements are password-protected. Password is usually your date of birth (DDMMYYYY e.g. 15061985). Open PDF → enter password → Print → Save as PDF → upload unlocked copy.",
-            },
-            {
-              bank:"Access Bank",
-              icon:"🔵",
-              recommended:"Excel or unlocked PDF",
-              steps:[
-                "Mobile app → Account → Statement → Export as Excel",
-                "Or: Internet banking → Accounts → Download Statement → Excel",
-              ],
-              pdf:"PDF password is usually the last 4 digits of your registered phone number. Open → enter password → Print → Save as PDF.",
-            },
-            {
-              bank:"UBA",
-              icon:"🔴",
-              recommended:"Excel or unlocked PDF",
-              steps:[
-                "Mobile app → History → Export Statement → Excel or CSV",
-                "Or: Internet banking → Accounts → Account Statement → Download",
-              ],
-              pdf:"PDF password is usually your date of birth (DDMMYYYY). Open → enter password → Print → Save as PDF.",
-            },
-            {
-              bank:"Zenith Bank",
-              icon:"🟣",
+            // ── INTERNATIONAL LICENCE ──────────────────────────────────────
+            {bank:"GTBank (Guaranty Trust)",icon:"🟠",tier:"International",
+              recommended:"Excel — no password needed",
+              steps:["Internet banking → Accounts → Statement of Account → Download as Excel (.xlsx)","Mobile app: Menu → Account Statement → Export → Excel"],
+              pdf:"Password-protected. Usually your date of birth DDMMYYYY e.g. 15061985. Open → enter password → Print → Save as PDF → upload unlocked copy."},
+            {bank:"Access Bank",icon:"🔵",tier:"International",
               recommended:"Excel or CSV",
-              steps:[
-                "Internet banking → Accounts → Account Statement → Export as Excel",
-                "Mobile app: Zenith Mobile → Account → Statement → Share/Export",
-              ],
-              pdf:"PDF password is usually your account number. Open → enter password → Print → Save as PDF.",
-            },
-            {
-              bank:"MoniePoint",
-              icon:"🟢",
-              recommended:"Excel — no password",
-              steps:[
-                "App → Transactions → Filter (set date range) → Download Statement",
-                "Choose Excel format — no password required",
-                "Upload the .xlsx file directly to TaxWise",
-              ],
-              pdf:"MoniePoint Excel exports work perfectly with TaxWise column auto-detection.",
-            },
-            {
-              bank:"First Bank",
-              icon:"🔷",
+              steps:["Mobile app → Account → Statement → Export as Excel or CSV","Internet banking → Accounts → Download Statement → Excel"],
+              pdf:"Password is usually last 4 digits of your registered phone number."},
+            {bank:"First Bank of Nigeria",icon:"🔷",tier:"International",
               recommended:"CSV or Excel",
-              steps:[
-                "Internet banking → Account Statement → Select range → Download CSV",
-                "Or: FirstMobile app → Accounts → Statement → Export",
-              ],
-              pdf:"First Bank PDFs are usually not password-protected and can be uploaded directly.",
-            },
-            {
-              bank:"Wema Bank / ALAT",
-              icon:"🟡",
-              recommended:"PDF or Excel",
-              steps:[
-                "ALAT app → Account → Statement → Download PDF or Excel",
-                "Wema internet banking → Accounts → Statement → Export",
-              ],
-              pdf:"Wema/ALAT PDFs are generally not password-protected — upload directly.",
-            },
-            {
-              bank:"Stanbic IBTC",
-              icon:"⚫",
+              steps:["Internet banking → Account Statement → Select date range → Download CSV or Excel","FirstMobile app → Accounts → Statement → Export"],
+              pdf:"Usually not password-protected — upload directly."},
+            {bank:"FCMB (First City Monument Bank)",icon:"🟤",tier:"International",
+              recommended:"Excel or PDF",
+              steps:["FCMB Mobile → Account → Statement → Export","Internet banking → Accounts → Account Statement → Download"],
+              pdf:"Generally not password-protected. If encrypted, password is usually date of birth."},
+            {bank:"Fidelity Bank",icon:"🟢",tier:"International",
+              recommended:"Excel or PDF",
+              steps:["Fidelity app → Account → Statement → Download","Internet banking → Accounts → e-Statement → Download Excel or PDF"],
+              pdf:"Generally not password-protected — upload directly."},
+            {bank:"UBA (United Bank for Africa)",icon:"🔴",tier:"International",
+              recommended:"Excel or unlocked PDF",
+              steps:["Mobile app → History → Export Statement → Excel or CSV","Internet banking → Accounts → Account Statement → Download"],
+              pdf:"Password is usually your date of birth DDMMYYYY. Open → enter password → Print → Save as PDF."},
+            {bank:"Zenith Bank",icon:"🟣",tier:"International",
+              recommended:"Excel or CSV",
+              steps:["Internet banking → Accounts → Account Statement → Export as Excel","Zenith Mobile → Account → Statement → Share/Export"],
+              pdf:"Password is usually your account number."},
+            // ── NATIONAL LICENCE ───────────────────────────────────────────
+            {bank:"Stanbic IBTC Bank",icon:"⚫",tier:"National",
               recommended:"Excel",
-              steps:[
-                "Internet banking → Accounts → Download Statement → Excel",
-                "Mobile app → Account → Statement → Export",
-              ],
-              pdf:"PDF may be password-protected. Use Excel export to avoid the issue.",
-            },
+              steps:["Internet banking → Accounts → Download Statement → Excel","Mobile app → Account → Statement → Export"],
+              pdf:"May be password-protected. Use Excel export to avoid the issue."},
+            {bank:"Union Bank of Nigeria",icon:"🟦",tier:"National",
+              recommended:"Excel or PDF",
+              steps:["Union Mobile → Account → Statement → Export","Internet banking → Accounts → Statement → Download Excel"],
+              pdf:"Generally not password-protected — upload directly."},
+            {bank:"Ecobank Nigeria",icon:"🟩",tier:"National",
+              recommended:"Excel or CSV",
+              steps:["Ecobank Mobile → Account → Transaction History → Export","Internet banking → Accounts → Account Statement → Download"],
+              pdf:"Generally not password-protected. Upload directly or use Excel."},
+            {bank:"Sterling Bank",icon:"🔆",tier:"National",
+              recommended:"Excel or PDF",
+              steps:["Sterling OneBank app → Account → Statement → Export","Internet banking → Accounts → Statement → Download"],
+              pdf:"Generally not password-protected. Upload directly."},
+            {bank:"Keystone Bank",icon:"🔑",tier:"National",
+              recommended:"Excel or PDF",
+              steps:["K-Pay app → Account → Statement → Export","Internet banking → Accounts → Account Statement → Download"],
+              pdf:"Generally not password-protected. Upload directly."},
+            {bank:"Polaris Bank",icon:"🔸",tier:"National",
+              recommended:"Excel or PDF",
+              steps:["VULTe app → Account → Statement → Download","Internet banking → Accounts → Account Statement → Export"],
+              pdf:"Generally not password-protected. Upload directly."},
+            {bank:"Wema Bank / ALAT",icon:"🟡",tier:"National",
+              recommended:"PDF or Excel — no password",
+              steps:["ALAT app → Account → Statement → Download PDF or Excel","Wema internet banking → Accounts → Statement → Export"],
+              pdf:"Wema/ALAT PDFs are generally not password-protected — upload directly."},
+            {bank:"Unity Bank",icon:"🔹",tier:"National",
+              recommended:"Excel or PDF",
+              steps:["Unity Mobile → Account → Statement → Export","Internet banking → Accounts → Account Statement → Download"],
+              pdf:"Generally not password-protected. Upload directly."},
+            {bank:"Titan Trust Bank",icon:"⬛",tier:"National",
+              recommended:"Excel or PDF",
+              steps:["Titan app → Account → Statement → Export","Internet banking → Accounts → Statement → Download Excel"],
+              pdf:"Generally not password-protected. Upload directly."},
+            {bank:"Globus Bank",icon:"🌐",tier:"National",
+              recommended:"Excel or PDF",
+              steps:["Globus app → Account → Statement → Export","Internet banking → Account Statement → Download"],
+              pdf:"Generally not password-protected. Upload directly."},
+            {bank:"Citibank Nigeria",icon:"🏙️",tier:"National",
+              recommended:"Excel or PDF",
+              steps:["CitiDirect → Accounts → Account Statement → Export as Excel","Contact your Citibank relationship manager for statement export assistance"],
+              pdf:"Generally not password-protected for corporate accounts."},
+            {bank:"Standard Chartered Bank Nigeria",icon:"🦁",tier:"National",
+              recommended:"Excel or PDF",
+              steps:["SC Mobile → Account → Statement → Export","Internet banking → Accounts → Account Statement → Download"],
+              pdf:"May be password-protected. Use Excel export or contact your relationship manager."},
+            {bank:"Premium Trust Bank",icon:"💎",tier:"National",
+              recommended:"Excel or PDF",
+              steps:["Premium Trust app → Account → Statement → Export","Internet banking → Accounts → Statement → Download"],
+              pdf:"Generally not password-protected. Upload directly."},
+            {bank:"Optimus Bank",icon:"⚡",tier:"National",
+              recommended:"Excel or PDF",
+              steps:["Optimus app → Account → Statement → Export","Internet banking → Accounts → Account Statement → Download"],
+              pdf:"Generally not password-protected. Upload directly."},
+            // ── REGIONAL LICENCE ───────────────────────────────────────────
+            {bank:"Providus Bank",icon:"🟪",tier:"Regional",
+              recommended:"Excel or PDF",
+              steps:["Providus app → Account → Statement → Export","Internet banking → Accounts → Statement → Download"],
+              pdf:"Generally not password-protected. Upload directly."},
+            {bank:"Parallex Bank",icon:"🔷",tier:"Regional",
+              recommended:"Excel or PDF",
+              steps:["Parallex app → Account → Statement → Export","Internet banking → Accounts → Statement → Download"],
+              pdf:"Generally not password-protected. Upload directly."},
+            {bank:"SunTrust Bank Nigeria",icon:"☀️",tier:"Regional",
+              recommended:"Excel or PDF",
+              steps:["SunTrust app → Account → Statement → Export","Internet banking → Accounts → Statement → Download"],
+              pdf:"Generally not password-protected. Upload directly."},
+            {bank:"Signature Bank",icon:"✍️",tier:"Regional",
+              recommended:"Excel or PDF",
+              steps:["Signature Bank app → Account → Statement → Export"],
+              pdf:"Generally not password-protected. Upload directly."},
+            // ── DIGITAL BANKS & FINTECHS ───────────────────────────────────
+            {bank:"MoniePoint",icon:"🟢",tier:"Fintech/MFB",
+              recommended:"Excel — no password, fastest",
+              steps:["App → Transactions → Filter (set date range) → Download Statement → Excel","No password required — upload .xlsx directly to TaxWise"],
+              pdf:"MoniePoint Excel exports work perfectly with TaxWise column auto-detection."},
+            {bank:"Kuda Bank",icon:"🟤",tier:"Fintech/MFB",
+              recommended:"PDF or CSV",
+              steps:["Kuda app → Account → Statements → Select period → Download PDF or CSV","PDFs from Kuda are generally not password-protected"],
+              pdf:"Generally not password-protected — upload directly. CSV option also works well."},
+            {bank:"OPay",icon:"🟢",tier:"Fintech/Mobile Money",
+              recommended:"PDF",
+              steps:["OPay app → Wallet → Transactions → Statement → Download PDF","Select date range and tap Download"],
+              pdf:"OPay PDFs are generally not password-protected — upload directly."},
+            {bank:"PalmPay",icon:"🌴",tier:"Fintech/Mobile Money",
+              recommended:"PDF",
+              steps:["PalmPay app → Profile → Transaction History → Export Statement → PDF","Select date range and download"],
+              pdf:"Generally not password-protected — upload directly."},
+            {bank:"Opay (Business)",icon:"🏢",tier:"Fintech/Mobile Money",
+              recommended:"PDF or CSV",
+              steps:["OPay Business app → Reports → Transaction History → Export","Select date range → Download as PDF or CSV"],
+              pdf:"Generally not password-protected. Upload directly."},
           ].map(b=>(
             <div key={b.bank} style={{background:"#fff",border:`1px solid ${C.border}`,
               borderRadius:10,marginBottom:8,overflow:"hidden"}}>
@@ -5600,8 +5665,14 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
                 <span style={{fontSize:18}}>{b.icon}</span>
                 <div style={{flex:1}}>
                   <div style={{fontSize:12,fontWeight:700,color:C.ink}}>{b.bank}</div>
-                  <div style={{fontSize:10,color:C.green,fontWeight:600}}>
-                    ✓ Recommended: {b.recommended}
+                  <div style={{display:"flex",gap:6,alignItems:"center",marginTop:1}}>
+                    <span style={{fontSize:9,fontWeight:700,color:C.muted,
+                      background:"#E2E8F0",padding:"1px 5px",borderRadius:3}}>
+                      {b.tier}
+                    </span>
+                    <span style={{fontSize:10,color:C.green,fontWeight:600}}>
+                      ✓ {b.recommended}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -5782,6 +5853,9 @@ Return ONLY the JSON array, no other text or markdown.`;
     if(!res.ok){
       const errData = await res.json().catch(()=>({}));
       const errMsg = errData?.error || `Server error ${res.status}`;
+      if(res.status===546||res.status===504||res.status===524||errMsg.toLowerCase().includes("timeout")){
+        throw new Error("Processing timed out — PDF is too large for a single request.\n\nSolutions:\n1. Download as Excel from your bank app (fastest)\n2. Split PDF into 20-page sections and upload each separately\n3. Use Camera Scan to photograph pages individually");
+      }
       throw new Error(errMsg);
     }
     const data = await res.json();
@@ -5789,6 +5863,9 @@ Return ONLY the JSON array, no other text or markdown.`;
       const e = data.error;
       if(e.toLowerCase().includes("password")||e.toLowerCase().includes("encrypted")){
         throw new Error("This PDF is password-protected (common with GTBank, Access, UBA statements).\n\nTo fix: open the PDF, enter the password (usually your date of birth e.g. 15061985), then Print → Save as PDF to create an unlocked copy. Upload that instead.\n\nOr download your statement as Excel from your bank app.");
+      }
+      if(e.toLowerCase().includes("timeout")||e.toLowerCase().includes("time out")){
+        throw new Error("Processing timed out — PDF is too large for a single request.\n\nSolutions:\n1. Download as Excel from your bank app (fastest)\n2. Split PDF into 20-page sections\n3. Use Camera Scan to photograph each page");
       }
       throw new Error(e);
     }

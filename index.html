@@ -5180,7 +5180,9 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
     if(!res.ok){
       const errData = await res.json().catch(()=>({}));
       const msg = errData?.error || `Server error ${res.status}`;
-      if(res.status===400) throw new Error(`PDF could not be read: ${msg}. It may be encrypted or password-protected.`);
+      if(res.status===400||msg.toLowerCase().includes("password")||msg.toLowerCase().includes("encrypted")){
+        throw new Error("This PDF is password-protected (common with GTBank, Access, UBA statements).\n\nTo fix:\n1. Open the PDF and enter the password (usually your date of birth e.g. 15061985, or last 4 digits of your phone)\n2. Print → Save as PDF to create an unlocked copy\n3. Upload the unlocked copy to TaxWise\n\nAlternatively, download your statement in Excel format from your bank app and upload that instead.");
+      }
       if(res.status===413) throw new Error("PDF is too large for AI processing. Try splitting into 10-page sections.");
       throw new Error(`AI extraction failed: ${msg}`);
     }
@@ -5639,10 +5641,17 @@ Return ONLY the JSON array, no other text or markdown.`;
 
     if(!res.ok){
       const errData = await res.json().catch(()=>({}));
-      throw new Error(errData?.error || `Server error ${res.status} — please try again`);
+      const errMsg = errData?.error || `Server error ${res.status}`;
+      throw new Error(errMsg);
     }
     const data = await res.json();
-    if(data.error) throw new Error(data.error);
+    if(data.error){
+      const e = data.error;
+      if(e.toLowerCase().includes("password")||e.toLowerCase().includes("encrypted")){
+        throw new Error("This PDF is password-protected (common with GTBank, Access, UBA statements).\n\nTo fix: open the PDF, enter the password (usually your date of birth e.g. 15061985), then Print → Save as PDF to create an unlocked copy. Upload that instead.\n\nOr download your statement as Excel from your bank app.");
+      }
+      throw new Error(e);
+    }
     setProgress("Parsing results…");
 
     let txnList = [];

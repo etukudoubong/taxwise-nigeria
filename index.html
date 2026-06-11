@@ -4917,6 +4917,8 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
   const [fileType, setFileType] = useState(""); // csv | excel | pdf | image
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState("");
+  const [dateFrom, setDateFrom] = useState(""); // optional date range filter
+  const [dateTo,   setDateTo]   = useState("");
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   const parseCSVText = (text) => {
@@ -5157,7 +5159,12 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       reader.readAsDataURL(file);
     });
     setProgress(sizeWarning);
-    const systemPrompt = `You are a Nigerian bank statement and document processor. Extract ALL transactions from this document.
+    // Build date range instruction for AI if set
+    const dateRangeNote = (dateFrom||dateTo)
+      ? `\n\nDATE RANGE FILTER: Only extract transactions between ${dateFrom||"the beginning"} and ${dateTo||"the end of the document"}. Skip transactions outside this range.`
+      : "";
+
+    const systemPrompt = `You are a Nigerian bank statement and document processor. Extract ALL transactions from this document.${dateRangeNote}
 
 MULTI-PAGE BANK STATEMENT: The first page contains column headers (Date, Narration/Description, Debit, Credit, Balance etc.). All subsequent pages use the same column structure even if headers are not repeated.
 
@@ -5228,6 +5235,19 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
       throw new Error(`Could not parse AI response. Preview: ${preview}`);
     }
     if(!txnList.length) throw new Error("No transactions found in document");
+    // Apply date range filter to AI results
+    if(dateFrom||dateTo){
+      const fromAI = dateFrom ? new Date(dateFrom) : null;
+      const toAI   = dateTo   ? new Date(dateTo)   : null;
+      txnList = txnList.filter(t=>{
+        const d = new Date(t.date||"");
+        if(isNaN(d.getTime())) return true;
+        if(fromAI && d < fromAI) return false;
+        if(toAI   && d > toAI)   return false;
+        return true;
+      });
+      if(!txnList.length) throw new Error(`No transactions found in selected date range (${dateFrom||"start"} to ${dateTo||"today"}). Try widening the range or clearing the filter.`);
+    }
     const formatted = txnList.map((t,i)=>{
       const nonAllowable = t.taxAllowable===false||getNonAllowable(t.desc||"");
       return {
@@ -5312,7 +5332,21 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
       `No valid transactions found. Make sure Credit and Debit columns are correctly mapped. ` +
       `Detected columns: ${headers.join(", ")}`
     );
-    setPreview(mapped);
+    // Apply date range filter if set
+    const fromD = dateFrom ? new Date(dateFrom) : null;
+    const toD   = dateTo   ? new Date(dateTo)   : null;
+    const rangeFiltered = (fromD||toD) ? mapped.filter(t=>{
+      const d = new Date(t.date);
+      if(isNaN(d.getTime())) return true;
+      if(fromD && d < fromD) return false;
+      if(toD   && d > toD)   return false;
+      return true;
+    }) : mapped;
+    if(!rangeFiltered.length) return setError(
+      `No transactions found in the selected date range (${dateFrom||"start"} to ${dateTo||"today"}). ` +
+      `Try widening the range or clearing the filter.`
+    );
+    setPreview(rangeFiltered);
     setMode("review");
   };
 
@@ -5445,6 +5479,41 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
         </div>
         {error&&<div style={{background:C.redBg,border:`1px solid ${C.red}30`,borderRadius:10,
           padding:"10px 12px",fontSize:12,color:C.red,marginBottom:12}}>⚠️ {error}</div>}
+
+        {/* Date range filter */}
+        <div className="card" style={{marginBottom:12}}>
+          <div className="ctitle">DATE RANGE FILTER <span style={{fontWeight:400,color:C.muted,fontSize:10}}>(optional)</span></div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
+            Leave blank to import all transactions, or set a range to import only a specific period.
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <div style={{flex:1}}>
+              <label className="lbl">FROM DATE</label>
+              <input className="inp" type="date" value={dateFrom}
+                onChange={e=>setDateFrom(e.target.value)}
+                style={{fontSize:13}}/>
+            </div>
+            <div style={{flex:1}}>
+              <label className="lbl">TO DATE</label>
+              <input className="inp" type="date" value={dateTo}
+                onChange={e=>setDateTo(e.target.value)}
+                style={{fontSize:13}}/>
+            </div>
+          </div>
+          {(dateFrom||dateTo)&&(
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+              <div style={{fontSize:11,color:C.blue,fontWeight:600}}>
+                Filtering: {dateFrom||"start"} → {dateTo||"today"}
+              </div>
+              <button onClick={()=>{setDateFrom("");setDateTo("");}}
+                style={{fontSize:10,color:C.red,background:"none",border:"none",
+                  cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+                ✕ Clear filter
+              </button>
+            </div>
+          )}
+        </div>
+
         <button onClick={buildPreview}
           style={{width:"100%",padding:"14px",background:C.blue,border:"none",borderRadius:12,
             color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
@@ -5492,6 +5561,38 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
             </div>
           </div>
         </label>
+
+        {/* Date range filter on select screen */}
+        <div className="card">
+          <div className="ctitle">DATE RANGE FILTER <span style={{fontWeight:400,color:C.muted,fontSize:10}}>(optional)</span></div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
+            Set a date range to import only transactions from a specific period. Leave blank for all.
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <div style={{flex:1}}>
+              <label className="lbl">FROM</label>
+              <input className="inp" type="date" value={dateFrom}
+                onChange={e=>setDateFrom(e.target.value)} style={{fontSize:13}}/>
+            </div>
+            <div style={{flex:1}}>
+              <label className="lbl">TO</label>
+              <input className="inp" type="date" value={dateTo}
+                onChange={e=>setDateTo(e.target.value)} style={{fontSize:13}}/>
+            </div>
+          </div>
+          {(dateFrom||dateTo)&&(
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+              <div style={{fontSize:11,color:C.blue,fontWeight:600}}>
+                Will import: {dateFrom||"start"} → {dateTo||"today"}
+              </div>
+              <button onClick={()=>{setDateFrom("");setDateTo("");}}
+                style={{fontSize:10,color:C.red,background:"none",border:"none",
+                  cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+                ✕ Clear
+              </button>
+            </div>
+          )}
+        </div>
 
         <div className="card">
           <div className="ctitle">SUPPORTED FILE TYPES</div>

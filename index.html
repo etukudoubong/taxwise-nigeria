@@ -5490,14 +5490,154 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
           ))}
         </div>
 
-        <div className="ibox blue" style={{marginTop:12}}>
-          <div className="ititle" style={{color:C.blue}}>How to export from your bank</div>
-          <p style={{fontSize:11,color:C.ink,lineHeight:1.8}}>
-            <strong>MoniePoint:</strong> App → Transactions → Filter → Download Statement → Excel{"\n"}
-            <strong>GTBank:</strong> Internet banking → Accounts → Statement → Download CSV{"\n"}
-            <strong>Access/Zenith/UBA:</strong> Mobile app → History → Export → CSV or Excel{"\n"}
-            <strong>First Bank:</strong> Internet banking → Account Statement → CSV format
-          </p>
+        {/* ── BANK-SPECIFIC GUIDANCE ── */}
+        <div style={{marginTop:12}}>
+          <div style={{fontSize:10,fontWeight:700,letterSpacing:".1em",color:C.muted,marginBottom:8}}>
+            BANK-BY-BANK IMPORT GUIDE
+          </div>
+
+          {/* Password-protected PDF warning */}
+          <div style={{background:"#FEF3C7",border:"1px solid #FDE68A",borderRadius:10,
+            padding:"12px 14px",marginBottom:10}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#92400E",marginBottom:6}}>
+              ⚠ Password-Protected PDFs
+            </div>
+            <div style={{fontSize:11,color:"#78350F",lineHeight:1.7}}>
+              GTBank, Access Bank, UBA and some other banks encrypt their PDF statements.
+              The AI cannot read encrypted PDFs. Use the bank-specific instructions below
+              to get an unlocked file, or use Excel/CSV format instead.
+            </div>
+          </div>
+
+          {[
+            {
+              bank:"GTBank (Guaranty Trust)",
+              icon:"🟠",
+              recommended:"Excel — no password",
+              steps:[
+                "Internet banking → Accounts → Statement of Account",
+                "Select date range → Download as Excel (.xlsx)",
+                "Upload the Excel file to TaxWise — no password needed",
+              ],
+              pdf:"PDF statements are password-protected. Password is usually your date of birth (DDMMYYYY e.g. 15061985). Open PDF → enter password → Print → Save as PDF → upload unlocked copy.",
+            },
+            {
+              bank:"Access Bank",
+              icon:"🔵",
+              recommended:"Excel or unlocked PDF",
+              steps:[
+                "Mobile app → Account → Statement → Export as Excel",
+                "Or: Internet banking → Accounts → Download Statement → Excel",
+              ],
+              pdf:"PDF password is usually the last 4 digits of your registered phone number. Open → enter password → Print → Save as PDF.",
+            },
+            {
+              bank:"UBA",
+              icon:"🔴",
+              recommended:"Excel or unlocked PDF",
+              steps:[
+                "Mobile app → History → Export Statement → Excel or CSV",
+                "Or: Internet banking → Accounts → Account Statement → Download",
+              ],
+              pdf:"PDF password is usually your date of birth (DDMMYYYY). Open → enter password → Print → Save as PDF.",
+            },
+            {
+              bank:"Zenith Bank",
+              icon:"🟣",
+              recommended:"Excel or CSV",
+              steps:[
+                "Internet banking → Accounts → Account Statement → Export as Excel",
+                "Mobile app: Zenith Mobile → Account → Statement → Share/Export",
+              ],
+              pdf:"PDF password is usually your account number. Open → enter password → Print → Save as PDF.",
+            },
+            {
+              bank:"MoniePoint",
+              icon:"🟢",
+              recommended:"Excel — no password",
+              steps:[
+                "App → Transactions → Filter (set date range) → Download Statement",
+                "Choose Excel format — no password required",
+                "Upload the .xlsx file directly to TaxWise",
+              ],
+              pdf:"MoniePoint Excel exports work perfectly with TaxWise column auto-detection.",
+            },
+            {
+              bank:"First Bank",
+              icon:"🔷",
+              recommended:"CSV or Excel",
+              steps:[
+                "Internet banking → Account Statement → Select range → Download CSV",
+                "Or: FirstMobile app → Accounts → Statement → Export",
+              ],
+              pdf:"First Bank PDFs are usually not password-protected and can be uploaded directly.",
+            },
+            {
+              bank:"Wema Bank / ALAT",
+              icon:"🟡",
+              recommended:"PDF or Excel",
+              steps:[
+                "ALAT app → Account → Statement → Download PDF or Excel",
+                "Wema internet banking → Accounts → Statement → Export",
+              ],
+              pdf:"Wema/ALAT PDFs are generally not password-protected — upload directly.",
+            },
+            {
+              bank:"Stanbic IBTC",
+              icon:"⚫",
+              recommended:"Excel",
+              steps:[
+                "Internet banking → Accounts → Download Statement → Excel",
+                "Mobile app → Account → Statement → Export",
+              ],
+              pdf:"PDF may be password-protected. Use Excel export to avoid the issue.",
+            },
+          ].map(b=>(
+            <div key={b.bank} style={{background:"#fff",border:`1px solid ${C.border}`,
+              borderRadius:10,marginBottom:8,overflow:"hidden"}}>
+              <div style={{background:"#F8FAFC",padding:"10px 14px",
+                display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:18}}>{b.icon}</span>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,fontWeight:700,color:C.ink}}>{b.bank}</div>
+                  <div style={{fontSize:10,color:C.green,fontWeight:600}}>
+                    ✓ Recommended: {b.recommended}
+                  </div>
+                </div>
+              </div>
+              <div style={{padding:"10px 14px"}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.muted,marginBottom:5}}>
+                  HOW TO EXPORT
+                </div>
+                {b.steps.map((s,i)=>(
+                  <div key={i} style={{display:"flex",gap:8,marginBottom:4}}>
+                    <span style={{fontSize:10,color:C.blue,fontWeight:700,flexShrink:0,
+                      width:16,textAlign:"right"}}>{i+1}.</span>
+                    <span style={{fontSize:11,color:C.ink,lineHeight:1.5}}>{s}</span>
+                  </div>
+                ))}
+                {b.pdf&&(
+                  <div style={{marginTop:8,padding:"6px 10px",
+                    background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:6,
+                    fontSize:10,color:"#92400E",lineHeight:1.6}}>
+                    📄 <strong>If using PDF:</strong> {b.pdf}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,
+            padding:"12px 14px",marginTop:4}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.blue,marginBottom:4}}>
+              💡 Pro Tip — Excel is always better than PDF
+            </div>
+            <div style={{fontSize:11,color:C.ink,lineHeight:1.6}}>
+              Excel bank statements import instantly with no AI needed — TaxWise reads the columns
+              directly. PDFs require AI processing which takes longer and may fail on encrypted files.
+              Always choose Excel or CSV when your bank offers it.
+            </div>
+          </div>
         </div>
       </div>
     </div>

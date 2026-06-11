@@ -452,6 +452,8 @@ const DEFAULT_STORE={
   employees:[],
   assets:[],
   connectedBanks:[],
+  ownAccounts:[],   // own bank accounts — transfers between these are non-taxable
+  importRules:[],   // bulk reclassification rules applied on every import
 };
 
 // ── TAX ENGINE ────────────────────────────────────────────────────────────────
@@ -2820,6 +2822,231 @@ function CITScreen({profile, txns, assets, onBack}){
   );
 }
 
+// ── OWN ACCOUNTS SCREEN ──────────────────────────────────────────────────────
+function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
+  const[form,setForm]=useState({bankName:"",accountName:"",accountNumber:""});
+  const[error,setError]=useState("");
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const add=()=>{
+    if(!form.accountName.trim()&&!form.accountNumber.trim())
+      return setError("Enter at least account name or account number");
+    setOwnAccounts(p=>[...p,{id:Date.now(),...form}]);
+    setForm({bankName:"",accountName:"",accountNumber:""});
+    setError("");
+  };
+  return(
+    <div style={{paddingBottom:100}}>
+      <Hdr title="My Own Accounts" subtitle="Transfers between these are excluded from taxable income" onBack={onBack}/>
+      <div className="pad">
+        <div className="ibox blue" style={{marginBottom:12}}>
+          <div className="ititle" style={{color:C.blue}}>Why add your own accounts?</div>
+          <p style={{fontSize:11,color:C.ink,lineHeight:1.6}}>
+            When you import a bank statement, transfers between your own accounts (e.g. moving money from your GTBank to your Access Bank account) show up as income. Adding your accounts here tells TaxWise to automatically exclude these transfers from taxable income.
+          </p>
+        </div>
+
+        <div className="card">
+          <div className="ctitle">ADD AN ACCOUNT</div>
+          <div className="fg">
+            <label className="lbl">BANK NAME</label>
+            <input className="inp" placeholder="e.g. GTBank, Access Bank, MoniePoint" value={form.bankName} onChange={e=>set("bankName",e.target.value)}/>
+          </div>
+          <div className="fg">
+            <label className="lbl">ACCOUNT NAME (as it appears in narrations)</label>
+            <input className="inp" placeholder="e.g. ETUKUDO UBONG or MEGA-CONTRAFUN NIG LTD" value={form.accountName} onChange={e=>set("accountName",e.target.value)}/>
+          </div>
+          <div className="fg">
+            <label className="lbl">ACCOUNT NUMBER (last 4-10 digits is fine)</label>
+            <input className="inp" placeholder="e.g. 0123456789 or last 4 digits 6789" value={form.accountNumber} onChange={e=>set("accountNumber",e.target.value)} type="text" inputMode="numeric"/>
+          </div>
+          {error&&<div style={{color:C.red,fontSize:11,marginBottom:8}}>⚠ {error}</div>}
+          <button onClick={add}
+            style={{width:"100%",padding:"11px",background:C.blue,border:"none",
+              borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            + Add Account
+          </button>
+        </div>
+
+        {ownAccounts.length>0&&(
+          <div className="card">
+            <div className="ctitle">YOUR REGISTERED ACCOUNTS ({ownAccounts.length})</div>
+            {ownAccounts.map(a=>(
+              <div key={a.id} style={{display:"flex",gap:10,alignItems:"center",
+                padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{a.bankName||"Bank"}</div>
+                  <div style={{fontSize:11,color:C.slate}}>{a.accountName}</div>
+                  {a.accountNumber&&<div style={{fontSize:11,color:C.muted}}>Acct: {a.accountNumber}</div>}
+                </div>
+                <button onClick={()=>setOwnAccounts(p=>p.filter(x=>x.id!==a.id))}
+                  style={{padding:"5px 10px",background:"#FEF2F2",border:"1px solid #FCA5A5",
+                    borderRadius:7,color:C.red,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  Remove
+                </button>
+              </div>
+            ))}
+            <div style={{fontSize:11,color:C.muted,marginTop:8,lineHeight:1.6}}>
+              TaxWise will scan transaction narrations for these names/numbers and automatically flag matches as non-taxable own-account transfers.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── IMPORT RULES SCREEN ───────────────────────────────────────────────────────
+function ImportRulesScreen({importRules, setImportRules, onBack}){
+  const blank={id:null,name:"",pattern:"",matchType:"contains",
+    newType:"",newCategory:"",taxAllowable:true,included:true,appendNote:""};
+  const[form,setForm]=useState({...blank});
+  const[editing,setEditing]=useState(false);
+  const[error,setError]=useState("");
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+
+  const TYPES=[["income","Income"],["expense","Expense"],["asset","Capital Asset"],["transfer","Transfer (non-taxable)"]];
+  const CATEGORIES=[["revenue","Revenue"],["salary","Salary"],["rent","Rent"],["professional_fee","Professional Fee"],
+    ["supplies","Supplies"],["utility","Utility"],["tax_payment","Tax Payment"],["bank_charge","Bank Charge"],
+    ["loan","Loan"],["pension_remittance","Pension Remittance"],["own_account_transfer","Own Account Transfer"],
+    ["refund","Refund"],["other","Other"]];
+
+  const save=()=>{
+    if(!form.pattern.trim()) return setError("Enter a keyword or pattern to match");
+    if(!form.name.trim()) return setError("Give this rule a name");
+    if(editing){
+      setImportRules(p=>p.map(r=>r.id===form.id?form:r));
+    } else {
+      setImportRules(p=>[...p,{...form,id:Date.now()}]);
+    }
+    setForm({...blank});
+    setEditing(false);
+    setError("");
+  };
+  const edit=(r)=>{setForm({...r});setEditing(true);};
+  const remove=(id)=>setImportRules(p=>p.filter(r=>r.id!==id));
+
+  return(
+    <div style={{paddingBottom:100}}>
+      <Hdr title="Import Rules" subtitle="Auto-reclassify transactions on every import" onBack={onBack}/>
+      <div className="pad">
+        <div className="ibox blue" style={{marginBottom:12}}>
+          <div className="ititle" style={{color:C.blue}}>What are Import Rules?</div>
+          <p style={{fontSize:11,color:C.ink,lineHeight:1.6}}>
+            Rules let you tell TaxWise how to automatically classify certain transactions every time you import. For example: "All transactions containing 'GRACE ETUKUDO' should be classified as Pension Remittance, non-taxable". Once set, these apply automatically to every future import.
+          </p>
+        </div>
+
+        <div className="card">
+          <div className="ctitle">{editing?"EDIT RULE":"CREATE A RULE"}</div>
+          <div className="fg">
+            <label className="lbl">RULE NAME (for your reference)</label>
+            <input className="inp" placeholder="e.g. Grace Etukudo pension transfers" value={form.name} onChange={e=>set("name",e.target.value)}/>
+          </div>
+          <div className="fg">
+            <label className="lbl">MATCH — keyword or phrase in transaction description</label>
+            <input className="inp" placeholder="e.g. GRACE ETUKUDO or TRF FROM SAVINGS" value={form.pattern} onChange={e=>set("pattern",e.target.value)}/>
+          </div>
+          <div className="fg">
+            <label className="lbl">MATCH TYPE</label>
+            <select className="sel" value={form.matchType} onChange={e=>set("matchType",e.target.value)}>
+              <option value="contains">Contains (anywhere in description)</option>
+              <option value="startsWith">Starts with</option>
+              <option value="endsWith">Ends with</option>
+              <option value="exact">Exact match</option>
+            </select>
+          </div>
+          <div className="fg">
+            <label className="lbl">RECLASSIFY AS — Transaction Type</label>
+            <select className="sel" value={form.newType} onChange={e=>set("newType",e.target.value)}>
+              <option value="">Keep original classification</option>
+              {TYPES.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div className="fg">
+            <label className="lbl">RECLASSIFY AS — Category</label>
+            <select className="sel" value={form.newCategory} onChange={e=>set("newCategory",e.target.value)}>
+              <option value="">Keep original category</option>
+              {CATEGORIES.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div style={{display:"flex",gap:8,marginBottom:10}}>
+            <div style={{flex:1}}>
+              <label className="lbl">TAX TREATMENT</label>
+              <select className="sel" value={form.taxAllowable?"yes":"no"} onChange={e=>set("taxAllowable",e.target.value==="yes")}>
+                <option value="yes">Allowable / Taxable</option>
+                <option value="no">Non-allowable / Exclude from tax</option>
+              </select>
+            </div>
+            <div style={{flex:1}}>
+              <label className="lbl">INCLUDE IN IMPORT</label>
+              <select className="sel" value={form.included?"yes":"no"} onChange={e=>set("included",e.target.value==="yes")}>
+                <option value="yes">Include (post to journal)</option>
+                <option value="no">Exclude (don't post)</option>
+              </select>
+            </div>
+          </div>
+          <div className="fg">
+            <label className="lbl">ADD NOTE TO DESCRIPTION (optional)</label>
+            <input className="inp" placeholder="e.g. Pension remittance payable — not income" value={form.appendNote} onChange={e=>set("appendNote",e.target.value)}/>
+          </div>
+          {error&&<div style={{color:C.red,fontSize:11,marginBottom:8}}>⚠ {error}</div>}
+          <div style={{display:"flex",gap:8}}>
+            {editing&&<button onClick={()=>{setForm({...blank});setEditing(false);}}
+              style={{flex:1,padding:"10px",background:"#F1F5F9",border:"1px solid "+C.border,
+                borderRadius:9,color:C.muted,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              Cancel
+            </button>}
+            <button onClick={save}
+              style={{flex:2,padding:"11px",background:C.blue,border:"none",
+                borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              {editing?"Update Rule":"+ Save Rule"}
+            </button>
+          </div>
+        </div>
+
+        {importRules.length>0&&(
+          <div className="card">
+            <div className="ctitle">ACTIVE RULES ({importRules.length})</div>
+            {importRules.map((r,i)=>(
+              <div key={r.id} style={{padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
+                  <div style={{fontWeight:700,fontSize:12,color:C.ink}}>{r.name||r.pattern}</div>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={()=>edit(r)}
+                      style={{padding:"3px 8px",background:C.blueLight,border:`1px solid ${C.blueBorder}`,
+                        borderRadius:5,color:C.blue,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      Edit
+                    </button>
+                    <button onClick={()=>remove(r.id)}
+                      style={{padding:"3px 8px",background:"#FEF2F2",border:"1px solid #FCA5A5",
+                        borderRadius:5,color:C.red,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+                <div style={{fontSize:11,color:C.muted}}>
+                  If description <strong>{r.matchType}</strong> "<strong>{r.pattern}</strong>"
+                  {r.newType&&<span> → type: <strong>{r.newType}</strong></span>}
+                  {r.newCategory&&<span> → category: <strong>{r.newCategory}</strong></span>}
+                  <span> · {r.taxAllowable?"✓ Allowable":"✗ Non-allowable"}</span>
+                  <span> · {r.included?"Include":"Exclude"}</span>
+                  {r.appendNote&&<span> · Note: "{r.appendNote}"</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {importRules.length===0&&(
+          <div style={{textAlign:"center",color:C.muted,fontSize:12,padding:"24px 0"}}>
+            No rules yet. Create your first rule above.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CGTPanel({cgtData,setCgtData}){
   const cgtR=computeCGT(cgtData);
   const set=(k,v)=>setCgtData(p=>({...p,[k]:v}));
@@ -3551,7 +3778,7 @@ Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocale
 }
 
 // ── PROFILE SCREEN ────────────────────────────────────────────────────────────
-function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEditSetup}){
+function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEditSetup,onNav,ownAccountsCount,importRulesCount}){
   const[edit,setEdit]=useState({...profile});
   const agg=computeAggregates(txns);
   const [signingOut, setSigningOut] = useState(false);
@@ -3629,6 +3856,28 @@ function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEdit
               color:C.blue,fontSize:13,fontWeight:700,
               cursor:"pointer",fontFamily:"inherit"}}>
             ✏️ Edit Full Profile Setup
+          </button>
+        </div>
+
+        {/* Own Accounts & Import Rules */}
+        <div className="card">
+          <div className="ctitle">SMART IMPORT SETTINGS</div>
+          <div style={{fontSize:12,color:C.slate,marginBottom:10,lineHeight:1.5}}>
+            Register your own bank accounts and create rules to automatically classify transactions on every import.
+          </div>
+          <button onClick={()=>onNav("ownAccounts")}
+            style={{width:"100%",padding:"11px",background:"#F0FDF4",
+              border:"1.5px solid #BBF7D0",borderRadius:10,
+              color:C.green,fontSize:13,fontWeight:700,marginBottom:8,
+              cursor:"pointer",fontFamily:"inherit"}}>
+            🏦 My Own Accounts ({ownAccountsCount||0} registered)
+          </button>
+          <button onClick={()=>onNav("importRules")}
+            style={{width:"100%",padding:"11px",background:"#EDE9FE",
+              border:"1.5px solid #C4B5FD",borderRadius:10,
+              color:"#7C3AED",fontSize:13,fontWeight:700,
+              cursor:"pointer",fontFamily:"inherit"}}>
+            ⚙️ Import Rules ({importRulesCount||0} active)
           </button>
         </div>
 
@@ -4202,6 +4451,8 @@ function App(){
   const[employees,setEmployeesRaw]=useState(saved?.employees||[]);
   const[assets,setAssetsRaw]=useState(saved?.assets||[]);
   const[connectedBanks,setConnectedBanksRaw]=useState(saved?.connectedBanks||[]);
+  const[ownAccounts,setOwnAccountsRaw]=useState(saved?.ownAccounts||[]);
+  const[importRules,setImportRulesRaw]=useState(saved?.importRules||[]);
   const[screen,setScreen]=useState("dashboard");
   const[prevScreen,setPrevScreen]=useState(null);
 
@@ -4251,10 +4502,26 @@ function App(){
   const setConnectedBanks=useCallback(fn=>{
     setConnectedBanksRaw(prev=>{
       const next=typeof fn==="function"?fn(prev):fn;
-      saveStore({profile,transactions:txns,kiv,employees,assets,connectedBanks:next});
+      saveStore({profile,transactions:txns,kiv,employees,assets,connectedBanks:next,ownAccounts,importRules});
       return next;
     });
-  },[profile,txns,kiv,employees,assets]);
+  },[profile,txns,kiv,employees,assets,ownAccounts,importRules]);
+
+  const setOwnAccounts=useCallback(fn=>{
+    setOwnAccountsRaw(prev=>{
+      const next=typeof fn==="function"?fn(prev):fn;
+      saveStore({profile,transactions:txns,kiv,employees,assets,connectedBanks,ownAccounts:next,importRules});
+      return next;
+    });
+  },[profile,txns,kiv,employees,assets,connectedBanks,importRules]);
+
+  const setImportRules=useCallback(fn=>{
+    setImportRulesRaw(prev=>{
+      const next=typeof fn==="function"?fn(prev):fn;
+      saveStore({profile,transactions:txns,kiv,employees,assets,connectedBanks,ownAccounts,importRules:next});
+      return next;
+    });
+  },[profile,txns,kiv,employees,assets,connectedBanks,ownAccounts]);
 
   const nav=(s)=>{setPrevScreen(screen);setScreen(s);};
   const back=()=>setScreen(prevScreen||"dashboard");
@@ -4409,10 +4676,12 @@ function App(){
       case "faq":        return <FAQScreen onBack={back}/>;
       case "subscribe":  return <SubscriptionScreen profile={profile} authUser={authUser} sub={sub} onBack={back} onSubscribed={()=>{getSubscription(authUser.id).then(setSub);back();}}/>;
       case "team":       return canManageTeam ? <TeamScreen profile={profile} authUser={authUser} sub={sub} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Admin only</div>;
-      case "upload":     return canEdit ? <CSVUploadScreen setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} profile={profile} authUser={authUser} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted</div>;
+      case "upload":     return canEdit ? <CSVUploadScreen setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} profile={profile} authUser={authUser} onBack={back} ownAccounts={ownAccounts} importRules={importRules}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted</div>;
       case "import":     return canEdit ? <DocumentUploadScreen profile={profile} authUser={authUser} setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Data Entry or above</div>;
       case "agent":      return <AgentScreen profile={profile} txns={txns} onBack={back}/>;
-      case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")} onEditSetup={()=>setScreen("editSetup")}/>;
+      case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")} onEditSetup={()=>setScreen("editSetup")} onNav={nav} ownAccountsCount={ownAccounts.length} importRulesCount={importRules.length}/>;
+      case "ownAccounts": return <OwnAccountsScreen ownAccounts={ownAccounts} setOwnAccounts={setOwnAccounts} onBack={back}/>;
+      case "importRules": return <ImportRulesScreen importRules={importRules} setImportRules={setImportRules} onBack={back}/>;
       case "editSetup":  return <OnboardingScreen
           editMode={true}
           initialData={{...profile}}
@@ -4906,7 +5175,65 @@ function TeamScreen({profile, authUser, sub, onBack}){
 
 // ── UNIVERSAL IMPORT SCREEN ───────────────────────────────────────────────────
 // Supports: CSV, Excel (.xlsx/.xls), PDF, Images, ZIP (auto-extracts)
-function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, onBack}){
+// ── IMPORT RULES ENGINE ──────────────────────────────────────────────────────
+// Applies ownAccounts + importRules to a list of transactions before review
+function applyImportRules(transactions, ownAccounts=[], importRules=[]){
+  // Build matcher strings from own accounts (account numbers and names)
+  const ownMatchers = ownAccounts.flatMap(a=>[
+    a.accountNumber?.replace(/\s/g,"").toLowerCase(),
+    a.accountName?.toLowerCase(),
+    a.bankName?.toLowerCase(),
+  ].filter(Boolean));
+
+  return transactions.map(t=>{
+    const desc = (t.desc||"").toLowerCase();
+
+    // 1. Own account transfer detection
+    if(ownMatchers.length > 0){
+      const isOwnTransfer = ownMatchers.some(m=>m && desc.includes(m));
+      if(isOwnTransfer){
+        return{...t,
+          type:"transfer",
+          category:"own_account_transfer",
+          taxAllowable:false,
+          included:false,
+          autoRule:"Own account transfer — excluded from taxable income",
+          confidence:"high",
+        };
+      }
+    }
+
+    // 2. User-defined import rules
+    for(const rule of importRules){
+      if(!rule.pattern||!rule.pattern.trim()) continue;
+      const pattern = rule.pattern.toLowerCase().trim();
+      const matchType = rule.matchType||"contains";
+      let matched = false;
+      if(matchType==="contains")  matched = desc.includes(pattern);
+      if(matchType==="startsWith")matched = desc.startsWith(pattern);
+      if(matchType==="endsWith")  matched = desc.endsWith(pattern);
+      if(matchType==="exact")     matched = desc === pattern;
+      if(matchType==="regex"){
+        try{ matched = new RegExp(pattern,"i").test(t.desc||""); }catch(_){}
+      }
+      if(matched){
+        return{...t,
+          type:      rule.newType      || t.type,
+          category:  rule.newCategory  || t.category,
+          desc:      rule.appendNote   ? `${t.desc} [${rule.appendNote}]` : t.desc,
+          taxAllowable: rule.taxAllowable!=null ? rule.taxAllowable : t.taxAllowable,
+          included:     rule.included!=null     ? rule.included     : t.included,
+          autoRule:  `Rule: "${rule.name||rule.pattern}"`,
+          confidence:"high",
+        };
+      }
+    }
+
+    return t;
+  });
+}
+
+function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, onBack, ownAccounts=[], importRules=[]}){
   const [mode, setMode]         = useState("select");
   const [rows, setRows]         = useState([]);
   const [headers, setHeaders]   = useState([]);
@@ -5263,7 +5590,8 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
         assetClass:t.assetClass||"other", category:t.category||"other",
       };
     }).filter(t=>t.amount>0);
-    setPreview(formatted);
+    const rulesApplied2 = applyImportRules(formatted, ownAccounts, importRules);
+    setPreview(rulesApplied2);
     setProcessing(false);
     setMode("review");
   };
@@ -5346,7 +5674,8 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
       `No transactions found in the selected date range (${dateFrom||"start"} to ${dateTo||"today"}). ` +
       `Try widening the range or clearing the filter.`
     );
-    setPreview(rangeFiltered);
+    const rulesApplied = applyImportRules(rangeFiltered, ownAccounts, importRules);
+    setPreview(rulesApplied);
     setMode("review");
   };
 
@@ -5426,6 +5755,10 @@ Be concise in desc fields. Return ONLY the JSON array, no other text.`;
                   color:t.type==="income"?C.green:C.red}}>{t.type.toUpperCase()}</span>
                 {!t.taxAllowable&&<span style={{fontSize:9,background:"#FEF2F2",color:"#DC2626",
                   padding:"1px 6px",borderRadius:100,fontWeight:700}}>⚠ NOT DEDUCTIBLE</span>}
+                {t.autoRule&&<span style={{fontSize:9,background:"#EDE9FE",color:"#7C3AED",
+                  padding:"1px 6px",borderRadius:100,fontWeight:700}}>⚙ {t.autoRule}</span>}
+                {t.type==="transfer"&&<span style={{fontSize:9,background:"#F1F5F9",color:C.muted,
+                  padding:"1px 6px",borderRadius:100,fontWeight:700}}>↔ TRANSFER</span>}
               </div>
             </div>
           </div>

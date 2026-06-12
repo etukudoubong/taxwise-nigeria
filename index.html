@@ -5635,14 +5635,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
         });
       } catch(pdfErr){
         if(/password|encrypted/i.test(pdfErr.message)){
-          throw new Error("This PDF is password-protected (common with GTBank, Access, UBA statements).
-
-To fix:
-1. Open the PDF and enter the password (usually your date of birth e.g. 15061985)
-2. Print to PDF to create an unlocked copy
-3. Upload the unlocked copy
-
-Or download as Excel from your bank app.");
+          throw new Error("This PDF is password-protected (common with GTBank, Access, UBA statements).\n\nTo fix:\n1. Open the PDF and enter the password (usually your date of birth e.g. 15061985)\n2. Print to PDF to create an unlocked copy\n3. Upload the unlocked copy\n\nOr download as Excel from your bank app.");
         }
         throw pdfErr;
       }
@@ -5653,28 +5646,10 @@ Or download as Excel from your bank app.");
       let allTxns = [];
 
       const dateRangeNote = (dateFrom||dateTo)
-        ? "
-
-DATE RANGE FILTER: Only extract transactions between " + (dateFrom||"the beginning") + " and " + (dateTo||"the end of the document") + ". Skip transactions outside this range."
+        ? "\n\nDATE RANGE FILTER: Only extract transactions between " + (dateFrom||"the beginning") + " and " + (dateTo||"the end of the document") + ". Skip transactions outside this range."
         : "";
 
-      const sysPrompt = "You are a Nigerian bank statement processor. Extract ALL transactions from the pages provided." + dateRangeNote + "
-
-NIGERIAN BANK DATE FORMATS (convert to YYYY-MM-DD):
-04-JAN-16 = 2016-01-04. 04JAN16 = 2016-01-04. DD/MM/YYYY. 2-digit year: add 2000 if < 50.
-
-POLARIS / SKYE BANK (EntryDate | Details | ValueDate | Debit | Credit | Balance):
-Use EntryDate as date. Ignore ValueDate. Skip Balance B/F and Totals rows.
-
-MULTI-PAGE RULE: Page 1 has column headers. Apply same structure to all pages.
-
-Return ONLY a JSON array. Each object must have:
-date (YYYY-MM-DD), desc (max 80 chars), amount (positive), type (income|expense|asset),
-category (revenue|salary|rent|professional_fee|supplies|utility|tax_payment|bank_charge|stamp_duty|loan|other),
-taxAllowable (bool), confidence (high|medium|low), vatFlag (bool), whtFlag (bool).
-
-NON-ALLOWABLE: stamp duty, maintenance fee, loan principal, income tax, drawings, dividends.
-Return ONLY the JSON array.";
+      const sysPrompt = "You are a Nigerian bank statement processor. Extract ALL transactions from the pages provided." + dateRangeNote + "\n\nNIGERIAN BANK DATE FORMATS (convert to YYYY-MM-DD):\n04-JAN-16 = 2016-01-04. 04JAN16 = 2016-01-04. DD/MM/YYYY. 2-digit year: add 2000 if < 50.\n\nPOLARIS / SKYE BANK (EntryDate | Details | ValueDate | Debit | Credit | Balance):\nUse EntryDate as date. Ignore ValueDate. Skip Balance B/F and Totals rows.\n\nMULTI-PAGE RULE: Page 1 has column headers. Apply same structure to all pages.\n\nReturn ONLY a JSON array. Each object must have:\ndate (YYYY-MM-DD), desc (max 80 chars), amount (positive), type (income|expense|asset),\ncategory (revenue|salary|rent|professional_fee|supplies|utility|tax_payment|bank_charge|stamp_duty|loan|other),\ntaxAllowable (bool), confidence (high|medium|low), vatFlag (bool), whtFlag (bool).\n\nNON-ALLOWABLE: stamp duty, maintenance fee, loan principal, income tax, drawings, dividends.\nReturn ONLY the JSON array.";
 
       for(let b = 0; b < numBatches; b++){
         const bStart = b * BATCH;
@@ -5722,9 +5697,7 @@ Return ONLY the JSON array.";
     } else {
       // ── Image / non-PDF.js fallback path (single image files) ───────────────
       const maxSize = 8*1024*1024;
-      if(file.size > maxSize) throw new Error("File too large (" + fileMB.toFixed(1) + "MB). Maximum is 8MB.
-
-Download as Excel from your bank app instead.");
+      if(file.size > maxSize) throw new Error("File too large (" + fileMB.toFixed(1) + "MB). Maximum is 8MB. Download as Excel from your bank app instead.");
       const mediaType = file.type||"image/jpeg";
       setProgress("Reading image…");
       const base64 = await new Promise((res,rej)=>{
@@ -5734,13 +5707,9 @@ Download as Excel from your bank app instead.");
         reader.readAsDataURL(file);
       });
       const dateRangeNote2 = (dateFrom||dateTo)
-        ? "
-
-DATE RANGE FILTER: Only extract transactions between " + (dateFrom||"the beginning") + " and " + (dateTo||"end") + "."
+        ? "\n\nDATE RANGE FILTER: Only extract transactions between " + (dateFrom||"the beginning") + " and " + (dateTo||"end") + "."
         : "";
-      const imgSystemPrompt = "You are a Nigerian bank statement processor. Extract ALL transactions from this image." + dateRangeNote2 + "
-
-Return ONLY a JSON array. Each item: date (YYYY-MM-DD), desc (max 80 chars), amount (positive number), type (income|expense|asset), category (revenue|salary|rent|professional_fee|supplies|utility|tax_payment|bank_charge|stamp_duty|loan|other), taxAllowable (bool), confidence (high|medium|low), vatFlag (bool), whtFlag (bool). No preamble, no markdown.";
+      const imgSystemPrompt = "You are a Nigerian bank statement processor. Extract ALL transactions from this image." + dateRangeNote2 + "\n\nReturn ONLY a JSON array. Each item: date (YYYY-MM-DD), desc (max 80 chars), amount (positive number), type (income|expense|asset), category (revenue|salary|rent|professional_fee|supplies|utility|tax_payment|bank_charge|stamp_duty|loan|other), taxAllowable (bool), confidence (high|medium|low), vatFlag (bool), whtFlag (bool). No preamble, no markdown.";
       setProgress("AI is analysing image…");
       const imgRes = await fetch(SUPA_URL+"/functions/v1/taxwise-ai",{
         method:"POST",

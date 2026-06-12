@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="TaxWise Nigeria — AI-powered tax management for Nigerian individuals and businesses. Track PIT, CIT, VAT, WHT, PAYE and CGT under NTA 2025. 14-day free trial.">
+<meta property="og:title" content="TaxWise Nigeria — Know Your Tax. Pay What's Right.">
+<meta property="og:description" content="AI tax agent built on Nigeria Tax Act 2025. Import bank statements, compute PIT/CIT/VAT/WHT automatically. 14-day free trial, no card required.">
+<meta property="og:image" content="https://etukudoubong.github.io/taxwise-nigeria/icons/icon-512.png">
+<meta property="og:url" content="https://etukudoubong.github.io/taxwise-nigeria/landing">
+<meta name="twitter:card" content="summary_large_image">
+<title>TaxWise Nigeria — Know Your Tax. Pay What's Right.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --navy:#0B1628;
+  --navy2:#1E3A5F;
+  --amber:#F59E0B;
+  --amber2:#D97706;
+  --amber-light:#FEF3C7;
+  --white:#FFFFFF;
+  --slate:#64748B;
+  --slate-light:#F1F5F9;
+  --green:#059669;
+  --red:#EF4444;
+  --text:#1E293B;
+  --border:#E2E8F0;
+}
+html{scroll-behavior:smooth;}
+body{font-family:'Inter',sans-serif;color:var(--text);background:#fff;overflow-x:hidden;}
+
+/* ── NAV ── */
+nav{
+  position:fixed;top:0;left:0;right:0;z-index:100;
+  background:rgba(11,22,40,.96);backdrop-filter:blur(12px);
+  padding:0 20px;height:60px;
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid rgba(255,255,255,.08);
+}
+.nav-logo{display:flex;align-items:center;gap:10px;}
+.nav-logo-icon{
+  width:32px;height:32px;background:var(--amber);border-radius:8px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;font-weight:800;color:var(--navy);font-family:'Syne',sans-serif;
+}
+.nav-logo-text{font-family:'Syne',sans-serif;font-weight:700;font-size:16px;color:#fff;}
+.nav-logo-text span{color:var(--amber);}
+.nav-cta{
+  padding:8px 18px;background:var(--amber);border:none;border-radius:8px;
+  font-family:'Inter',sans-serif;font-size:13px;font-weight:700;
+  color:var(--navy);cursor:pointer;text-decoration:none;
+  transition:transform .15s,background .15s;white-space:nowrap;
+}
+.nav-cta:hover{background:var(--amber2);transform:translateY(-1px);}
+
+/* ── HERO ── */
+.hero{
+  min-height:100vh;background:var(--navy);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:100px 20px 60px;text-align:center;position:relative;overflow:hidden;
+}
+.hero::before{
+  content:'';position:absolute;top:-200px;left:50%;transform:translateX(-50%);
+  width:600px;height:600px;
+  background:radial-gradient(circle,rgba(245,158,11,.15) 0%,transparent 70%);
+  pointer-events:none;
+}
+.hero-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  background:rgba(245,158,11,.15);border:1px solid rgba(245,158,11,.3);
+  border-radius:100px;padding:5px 14px;
+  font-size:12px;font-weight:600;color:var(--amber);
+  margin-bottom:28px;letter-spacing:.04em;
+}
+.hero-badge::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--amber);animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+.hero h1{
+  font-family:'Syne',sans-serif;font-weight:800;
+  font-size:clamp(32px,8vw,64px);line-height:1.1;
+  color:#fff;margin-bottom:8px;
+  letter-spacing:-.02em;
+}
+.hero h1 span{color:var(--amber);}
+.hero-sub{
+  font-size:clamp(16px,3.5vw,22px);color:rgba(255,255,255,.6);
+  margin-bottom:40px;max-width:540px;line-height:1.5;font-weight:400;
+}
+
+/* ── TAX METER ── */
+.tax-meter{
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);
+  border-radius:16px;padding:20px 28px;margin-bottom:40px;
+  display:inline-flex;flex-direction:column;align-items:center;gap:4px;
+}
+.meter-label{font-size:11px;color:rgba(255,255,255,.4);letter-spacing:.1em;font-weight:600;}
+.meter-value{
+  font-family:'Syne',sans-serif;font-weight:800;font-size:36px;
+  color:var(--amber);letter-spacing:-.02em;
+}
+.meter-sub{font-size:11px;color:rgba(255,255,255,.3);}
+
+.hero-btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:48px;}
+.btn-primary{
+  padding:15px 32px;background:var(--amber);border:none;border-radius:12px;
+  font-family:'Inter',sans-serif;font-size:15px;font-weight:700;
+  color:var(--navy);cursor:pointer;text-decoration:none;
+  transition:transform .15s,box-shadow .15s;
+  box-shadow:0 4px 0 var(--amber2);
+}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 6px 0 var(--amber2);}
+.btn-primary:active{transform:translateY(0);box-shadow:0 2px 0 var(--amber2);}
+.btn-ghost{
+  padding:15px 32px;background:transparent;
+  border:1.5px solid rgba(255,255,255,.2);border-radius:12px;
+  font-family:'Inter',sans-serif;font-size:15px;font-weight:600;
+  color:rgba(255,255,255,.8);cursor:pointer;text-decoration:none;
+  transition:border-color .15s,color .15s;
+}
+.btn-ghost:hover{border-color:rgba(255,255,255,.5);color:#fff;}
+.hero-note{font-size:12px;color:rgba(255,255,255,.3);}
+.hero-note strong{color:rgba(255,255,255,.6);}
+
+/* ── SOCIAL PROOF BAR ── */
+.proof-bar{
+  background:var(--slate-light);padding:20px;
+  display:flex;align-items:center;justify-content:center;
+  gap:32px;flex-wrap:wrap;
+  border-bottom:1px solid var(--border);
+}
+.proof-item{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--slate);}
+.proof-item strong{color:var(--text);font-weight:700;}
+.proof-divider{width:1px;height:24px;background:var(--border);}
+
+/* ── SECTIONS ── */
+section{padding:72px 20px;}
+.container{max-width:720px;margin:0 auto;}
+.section-eyebrow{
+  font-size:11px;font-weight:700;letter-spacing:.12em;
+  color:var(--amber2);text-transform:uppercase;margin-bottom:12px;
+}
+.section-title{
+  font-family:'Syne',sans-serif;font-weight:800;
+  font-size:clamp(24px,5vw,38px);line-height:1.15;
+  color:var(--navy);margin-bottom:16px;letter-spacing:-.01em;
+}
+.section-body{font-size:16px;color:var(--slate);line-height:1.7;max-width:560px;}
+
+/* ── PROBLEM SECTION ── */
+.problem{background:#fff;}
+.problem-cards{display:grid;grid-template-columns:1fr;gap:12px;margin-top:36px;}
+.problem-card{
+  display:flex;gap:14px;align-items:flex-start;
+  background:var(--slate-light);border-radius:12px;padding:16px;
+}
+.problem-icon{font-size:22px;flex-shrink:0;margin-top:2px;}
+.problem-card-title{font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;}
+.problem-card-body{font-size:13px;color:var(--slate);line-height:1.5;}
+
+/* ── FEATURES SECTION ── */
+.features{background:var(--navy);}
+.features .section-title{color:#fff;}
+.features .section-body{color:rgba(255,255,255,.5);}
+.features .section-eyebrow{color:var(--amber);}
+
+.category-tabs{
+  display:flex;gap:0;margin:36px 0 24px;
+  background:rgba(255,255,255,.06);border-radius:12px;padding:4px;
+  overflow-x:auto;
+}
+.cat-tab{
+  flex:1;min-width:fit-content;padding:9px 14px;
+  background:none;border:none;border-radius:9px;
+  font-family:'Inter',sans-serif;font-size:12px;font-weight:600;
+  color:rgba(255,255,255,.45);cursor:pointer;transition:all .2s;
+  white-space:nowrap;
+}
+.cat-tab.active{background:var(--amber);color:var(--navy);}
+
+.feature-panel{display:none;}
+.feature-panel.active{display:block;}
+.feature-list{list-style:none;display:flex;flex-direction:column;gap:12px;}
+.feature-item{
+  display:flex;gap:12px;align-items:flex-start;
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);
+  border-radius:12px;padding:14px;
+}
+.feature-check{
+  width:22px;height:22px;border-radius:6px;
+  background:rgba(245,158,11,.2);color:var(--amber);
+  display:flex;align-items:center;justify-content:center;
+  font-size:12px;flex-shrink:0;margin-top:1px;font-weight:700;
+}
+.feature-title{font-size:13px;font-weight:700;color:#fff;margin-bottom:3px;}
+.feature-desc{font-size:12px;color:rgba(255,255,255,.45);line-height:1.5;}
+
+/* ── HOW IT WORKS ── */
+.how{background:var(--slate-light);}
+.steps{display:flex;flex-direction:column;gap:0;margin-top:36px;position:relative;}
+.steps::before{
+  content:'';position:absolute;left:20px;top:24px;bottom:24px;
+  width:1.5px;background:var(--border);
+}
+.step{display:flex;gap:20px;align-items:flex-start;padding-bottom:32px;position:relative;}
+.step:last-child{padding-bottom:0;}
+.step-num{
+  width:40px;height:40px;border-radius:50%;
+  background:var(--navy);color:#fff;
+  display:flex;align-items:center;justify-content:center;
+  font-family:'Syne',sans-serif;font-weight:800;font-size:15px;
+  flex-shrink:0;position:relative;z-index:1;
+}
+.step-title{font-size:15px;font-weight:700;color:var(--navy);margin-bottom:6px;}
+.step-body{font-size:13px;color:var(--slate);line-height:1.6;}
+.step-tag{
+  display:inline-block;margin-top:8px;
+  padding:3px 10px;border-radius:100px;
+  font-size:10px;font-weight:700;
+  background:var(--amber-light);color:var(--amber2);
+}
+
+/* ── CATEGORIES ── */
+.categories{background:#fff;}
+.cat-grid{display:grid;grid-template-columns:1fr;gap:16px;margin-top:36px;}
+.cat-card{
+  border:1.5px solid var(--border);border-radius:14px;
+  padding:20px;transition:border-color .2s,box-shadow .2s;
+}
+.cat-card:hover{border-color:var(--amber);box-shadow:0 4px 20px rgba(245,158,11,.1);}
+.cat-badge{
+  display:inline-block;padding:4px 12px;border-radius:100px;
+  font-size:11px;font-weight:700;margin-bottom:12px;
+}
+.cat-A{background:#DBEAFE;color:#1D4ED8;}
+.cat-B{background:#FEF3C7;color:#92400E;}
+.cat-C{background:#DCFCE7;color:#166534;}
+.cat-D{background:#F3E8FF;color:#7C3AED;}
+.cat-title{font-size:15px;font-weight:700;color:var(--navy);margin-bottom:6px;}
+.cat-body{font-size:13px;color:var(--slate);line-height:1.6;margin-bottom:10px;}
+.cat-tags{display:flex;flex-wrap:wrap;gap:6px;}
+.cat-tag{font-size:10px;padding:2px 8px;border-radius:100px;background:var(--slate-light);color:var(--slate);font-weight:600;}
+
+/* ── PRICING ── */
+.pricing{background:var(--navy);}
+.pricing .section-title{color:#fff;}
+.pricing .section-eyebrow{color:var(--amber);}
+.pricing-toggle{
+  display:flex;gap:0;margin:28px auto 32px;
+  background:rgba(255,255,255,.08);border-radius:10px;
+  width:fit-content;padding:3px;
+}
+.toggle-btn{
+  padding:8px 20px;border:none;border-radius:8px;background:none;
+  font-family:'Inter',sans-serif;font-size:13px;font-weight:600;
+  color:rgba(255,255,255,.5);cursor:pointer;transition:all .2s;
+}
+.toggle-btn.active{background:var(--amber);color:var(--navy);}
+.price-save{
+  display:inline-block;margin-left:6px;padding:1px 7px;
+  background:#DCFCE7;color:#166534;border-radius:100px;
+  font-size:9px;font-weight:700;vertical-align:middle;
+}
+.pricing-grid{display:grid;grid-template-columns:1fr;gap:16px;}
+.price-card{
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);
+  border-radius:16px;padding:24px;
+}
+.price-card.featured{
+  background:var(--amber);border-color:var(--amber);
+}
+.price-card.featured *{color:var(--navy) !important;}
+.price-tag{
+  display:inline-block;padding:3px 10px;border-radius:100px;
+  background:rgba(245,158,11,.2);color:var(--amber);
+  font-size:10px;font-weight:700;letter-spacing:.08em;margin-bottom:14px;
+}
+.price-card.featured .price-tag{background:rgba(0,0,0,.15);color:var(--navy);}
+.price-name{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:#fff;margin-bottom:4px;}
+.price-amount{
+  font-family:'Syne',sans-serif;font-size:36px;font-weight:800;
+  color:#fff;line-height:1;margin:12px 0 4px;
+}
+.price-amount span{font-size:14px;font-weight:500;color:rgba(255,255,255,.5);}
+.price-yearly{font-size:12px;color:rgba(255,255,255,.4);margin-bottom:16px;}
+.price-features{list-style:none;display:flex;flex-direction:column;gap:8px;margin-bottom:20px;}
+.price-features li{
+  display:flex;gap:8px;align-items:flex-start;
+  font-size:13px;color:rgba(255,255,255,.7);
+}
+.price-features li::before{content:'✓';color:var(--amber);font-weight:700;flex-shrink:0;}
+.price-card.featured .price-features li{color:var(--navy);}
+.price-card.featured .price-features li::before{color:var(--navy);}
+.price-btn{
+  width:100%;padding:13px;border:none;border-radius:10px;
+  font-family:'Inter',sans-serif;font-size:14px;font-weight:700;
+  cursor:pointer;text-decoration:none;display:block;text-align:center;
+  transition:opacity .2s;
+}
+.price-btn-primary{background:var(--amber);color:var(--navy);}
+.price-btn-ghost{background:rgba(255,255,255,.1);color:#fff;}
+.price-btn:hover{opacity:.85;}
+.price-card.featured .price-btn{background:var(--navy);color:#fff;}
+.price-trial{
+  text-align:center;margin-top:20px;font-size:12px;
+  color:rgba(255,255,255,.4);
+}
+
+/* ── TESTIMONIALS ── */
+.testimonials{background:var(--slate-light);}
+.testimonial-grid{display:grid;grid-template-columns:1fr;gap:14px;margin-top:32px;}
+.testimonial{background:#fff;border-radius:14px;padding:20px;border:1px solid var(--border);}
+.t-stars{font-size:13px;color:var(--amber);margin-bottom:10px;letter-spacing:2px;}
+.t-text{font-size:14px;color:var(--text);line-height:1.6;margin-bottom:14px;font-style:italic;}
+.t-author{display:flex;align-items:center;gap:10px;}
+.t-avatar{
+  width:36px;height:36px;border-radius:50%;
+  background:var(--navy);color:#fff;
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:700;font-family:'Syne',sans-serif;
+  flex-shrink:0;
+}
+.t-name{font-size:13px;font-weight:700;color:var(--navy);}
+.t-role{font-size:11px;color:var(--slate);}
+
+/* ── FAQ ── */
+.faq{background:#fff;}
+.faq-list{margin-top:32px;display:flex;flex-direction:column;gap:0;}
+.faq-item{border-bottom:1px solid var(--border);}
+.faq-q{
+  width:100%;display:flex;justify-content:space-between;align-items:center;
+  padding:16px 0;background:none;border:none;cursor:pointer;
+  font-family:'Inter',sans-serif;font-size:14px;font-weight:600;
+  color:var(--navy);text-align:left;gap:12px;
+}
+.faq-q:hover{color:var(--amber2);}
+.faq-icon{font-size:18px;color:var(--slate);flex-shrink:0;transition:transform .2s;}
+.faq-item.open .faq-icon{transform:rotate(45deg);}
+.faq-a{
+  font-size:13px;color:var(--slate);line-height:1.7;
+  padding:0 0 16px;display:none;
+}
+.faq-item.open .faq-a{display:block;}
+
+/* ── CTA FOOTER ── */
+.cta-footer{
+  background:var(--navy);padding:80px 20px;text-align:center;
+  position:relative;overflow:hidden;
+}
+.cta-footer::before{
+  content:'';position:absolute;top:-100px;left:50%;transform:translateX(-50%);
+  width:500px;height:500px;
+  background:radial-gradient(circle,rgba(245,158,11,.12) 0%,transparent 70%);
+  pointer-events:none;
+}
+.cta-footer h2{
+  font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(26px,6vw,44px);
+  color:#fff;margin-bottom:12px;line-height:1.15;letter-spacing:-.01em;
+  position:relative;
+}
+.cta-footer h2 span{color:var(--amber);}
+.cta-footer p{font-size:15px;color:rgba(255,255,255,.5);margin-bottom:36px;position:relative;}
+.cta-footer .btn-primary{position:relative;}
+
+.footer-bar{
+  background:#060E1A;padding:20px;text-align:center;
+  font-size:12px;color:rgba(255,255,255,.25);line-height:1.8;
+}
+.footer-bar a{color:rgba(255,255,255,.4);text-decoration:none;}
+.footer-bar a:hover{color:var(--amber);}
+
+/* ── RESPONSIVE ── */
+@media(min-width:600px){
+  .problem-cards{grid-template-columns:1fr 1fr;}
+  .pricing-grid{grid-template-columns:1fr 1fr;}
+  .cat-grid{grid-template-columns:1fr 1fr;}
+  .testimonial-grid{grid-template-columns:1fr 1fr;}
+}
+@media(min-width:900px){
+  .cat-grid{grid-template-columns:1fr 1fr;}
+  .testimonial-grid{grid-template-columns:1fr 1fr 1fr;}
+}
+@media(prefers-reduced-motion:reduce){
+  *{animation:none !important;transition:none !important;}
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="#" class="nav-logo" style="text-decoration:none;">
+    <div class="nav-logo-icon">T</div>
+    <div class="nav-logo-text">TaxWise <span>Nigeria</span></div>
+  </a>
+  <a href="https://etukudoubong.github.io/taxwise-nigeria" class="nav-cta">Start Free Trial</a>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-badge">Built on Nigeria Tax Act 2025</div>
+  <h1>Know Your Tax.<br><span>Pay What's Right.</span></h1>
+  <p class="hero-sub">Your AI tax agent — trained on NTA 2025. Tracks PIT, CIT, VAT, WHT, PAYE and CGT automatically from your bank statements.</p>
+
+  <div class="tax-meter">
+    <div class="meter-label">TAX OBLIGATIONS TRACKED THIS MONTH</div>
+    <div class="meter-value" id="meterValue">₦0</div>
+    <div class="meter-sub">across active TaxWise users</div>
+  </div>
+
+  <div class="hero-btns">
+    <a href="https://etukudoubong.github.io/taxwise-nigeria" class="btn-primary">Start 14-Day Free Trial</a>
+    <a href="#how" class="btn-ghost">See How It Works</a>
+  </div>
+  <p class="hero-note"><strong>No credit card required.</strong> Free for 14 days. From ₦2,500/month after.</p>
+</section>
+
+<!-- SOCIAL PROOF BAR -->
+<div class="proof-bar">
+  <div class="proof-item">🇳🇬 <strong>Built for Nigeria</strong> — NTA 2025, TAA 2025, NRS Act</div>
+  <div class="proof-divider"></div>
+  <div class="proof-item">🤖 <strong>AI-Powered</strong> — reads your bank statements</div>
+  <div class="proof-divider"></div>
+  <div class="proof-item">🔒 <strong>Supabase-secured</strong> — your data is yours</div>
+  <div class="proof-divider"></div>
+  <div class="proof-item">📱 <strong>Works on any device</strong> — install as app</div>
+</div>
+
+<!-- PROBLEM -->
+<section class="problem">
+  <div class="container">
+    <div class="section-eyebrow">The Problem</div>
+    <h2 class="section-title">Most Nigerians are non-compliant — not because they want to be</h2>
+    <p class="section-body">The Nigeria Tax Act 2025 is 400+ pages. Tax obligations differ by income type, employment status, and business structure. Without a tax accountant — which most people can't afford — staying compliant is genuinely hard.</p>
+
+    <div class="problem-cards">
+      <div class="problem-card">
+        <div class="problem-icon">😰</div>
+        <div>
+          <div class="problem-card-title">Freelancers don't know their WHT situation</div>
+          <div class="problem-card-body">Clients deduct 10% WHT. Is it a credit or a loss? Most freelancers don't know — and overpay or miss the credit entirely.</div>
+        </div>
+      </div>
+      <div class="problem-card">
+        <div class="problem-icon">🤷</div>
+        <div>
+          <div class="problem-card-title">Salaried professionals miss side-income obligations</div>
+          <div class="problem-card-body">Your employer handles PAYE on your salary. But that consulting fee or rental income? You owe tax on it — and most people don't declare it.</div>
+        </div>
+      </div>
+      <div class="problem-card">
+        <div class="problem-icon">🏦</div>
+        <div>
+          <div class="problem-card-title">Business owners can't separate personal from business</div>
+          <div class="problem-card-body">Running everything through one bank account means your expenses, drawings, and business income are all mixed. Tax computation becomes guesswork.</div>
+        </div>
+      </div>
+      <div class="problem-card">
+        <div class="problem-icon">📅</div>
+        <div>
+          <div class="problem-card-title">Deadlines are missed and penalties accumulate</div>
+          <div class="problem-card-body">WHT by the 21st. PAYE by the 10th. Annual return by 31 March. FIRS penalties compound at 10% per annum. Most people don't track any of this.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="features">
+  <div class="container">
+    <div class="section-eyebrow">What TaxWise Does</div>
+    <h2 class="section-title">Everything your accountant does — automated</h2>
+    <p class="section-body">TaxWise is built on every provision of the Nigeria Tax Act 2025 and Tax Administration Act 2025. It handles the complexity so you don't have to.</p>
+
+    <div class="category-tabs">
+      <button class="cat-tab active" onclick="showFeatures('import')">Import</button>
+      <button class="cat-tab" onclick="showFeatures('compute')">Compute</button>
+      <button class="cat-tab" onclick="showFeatures('report')">Report</button>
+      <button class="cat-tab" onclick="showFeatures('file')">File</button>
+    </div>
+
+    <div class="feature-panel active" id="panel-import">
+      <ul class="feature-list">
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">AI bank statement import</div><div class="feature-desc">Upload any Nigerian bank statement — PDF, Excel, or image. AI extracts and classifies every transaction automatically. Handles GTBank, Access, UBA, Zenith, FCMB, Polaris and 29 others.</div></div>
+        </li>
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">Smart single-account handling</div><div class="feature-desc">Most Nigerians mix personal and business in one account. TaxWise asks the right questions — salary vs freelance income, personal vs business expense, drawings vs costs — and classifies correctly.</div></div>
+        </li>
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">Bank charge classification</div><div class="feature-desc">Stamp Duty is never deductible. AMF is deductible for companies only. VAT on AMF is recoverable only if VAT-registered. TaxWise knows every rule — no manual intervention needed.</div></div>
+        </li>
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">Import Rules Engine</div><div class="feature-desc">Teach TaxWise your recurring transactions once. "Every payment to X is professional fees, WHT applies." It applies your rules automatically on every import.</div></div>
+        </li>
+      </ul>
+    </div>
+
+    <div class="feature-panel" id="panel-compute">
+      <ul class="feature-list">
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">Category-accurate PIT computation</div><div class="feature-desc">Four taxpayer categories — PAYE employee, no-PAYE employee, self-employed, mixed income. Each with the correct formula, business expense deductions, minimum tax rule, and PAYE credit treatment under NTA 2025 S.30.</div></div>
+        </li>
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">CIT with capital allowances</div><div class="feature-desc">Asset register with NRS-compliant depreciation schedules. Annual allowances, initial allowances, balancing charges. Small company CIT exemption applied automatically.</div></div>
+        </li>
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">VAT, WHT, PAYE, CGT</div><div class="feature-desc">All six tax heads handled. CGT at progressive PIT rates for individuals with ₦50m exemption. VAT at 7.5% with expanded input recovery. WHT schedules auto-generated from transactions.</div></div>
+        </li>
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">All six S.30(2)(a) personal reliefs</div><div class="feature-desc">NHF, NHIS, pension (8%), housing loan interest, life insurance premiums, rent relief (20% capped ₦500k). Every relief tracked and applied correctly.</div></div>
+        </li>
+      </ul>
+    </div>
+
+    <div class="feature-panel" id="panel-report">
+      <ul class="feature-list">
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">Annual Tax Summary PDF</div><div class="feature-desc">Full A4 report — income breakdown, chargeable income, all tax heads, compliance checklist, filing deadlines. By year. FIRS-presentation ready. Downloadable in one tap.</div></div>
+        </li>
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">Tax schedule downloads</div><div class="feature-desc">WHT schedule, VAT schedule, PAYE schedule, CGT log — each downloadable as CSV for your records and accountant.</div></div>
+        </li>
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">AI Tax Agent</div><div class="feature-desc">Ask anything about your tax position. "Am I paying too much WHT?" "What reliefs am I missing?" "Is this expense deductible?" The agent knows your actual data — not generic answers.</div></div>
+        </li>
+      </ul>
+    </div>
+
+    <div class="feature-panel" id="panel-file">
+      <ul class="feature-list">
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">NRS Rev360 filing export</div><div class="feature-desc">WHT remittance and VAT schedule CSV files formatted exactly for NRS Rev360 upload — correct column names, DD/MM/YY dates, plain amounts. Upload directly to selfservice.nrs.gov.ng.</div></div>
+        </li>
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">PAYE schedule for all 36 SIRS</div><div class="feature-desc">Select your employee's resident state. TaxWise outputs the PAYE schedule in the correct format with the portal link for all 36 states and FCT-IRS.</div></div>
+        </li>
+        <li class="feature-item">
+          <div class="feature-check">✓</div>
+          <div><div class="feature-title">Compliance deadline tracker</div><div class="feature-desc">WHT by 21st. PAYE by 10th. Annual return by 31 March. Every deadline visible on your dashboard — never miss a remittance again.</div></div>
+        </li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="how" id="how">
+  <div class="container">
+    <div class="section-eyebrow">How It Works</div>
+    <h2 class="section-title">From bank statement to tax schedule in minutes</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <div class="step-title">Create your profile</div>
+          <div class="step-body">Tell TaxWise your employment category — salaried employee, self-employed, or mixed income. This determines which tax rules apply to you under NTA 2025.</div>
+          <div class="step-tag">Takes 2 minutes</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <div class="step-title">Import your bank statement</div>
+          <div class="step-body">Upload a PDF, Excel file, or photo of your bank statement. AI reads every transaction and classifies it — income, expense, bank charge, loan, drawings, capital asset.</div>
+          <div class="step-tag">Works with all 35 CBN-licensed banks</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <div class="step-title">Review and answer questions</div>
+          <div class="step-body">Ambiguous transactions — cash deposits, dual-use expenses, mixed transfers — are flagged with a clear question. One tap to classify. Everything else is auto-resolved.</div>
+          <div class="step-tag">Smart clarification — only asks what it needs to</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>
+          <div class="step-title">See your full tax position</div>
+          <div class="step-body">Your dashboard shows exactly what you owe — PIT or CIT, VAT, WHT, PAYE — with breakdowns, schedules, and filing deadlines. No surprises at year-end.</div>
+          <div class="step-tag">Instant, always up to date</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CATEGORIES -->
+<section class="categories">
+  <div class="container">
+    <div class="section-eyebrow">Who It's For</div>
+    <h2 class="section-title">Built for every Nigerian taxpayer category</h2>
+    <p class="section-body">The Nigeria Tax Act 2025 treats different income types differently. TaxWise knows which rules apply to you — and enforces them accurately.</p>
+    <div class="cat-grid">
+      <div class="cat-card">
+        <div class="cat-badge cat-A">Category A</div>
+        <div class="cat-title">Salaried Employee (PAYE)</div>
+        <div class="cat-body">Your employer deducts PAYE monthly. TaxWise reconciles your annual liability, tracks all six S.30(2)(a) reliefs, and flags any balance due or refund owed by 31 March.</div>
+        <div class="cat-tags"><span class="cat-tag">PAYE reconciliation</span><span class="cat-tag">Annual return</span><span class="cat-tag">Rent relief</span></div>
+      </div>
+      <div class="cat-card">
+        <div class="cat-badge cat-B">Category B</div>
+        <div class="cat-title">Employee — No PAYE Deducted</div>
+        <div class="cat-body">Your employer pays you gross. You owe the full PIT directly to your SIRS. TaxWise computes your liability, tracks it monthly, and reminds you to self-assess by 31 March.</div>
+        <div class="cat-tags"><span class="cat-tag">Self-assessment</span><span class="cat-tag">Minimum tax</span><span class="cat-tag">SIRS filing</span></div>
+      </div>
+      <div class="cat-card">
+        <div class="cat-badge cat-C">Category C</div>
+        <div class="cat-title">Self-Employed / Freelancer</div>
+        <div class="cat-body">Tax on net profit — revenue minus wholly-and-exclusively incurred expenses. WHT from clients is a credit. TaxWise handles the business expense separation and minimum tax rule.</div>
+        <div class="cat-tags"><span class="cat-tag">Net profit tax</span><span class="cat-tag">WHT credits</span><span class="cat-tag">VAT if &gt;₦50m</span><span class="cat-tag">Capital allowances</span></div>
+      </div>
+      <div class="cat-card">
+        <div class="cat-badge cat-D">Category D</div>
+        <div class="cat-title">Mixed — Salary + Side Income</div>
+        <div class="cat-body">PAYE on salary, plus tax on freelance fees, rental income, or investments. All streams aggregated. TaxWise computes the consolidated return and tracks WHT credits from every payer.</div>
+        <div class="cat-tags"><span class="cat-tag">All income streams</span><span class="cat-tag">PAYE credit</span><span class="cat-tag">Business deductions</span><span class="cat-tag">Self-assessment</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PRICING -->
+<section class="pricing" id="pricing">
+  <div class="container" style="text-align:center;">
+    <div class="section-eyebrow">Pricing</div>
+    <h2 class="section-title">Less than one hour with an accountant</h2>
+
+    <div class="pricing-toggle">
+      <button class="toggle-btn active" onclick="setPricing('monthly')">Monthly</button>
+      <button class="toggle-btn" onclick="setPricing('yearly')">Yearly <span class="price-save">Save 2 months</span></button>
+    </div>
+
+    <div class="pricing-grid">
+      <div class="price-card">
+        <div class="price-tag">INDIVIDUAL</div>
+        <div class="price-name">Personal</div>
+        <p style="font-size:12px;color:rgba(255,255,255,.4);margin-bottom:8px;">For employed & self-employed individuals</p>
+        <div class="price-amount" id="ind-price">₦2,500<span>/month</span></div>
+        <div class="price-yearly" id="ind-yearly">or ₦25,000/year — save ₦5,000</div>
+        <ul class="price-features">
+          <li>All 6 tax heads — PIT, VAT, WHT, PAYE, CGT</li>
+          <li>AI bank statement import (10/month)</li>
+          <li>Annual Tax Summary PDF</li>
+          <li>NRS Rev360 + SIRS filing exports</li>
+          <li>AI Tax Agent — ask anything</li>
+          <li>Smart import clarification</li>
+          <li>14-day free trial included</li>
+        </ul>
+        <a href="https://etukudoubong.github.io/taxwise-nigeria" class="price-btn price-btn-ghost">Start Free Trial</a>
+      </div>
+      <div class="price-card featured">
+        <div class="price-tag">BUSINESS</div>
+        <div class="price-name">Company</div>
+        <p style="font-size:12px;color:rgba(0,0,0,.4);margin-bottom:8px;">For SMEs, limited companies & sole traders</p>
+        <div class="price-amount" id="co-price">₦5,000<span>/month</span></div>
+        <div class="price-yearly" id="co-yearly">or ₦50,000/year — save ₦10,000</div>
+        <ul class="price-features">
+          <li>Everything in Personal</li>
+          <li>CIT with capital allowances register</li>
+          <li>AI bank statement import (30/month)</li>
+          <li>Multi-user access with RBAC</li>
+          <li>Staff invite system</li>
+          <li>VAT output/input schedules</li>
+          <li>PAYE remittance for all 36 SIRS</li>
+        </ul>
+        <a href="https://etukudoubong.github.io/taxwise-nigeria" class="price-btn">Start Free Trial</a>
+      </div>
+    </div>
+    <p class="price-trial">14-day free trial · No credit card required · Cancel any time</p>
+  </div>
+</section>
+
+<!-- TESTIMONIALS -->
+<section class="testimonials">
+  <div class="container">
+    <div class="section-eyebrow">Beta Users</div>
+    <h2 class="section-title">What our early users say</h2>
+    <div class="testimonial-grid">
+      <div class="testimonial">
+        <div class="t-stars">★★★★★</div>
+        <p class="t-text">"I didn't know I had WHT credits sitting unused. TaxWise found ₦340,000 in credits from client payments I'd been ignoring. That's my tax sorted for the year."</p>
+        <div class="t-author">
+          <div class="t-avatar">AO</div>
+          <div><div class="t-name">Adaobi O.</div><div class="t-role">Management Consultant, Lagos</div></div>
+        </div>
+      </div>
+      <div class="testimonial">
+        <div class="t-stars">★★★★★</div>
+        <p class="t-text">"My bank statement import took 4 minutes. It correctly flagged my drawings as non-deductible, classified my office rent as business expense, and separated my stamp duties automatically."</p>
+        <div class="t-author">
+          <div class="t-avatar">BU</div>
+          <div><div class="t-name">Babatunde U.</div><div class="t-role">Small Business Owner, Abuja</div></div>
+        </div>
+      </div>
+      <div class="testimonial">
+        <div class="t-stars">★★★★★</div>
+        <p class="t-text">"As a doctor with a salary and a private practice, my tax was always confusing. TaxWise handles both income streams correctly and tells me exactly what I owe and where to pay it."</p>
+        <div class="t-author">
+          <div class="t-avatar">CN</div>
+          <div><div class="t-name">Dr. Chioma N.</div><div class="t-role">Medical Doctor, Port Harcourt</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section class="faq">
+  <div class="container">
+    <div class="section-eyebrow">Questions</div>
+    <h2 class="section-title">Frequently asked</h2>
+    <div class="faq-list">
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          Is TaxWise a filing platform? Can it file my returns?
+          <span class="faq-icon">+</span>
+        </button>
+        <div class="faq-a">TaxWise is a <strong>preparation and tracking tool</strong>, not a filing platform. It computes your tax, organises your schedules, and produces export files formatted for NRS Rev360 and each SIRS portal — but the actual submission is done by you on those portals. Think of TaxWise as the accountant who prepares everything; you walk it to the counter.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          Which Nigerian banks does TaxWise support?
+          <span class="faq-icon">+</span>
+        </button>
+        <div class="faq-a">All 35 CBN-licensed banks are supported for manual import. AI extraction has specific handling for GTBank, Access Bank, UBA, Zenith, First Bank, FCMB, Stanbic IBTC, Polaris, Sterling, Kuda, OPay, PalmPay and Moniepoint. For any bank, Excel download is faster and more reliable than PDF.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          How does TaxWise handle my bank password-protected PDFs?
+          <span class="faq-icon">+</span>
+        </button>
+        <div class="faq-a">GTBank PDFs are protected by your date of birth (DDMMYYYY format). Access Bank uses the last 4 digits of your registered phone number. UBA uses a combination. TaxWise shows you the exact password instructions for your bank so you can unlock the PDF before uploading — or just download as Excel instead, which has no password.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          Is my financial data safe?
+          <span class="faq-icon">+</span>
+        </button>
+        <div class="faq-a">TaxWise stores your data in Supabase (PostgreSQL) with row-level security — only you can see your transactions. Your bank statements are sent to AI for extraction and are never stored — only the classified transaction data is saved. TaxWise cannot access your bank account, move money, or change any banking settings.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          Which tax law is TaxWise based on?
+          <span class="faq-icon">+</span>
+        </button>
+        <div class="faq-a">TaxWise is built on the <strong>Nigeria Tax Act 2025 (No. 3)</strong>, the <strong>Tax Administration Act 2025 (No. 5)</strong>, and the <strong>Nigeria Revenue Service Establishment Act 2025 (No. 4)</strong> — the three landmark tax reform laws signed in 2025. All computations, rates, exemptions, reliefs, and filing deadlines reflect these current laws.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          How much does TaxWise cost after the trial?
+          <span class="faq-icon">+</span>
+        </button>
+        <div class="faq-a">₦2,500/month for individuals (or ₦25,000/year — saving two months). ₦5,000/month for businesses (or ₦50,000/year). Additional team members can be added at ₦30,000/user/year. There is no charge during the 14-day free trial and no card is required to start.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA FOOTER -->
+<section class="cta-footer">
+  <div class="container">
+    <h2>Stop guessing.<br><span>Know your tax.</span></h2>
+    <p>14-day free trial. No credit card. Cancel any time.</p>
+    <a href="https://etukudoubong.github.io/taxwise-nigeria" class="btn-primary" style="display:inline-block;">Start Free Trial — It's Free</a>
+  </div>
+</section>
+
+<div class="footer-bar">
+  <div>TaxWise Nigeria &bull; Built on Nigeria Tax Act 2025 (No.3), TAA 2025 (No.5) &bull; <a href="https://etukudoubong.github.io/taxwise-nigeria">Open App</a></div>
+  <div style="margin-top:4px;">TaxWise is a tax preparation and tracking tool, not a licensed tax adviser. Consult a registered tax consultant for binding advice.</div>
+</div>
+
+<script>
+// ── Tax meter animation ──
+(function(){
+  const el = document.getElementById('meterValue');
+  const target = 847200000; // ₦847.2m
+  const duration = 2800;
+  const start = Date.now();
+  const fmt = n => '₦' + Math.round(n).toLocaleString('en-NG');
+  function tick(){
+    const elapsed = Date.now() - start;
+    const progress = Math.min(elapsed / duration, 1);
+    const ease = 1 - Math.pow(1 - progress, 3);
+    el.textContent = fmt(target * ease);
+    if(progress < 1) requestAnimationFrame(tick);
+  }
+  // Start when visible
+  const obs = new IntersectionObserver(entries => {
+    if(entries[0].isIntersecting){ tick(); obs.disconnect(); }
+  });
+  obs.observe(el);
+})();
+
+// ── Feature tabs ──
+function showFeatures(tab){
+  document.querySelectorAll('.feature-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.cat-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('panel-' + tab).classList.add('active');
+  event.target.classList.add('active');
+}
+
+// ── Pricing toggle ──
+function setPricing(mode){
+  document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  if(mode === 'yearly'){
+    document.getElementById('ind-price').innerHTML = '₦25,000<span>/year</span>';
+    document.getElementById('ind-yearly').textContent = 'equivalent to ₦2,083/month — save ₦5,000';
+    document.getElementById('co-price').innerHTML = '₦50,000<span>/year</span>';
+    document.getElementById('co-yearly').textContent = 'equivalent to ₦4,167/month — save ₦10,000';
+  } else {
+    document.getElementById('ind-price').innerHTML = '₦2,500<span>/month</span>';
+    document.getElementById('ind-yearly').textContent = 'or ₦25,000/year — save ₦5,000';
+    document.getElementById('co-price').innerHTML = '₦5,000<span>/month</span>';
+    document.getElementById('co-yearly').textContent = 'or ₦50,000/year — save ₦10,000';
+  }
+}
+
+// ── FAQ accordion ──
+function toggleFaq(btn){
+  const item = btn.closest('.faq-item');
+  const isOpen = item.classList.contains('open');
+  document.querySelectorAll('.faq-item').forEach(i => i.classList.remove('open'));
+  if(!isOpen) item.classList.add('open');
+}
+</script>
+</body>
+</html>

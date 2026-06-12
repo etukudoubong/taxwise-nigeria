@@ -6157,6 +6157,186 @@ function applyImportRules(transactions, ownAccounts=[], importRules=[]){
   });
 }
 
+// ── Smart Clarification Engine — Option 3 ────────────────────────────────────
+// Runs after applyImportRules. Adds needsClarification + question to ambiguous
+// transactions for Cat C (self-employed) and D (mixed income) taxpayers.
+// High-confidence items pass through unchanged.
+function applySmartFlags(transactions, empCategory){
+  if(empCategory!=="C" && empCategory!=="D") return transactions; // A, B, E: no clarification needed
+
+  // Keywords for patterns that need clarification
+  const DRAWINGS = /drawing|personal withdrawal|owner.*withdraw|transfer to self|self.*transfer|atm cash|cash withdrawal|withdrawal.*personal|personal.*draw/i;
+  const SALARY_IN = /salary|salari|wage|payroll|employment income|monthly pay|net pay/i;
+  const FAMILY_TRANSFER = /mum|mummy|mom|dad|daddy|father|mother|brother|sister|wife|husband|spouse|family|uncle|aunty|aunt|child|son|daughter|gift from|gift to/i;
+  const LOAN_IN = /loan received|loan credit|loan from|borrowed from|overdraft credit|facility/i;
+  const LOAN_OUT = /loan repayment|loan payment|loan debit|repay.*loan|overdraft repayment|emi|instalment/i;
+  const DUAL_USE = /fuel|petrol|diesel|airtime|data bundle|phone bill|internet|broadband|electricity|generator|gen|diesel|home.*rent|rent.*home|personal.*rent/i;
+  const CAPITAL_BUY = /laptop|computer|phone|iphone|samsung|device|printer|scanner|vehicle|car|motorcycle|generator.*purchase|equipment.*purchase|furniture.*purchase/i;
+  const CASH_IN_GENERIC = /cash deposit|cash lodgement|over the counter|otc deposit|teller deposit/i;
+  const PERSONAL_EXPENSE = /supermarket|grocery|groceries|clothing|clothes|restaurant|eatery|fastfood|fast food|pharmacy|hospital.*personal|school fees|electricity.*home|cable tv|netflix|dstv|gotv|cinema|salon|barber|laundry/i;
+  const RENT_OUT = /rent paid|rent payment|house rent|apartment rent|office rent|shop rent/i;
+
+  return transactions.map(t=>{
+    const d = (t.desc||"").toLowerCase();
+    const isIncome = t.type==="income";
+    const isExpense = t.type==="expense";
+
+    // Already flagged by own-account rule or user rule — skip
+    if(t.autoRule) return t;
+
+    // ── INCOME CLARIFICATIONS ─────────────────────────────────────────────────
+
+    // Salary credit: for Cat D — already taxed via PAYE, not business income
+    if(isIncome && SALARY_IN.test(d) && empCategory==="D"){
+      return {...t,
+        needsClarification:true,
+        clarificationQ:"Is this your employment salary (already taxed via PAYE)?",
+        clarificationOpts:[
+          {label:"Yes — employment salary (PAYE already deducted)", taxAllowable:false, taxStream:"employment", included:true, autoRule:"Salary — PAYE already deducted at source"},
+          {label:"No — freelance/business income (not salary)", taxAllowable:true, taxStream:"business", included:true},
+        ],
+        confidence:"low",
+      };
+    }
+
+    // Cash deposits — ambiguous: business income or personal funds?
+    if(isIncome && CASH_IN_GENERIC.test(d)){
+      return {...t,
+        needsClarification:true,
+        clarificationQ:"What is the source of this cash deposit?",
+        clarificationOpts:[
+          {label:"Business income / client payment", taxAllowable:true, taxStream:"business", included:true},
+          {label:"Personal savings / family support", taxAllowable:false, taxStream:"personal", included:false, autoRule:"Personal funds — not taxable income"},
+          {label:"Loan received", taxAllowable:false, taxStream:"loan", included:false, autoRule:"Loan receipt — not taxable income"},
+        ],
+        confidence:"low",
+      };
+    }
+
+    // Loan receipts — never income
+    if(isIncome && LOAN_IN.test(d)){
+      return {...t,
+        needsClarification:false,
+        taxAllowable:false,
+        taxStream:"loan",
+        included:false,
+        autoRule:"Loan receipt — not taxable income (liability, not income)",
+        confidence:"high",
+      };
+    }
+
+    // Family transfers in — not income
+    if(isIncome && FAMILY_TRANSFER.test(d)){
+      return {...t,
+        needsClarification:false,
+        taxAllowable:false,
+        taxStream:"personal",
+        included:false,
+        autoRule:"Family/personal transfer — not taxable income",
+        confidence:"high",
+      };
+    }
+
+    // ── EXPENSE CLARIFICATIONS ────────────────────────────────────────────────
+
+    // Drawings / personal withdrawals — never deductible
+    if(isExpense && DRAWINGS.test(d)){
+      return {...t,
+        needsClarification:false,
+        taxAllowable:false,
+        taxStream:"drawings",
+        included:true,
+        autoRule:"Owner drawings — not a deductible expense",
+        confidence:"high",
+      };
+    }
+
+    // Loan repayments — principal not deductible, interest is
+    if(isExpense && LOAN_OUT.test(d)){
+      return {...t,
+        needsClarification:true,
+        clarificationQ:"Is this a loan repayment? If so, only the interest portion is tax-deductible.",
+        clarificationOpts:[
+          {label:"Full principal repayment (no interest component)", taxAllowable:false, taxStream:"loan", autoRule:"Loan principal repayment — not deductible"},
+          {label:"Interest-only payment", taxAllowable:true, taxStream:"business", autoRule:"Loan interest — deductible"},
+          {label:"Combined principal + interest — I will split manually", taxAllowable:false, taxStream:"loan", confidence:"low", autoRule:"Loan repayment — split principal/interest manually"},
+        ],
+        confidence:"low",
+      };
+    }
+
+    // Capital purchases — should go to asset register, not as expense
+    if(isExpense && CAPITAL_BUY.test(d) && t.amount>50000){
+      return {...t,
+        needsClarification:true,
+        clarificationQ:"This looks like a capital purchase (useful life > 1 year). It should go on the Asset Register, not as an expense.",
+        clarificationOpts:[
+          {label:"Yes — add to Asset Register (capital allowances will apply)", type:"asset", taxAllowable:false, taxStream:"capital", autoRule:"Capital asset — move to Asset Register"},
+          {label:"No — consumable item (used up within the year)", taxAllowable:true, taxStream:"business"},
+          {label:"Personal purchase — not business-related", taxAllowable:false, taxStream:"personal", included:false, autoRule:"Personal capital item — not deductible"},
+        ],
+        confidence:"low",
+      };
+    }
+
+    // Dual-use expenses — fuel, phone, internet, electricity
+    if(isExpense && DUAL_USE.test(d)){
+      return {...t,
+        needsClarification:true,
+        clarificationQ:"This expense may be partly personal and partly business. What percentage was for business?",
+        clarificationOpts:[
+          {label:"100% business use", taxAllowable:true, taxStream:"business", businessPct:100},
+          {label:"~75% business, ~25% personal", taxAllowable:true, taxStream:"mixed", businessPct:75, autoRule:"75% business use — partial deduction"},
+          {label:"~50% business, ~50% personal", taxAllowable:true, taxStream:"mixed", businessPct:50, autoRule:"50% business use — partial deduction"},
+          {label:"Mostly personal use", taxAllowable:false, taxStream:"personal", included:false, autoRule:"Personal use — not deductible"},
+        ],
+        confidence:"low",
+      };
+    }
+
+    // Personal expenses — not deductible
+    if(isExpense && PERSONAL_EXPENSE.test(d)){
+      return {...t,
+        needsClarification:true,
+        clarificationQ:"This looks like a personal expense. Is it related to your business?",
+        clarificationOpts:[
+          {label:"Personal — not related to business", taxAllowable:false, taxStream:"personal", included:false, autoRule:"Personal expense — not deductible"},
+          {label:"Business-related (e.g. client entertainment, staff welfare)", taxAllowable:true, taxStream:"business"},
+        ],
+        confidence:"low",
+      };
+    }
+
+    // Rent paid — for Cat C/D: is this business premises rent or personal home rent?
+    if(isExpense && RENT_OUT.test(d) && !t.autoRule){
+      return {...t,
+        needsClarification:true,
+        clarificationQ:"Is this rent for your business premises or your personal home?",
+        clarificationOpts:[
+          {label:"Business premises — fully deductible", taxAllowable:true, taxStream:"business", autoRule:"Business rent — deductible (WHT applies)"},
+          {label:"Personal home rent — not deductible (but qualifies for rent relief)", taxAllowable:false, taxStream:"personal", autoRule:"Personal rent — not deductible (use rent relief in PIT calculator)"},
+          {label:"Home office (dual-use) — partially deductible", taxAllowable:true, taxStream:"mixed", businessPct:30, autoRule:"Home office — 30% business apportionment"},
+        ],
+        confidence:"low",
+      };
+    }
+
+    // Family transfers out — not deductible
+    if(isExpense && FAMILY_TRANSFER.test(d)){
+      return {...t,
+        needsClarification:false,
+        taxAllowable:false,
+        taxStream:"personal",
+        included:false,
+        autoRule:"Personal/family transfer — not a deductible business expense",
+        confidence:"high",
+      };
+    }
+
+    return t;
+  });
+}
+
 function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, onBack, ownAccounts=[], importRules=[], sub, setSub}){
   const [mode, setMode]         = useState("select");
   const [rows, setRows]         = useState([]);
@@ -6540,7 +6720,8 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       };
     }).filter(t=>t.amount>0);
     const rulesApplied2 = applyImportRules(formatted, ownAccounts, importRules);
-    setPreview(rulesApplied2);
+    const smartFlagged2 = applySmartFlags(rulesApplied2, profile?.empCategory||"A");
+    setPreview(smartFlagged2);
     setProcessing(false);
     setMode("review");
   };
@@ -6624,7 +6805,8 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       `Try widening the range or clearing the filter.`
     );
     const rulesApplied = applyImportRules(rangeFiltered, ownAccounts, importRules);
-    setPreview(rulesApplied);
+    const smartFlagged = applySmartFlags(rulesApplied, profile?.empCategory||"A");
+    setPreview(smartFlagged);
     setMode("review");
   };
 
@@ -6663,65 +6845,201 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
   );
 
   // ── REVIEW ──
-  if(mode==="review") return(
-    <div style={{paddingBottom:100}}>
-      <Hdr title="Review Transactions" onBack={()=>setMode(fileType==="pdf"?"select":"mapping")}
-        right={<button className="btn-sm btn-sm-blue" onClick={()=>setPreview(p=>p.map(t=>({...t,included:t.amount>0})))}>All</button>}/>
-      <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,padding:"16px",color:"#fff"}}>
-        <div style={{fontSize:10,opacity:.6,letterSpacing:".1em",marginBottom:4}}>{fileName.toUpperCase()}</div>
-        <div style={{fontSize:24,fontWeight:800}}>{preview.length} transactions found</div>
-        <div style={{fontSize:12,opacity:.65,marginTop:4}}>
-          {preview.filter(t=>t.included).length} selected · {preview.filter(t=>!t.taxAllowable).length} non-deductible unchecked
+  if(mode==="review"){
+    const needsQ = preview.filter(t=>t.needsClarification);
+    const cleared = preview.filter(t=>!t.needsClarification);
+    const [reviewTab, setReviewTab] = React.useState(needsQ.length>0?"clarify":"confirmed");
+
+    const resolveItem = (i, opt) => {
+      setPreview(p=>p.map((t,j)=>{
+        if(j!==i) return t;
+        const base = {...t, needsClarification:false, autoRule:opt.autoRule||t.autoRule,
+          confidence:"high"};
+        if(opt.taxAllowable!=null) base.taxAllowable = opt.taxAllowable;
+        if(opt.taxStream) base.taxStream = opt.taxStream;
+        if(opt.included!=null) base.included = opt.included;
+        if(opt.type) base.type = opt.type;
+        if(opt.businessPct!=null){
+          base.amount = Math.round(t.amount*(opt.businessPct/100));
+          base.autoRule = (opt.autoRule||"")+" ("+opt.businessPct+"% of "+fmt(t.amount)+")";
+        }
+        return base;
+      }));
+    };
+
+    const resolveAll = (opt) => {
+      setPreview(p=>p.map((t,i)=>{
+        if(!t.needsClarification) return t;
+        const base={...t,needsClarification:false,autoRule:opt.autoRule||t.autoRule,confidence:"high"};
+        if(opt.taxAllowable!=null) base.taxAllowable=opt.taxAllowable;
+        if(opt.taxStream) base.taxStream=opt.taxStream;
+        if(opt.included!=null) base.included=opt.included;
+        return base;
+      }));
+    };
+
+    return(
+      <div style={{paddingBottom:100}}>
+        <Hdr title="Review Transactions" onBack={()=>setMode(fileType==="pdf"?"select":"mapping")}
+          right={<button className="btn-sm btn-sm-blue" onClick={()=>setPreview(p=>p.map(t=>({...t,included:t.amount>0})))}>All</button>}/>
+
+        {/* Hero summary */}
+        <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,padding:"14px 16px",color:"#fff"}}>
+          <div style={{fontSize:10,opacity:.6,letterSpacing:".1em",marginBottom:3}}>{fileName.toUpperCase()}</div>
+          <div style={{fontSize:22,fontWeight:800}}>{preview.length} transactions found</div>
+          <div style={{display:"flex",gap:12,marginTop:8,flexWrap:"wrap"}}>
+            {needsQ.length>0&&<div style={{background:"rgba(251,191,36,.2)",border:"1px solid rgba(251,191,36,.4)",borderRadius:8,padding:"4px 10px",fontSize:11,fontWeight:700,color:"#FCD34D"}}>⚠ {needsQ.length} need your input</div>}
+            <div style={{background:"rgba(255,255,255,.12)",borderRadius:8,padding:"4px 10px",fontSize:11,color:"rgba(255,255,255,.7)"}}>✓ {cleared.filter(t=>t.included).length} confirmed</div>
+            <div style={{background:"rgba(255,255,255,.08)",borderRadius:8,padding:"4px 10px",fontSize:11,color:"rgba(255,255,255,.5)"}}>✗ {preview.filter(t=>!t.included&&!t.needsClarification).length} excluded</div>
+          </div>
         </div>
-      </div>
-      <div style={{padding:"12px 12px 0"}}>
-        {preview.filter(t=>!t.taxAllowable).length>0&&(
-          <div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:10,
-            padding:"10px 12px",marginBottom:12,fontSize:11,color:"#DC2626",lineHeight:1.6}}>
-            ⚠ <strong>{preview.filter(t=>!t.taxAllowable).length} non-deductible items</strong> unchecked automatically. Check manually only if needed for accounting records.
+
+        {/* Tabs — only show clarify tab if there are items needing it */}
+        {needsQ.length>0&&(
+          <div style={{display:"flex",background:"#F8FAFC",borderBottom:"1px solid #E2E8F0"}}>
+            <button onClick={()=>setReviewTab("clarify")}
+              style={{flex:1,padding:"11px",fontSize:12,fontWeight:700,border:"none",
+                background:"none",cursor:"pointer",fontFamily:"inherit",
+                color:reviewTab==="clarify"?"#D97706":"#94A3B8",
+                borderBottom:reviewTab==="clarify"?"3px solid #D97706":"3px solid transparent"}}>
+              ⚠ Needs Input ({needsQ.length})
+            </button>
+            <button onClick={()=>setReviewTab("confirmed")}
+              style={{flex:1,padding:"11px",fontSize:12,fontWeight:700,border:"none",
+                background:"none",cursor:"pointer",fontFamily:"inherit",
+                color:reviewTab==="confirmed"?C.blue:"#94A3B8",
+                borderBottom:reviewTab==="confirmed"?`3px solid ${C.blue}`:"3px solid transparent"}}>
+              All Transactions ({preview.length})
+            </button>
           </div>
         )}
-        {preview.map((t,i)=>(
-          <div key={t.id} style={{background:"#fff",
-            border:`1.5px solid ${t.included?(t.type==="income"?C.green:C.border):C.border}`,
-            borderRadius:10,padding:"10px 12px",marginBottom:6,
-            display:"flex",gap:10,alignItems:"flex-start",opacity:t.included?1:0.5}}>
-            <input type="checkbox" checked={!!t.included}
-              onChange={()=>setPreview(p=>p.map((x,j)=>j===i?{...x,included:!x.included}:x))}
-              style={{marginTop:3,accentColor:C.blue,width:16,height:16,flexShrink:0}}/>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:3}}>
-                <div style={{fontSize:12,fontWeight:600,color:C.ink,flex:1,marginRight:8,lineHeight:1.3}}>{t.desc}</div>
-                <div style={{fontSize:13,fontWeight:700,flexShrink:0,
-                  color:t.type==="income"?C.green:C.red}}>
-                  {t.type==="income"?"+":"-"}{fmt(t.amount)}
+
+        <div style={{padding:"12px 12px 0"}}>
+
+          {/* ── CLARIFICATION TAB ── */}
+          {reviewTab==="clarify"&&needsQ.length>0&&(
+            <>
+              <div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:10,
+                padding:"10px 12px",marginBottom:12,fontSize:11,color:"#92400E",lineHeight:1.6}}>
+                <strong>TaxWise needs your help on {needsQ.length} transactions.</strong> Because you use a single account for personal and business use, some items need clarification to compute your tax accurately. Tap an answer for each one.
+              </div>
+
+              {preview.map((t,i)=>{
+                if(!t.needsClarification) return null;
+                return(
+                  <div key={t.id} style={{background:"#fff",border:"2px solid #FDE68A",
+                    borderRadius:12,padding:"12px",marginBottom:10}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                      <div style={{flex:1,marginRight:8}}>
+                        <div style={{fontSize:12,fontWeight:700,color:C.ink,lineHeight:1.3}}>{t.desc}</div>
+                        <div style={{fontSize:10,color:C.muted,marginTop:2}}>{t.date} · <span style={{fontWeight:700,color:t.type==="income"?C.green:C.red}}>{t.type==="income"?"+":"-"}{fmt(t.amount)}</span></div>
+                      </div>
+                      <span style={{fontSize:9,background:"#FEF3C7",color:"#92400E",padding:"2px 7px",borderRadius:100,fontWeight:700,flexShrink:0}}>NEEDS INPUT</span>
+                    </div>
+                    <div style={{fontSize:11,fontWeight:600,color:"#78350F",marginBottom:8,lineHeight:1.4}}>
+                      {t.clarificationQ}
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      {(t.clarificationOpts||[]).map((opt,oi)=>(
+                        <button key={oi} onClick={()=>resolveItem(i,opt)}
+                          style={{padding:"9px 12px",textAlign:"left",background:"#F8FAFC",
+                            border:"1.5px solid #E2E8F0",borderRadius:8,fontSize:11,
+                            fontWeight:600,color:C.ink,cursor:"pointer",fontFamily:"inherit",
+                            lineHeight:1.4}}>
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {needsQ.length>2&&(
+                <div style={{marginTop:4,marginBottom:12}}>
+                  <div style={{fontSize:10,color:C.muted,marginBottom:6,textAlign:"center"}}>Or resolve all remaining at once:</div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>resolveAll({taxAllowable:true,taxStream:"business",included:true,autoRule:"Batch: business income/expense"})}
+                      style={{flex:1,padding:"9px",fontSize:11,fontWeight:700,background:C.greenBg,
+                        border:`1.5px solid ${C.green}30`,borderRadius:8,color:C.green,
+                        cursor:"pointer",fontFamily:"inherit"}}>
+                      All Business
+                    </button>
+                    <button onClick={()=>resolveAll({taxAllowable:false,taxStream:"personal",included:false,autoRule:"Batch: personal"})}
+                      style={{flex:1,padding:"9px",fontSize:11,fontWeight:700,background:"#F1F5F9",
+                        border:"1.5px solid #E2E8F0",borderRadius:8,color:C.slate,
+                        cursor:"pointer",fontFamily:"inherit"}}>
+                      All Personal
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                <span style={{fontSize:10,color:C.muted}}>{t.date}</span>
-                <span style={{fontSize:9,padding:"1px 6px",borderRadius:100,fontWeight:700,
-                  background:t.type==="income"?C.greenBg:C.redBg,
-                  color:t.type==="income"?C.green:C.red}}>{t.type.toUpperCase()}</span>
-                {!t.taxAllowable&&<span style={{fontSize:9,background:"#FEF2F2",color:"#DC2626",
-                  padding:"1px 6px",borderRadius:100,fontWeight:700}}>⚠ NOT DEDUCTIBLE</span>}
-                {t.autoRule&&<span style={{fontSize:9,background:"#EDE9FE",color:"#7C3AED",
-                  padding:"1px 6px",borderRadius:100,fontWeight:700}}>⚙ {t.autoRule}</span>}
-                {t.type==="transfer"&&<span style={{fontSize:9,background:"#F1F5F9",color:C.muted,
-                  padding:"1px 6px",borderRadius:100,fontWeight:700}}>↔ TRANSFER</span>}
-              </div>
+              )}
+            </>
+          )}
+
+          {/* ── ALL TRANSACTIONS TAB ── */}
+          {(reviewTab==="confirmed"||needsQ.length===0)&&(
+            <>
+              {preview.filter(t=>!t.taxAllowable&&!t.needsClarification).length>0&&(
+                <div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:10,
+                  padding:"10px 12px",marginBottom:12,fontSize:11,color:"#DC2626",lineHeight:1.6}}>
+                  ⚠ <strong>{preview.filter(t=>!t.taxAllowable).length} non-deductible items</strong> unchecked automatically.
+                </div>
+              )}
+              {preview.map((t,i)=>(
+                <div key={t.id} style={{background:"#fff",
+                  border:`1.5px solid ${t.needsClarification?"#FDE68A":t.included?(t.type==="income"?C.green:C.border):C.border}`,
+                  borderRadius:10,padding:"10px 12px",marginBottom:6,
+                  display:"flex",gap:10,alignItems:"flex-start",
+                  opacity:t.included?1:t.needsClarification?1:0.5}}>
+                  <input type="checkbox" checked={!!t.included}
+                    onChange={()=>setPreview(p=>p.map((x,j)=>j===i?{...x,included:!x.included}:x))}
+                    style={{marginTop:3,accentColor:C.blue,width:16,height:16,flexShrink:0}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:3}}>
+                      <div style={{fontSize:12,fontWeight:600,color:C.ink,flex:1,marginRight:8,lineHeight:1.3}}>{t.desc}</div>
+                      <div style={{fontSize:13,fontWeight:700,flexShrink:0,
+                        color:t.type==="income"?C.green:C.red}}>
+                        {t.type==="income"?"+":"-"}{fmt(t.amount)}
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                      <span style={{fontSize:10,color:C.muted}}>{t.date}</span>
+                      <span style={{fontSize:9,padding:"1px 6px",borderRadius:100,fontWeight:700,
+                        background:t.type==="income"?C.greenBg:C.redBg,
+                        color:t.type==="income"?C.green:C.red}}>{t.type.toUpperCase()}</span>
+                      {t.needsClarification&&<span style={{fontSize:9,background:"#FEF3C7",color:"#92400E",padding:"1px 6px",borderRadius:100,fontWeight:700}}>⚠ NEEDS INPUT</span>}
+                      {!t.taxAllowable&&!t.needsClarification&&<span style={{fontSize:9,background:"#FEF2F2",color:"#DC2626",padding:"1px 6px",borderRadius:100,fontWeight:700}}>⚠ NOT DEDUCTIBLE</span>}
+                      {t.autoRule&&<span style={{fontSize:9,background:"#EDE9FE",color:"#7C3AED",padding:"1px 6px",borderRadius:100,fontWeight:700}}>⚙ {t.autoRule.slice(0,30)}</span>}
+                      {t.taxStream==="employment"&&<span style={{fontSize:9,background:C.blueLight,color:C.blue,padding:"1px 6px",borderRadius:100,fontWeight:700}}>💼 SALARY (PAYE)</span>}
+                      {t.taxStream==="drawings"&&<span style={{fontSize:9,background:"#FEF2F2",color:"#DC2626",padding:"1px 6px",borderRadius:100,fontWeight:700}}>✗ DRAWINGS</span>}
+                      {t.taxStream==="personal"&&<span style={{fontSize:9,background:"#F8FAFC",color:C.muted,padding:"1px 6px",borderRadius:100,fontWeight:700}}>✗ PERSONAL</span>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {needsQ.length>0&&reviewTab==="clarify"&&(
+            <div style={{marginTop:8,padding:"10px 12px",background:"#F8FAFC",borderRadius:8,
+              fontSize:11,color:C.muted,textAlign:"center"}}>
+              Resolve all items above, then switch to "All Transactions" to confirm and import.
             </div>
-          </div>
-        ))}
-        <button onClick={postSelected} disabled={!preview.filter(t=>t.included).length}
-          style={{width:"100%",padding:"14px",
-            background:!preview.filter(t=>t.included).length?"#94A3B8":C.green,
-            border:"none",borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,
-            cursor:"pointer",fontFamily:"inherit",marginTop:4,boxShadow:"0 6px 0 #047857"}}>
-          Import {preview.filter(t=>t.included).length} Transactions →
-        </button>
+          )}
+
+          {(reviewTab==="confirmed"||needsQ.length===0)&&(
+            <button onClick={postSelected} disabled={!preview.filter(t=>t.included).length}
+              style={{width:"100%",padding:"14px",
+                background:!preview.filter(t=>t.included).length?"#94A3B8":C.green,
+                border:"none",borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,
+                cursor:"pointer",fontFamily:"inherit",marginTop:4,boxShadow:"0 6px 0 #047857"}}>
+              Import {preview.filter(t=>t.included).length} Transactions →
+            </button>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
 
   // ── COLUMN MAPPING ──
   if(mode==="mapping") return(
@@ -7349,7 +7667,8 @@ Return ONLY the JSON array, no other text or markdown.`;
       };
     });
 
-    setExtracted(formatted);
+    const smartDoc = applySmartFlags(formatted, profile?.empCategory||"A");
+    setExtracted(smartDoc);
     setMode("review");
   };
 

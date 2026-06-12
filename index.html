@@ -6161,8 +6161,66 @@ function applyImportRules(transactions, ownAccounts=[], importRules=[]){
 // Runs after applyImportRules. Adds needsClarification + question to ambiguous
 // transactions for Cat C (self-employed) and D (mixed income) taxpayers.
 // High-confidence items pass through unchanged.
-function applySmartFlags(transactions, empCategory){
-  if(empCategory!=="C" && empCategory!=="D") return transactions; // A, B, E: no clarification needed
+function applySmartFlags(transactions, empCategory, profile){
+  // ── Pass 1: Bank charge classification — runs for ALL categories ─────────────
+  // We call the module-level helper if available, otherwise use inline logic here
+  // (applySmartFlags is global, classifyBankCharge is inside CSVUploadScreen scope)
+  // So we duplicate the core bank charge logic here for global use:
+  const isCompany = profile?.mode === "company";
+  const isVatReg = isCompany || profile?.vatRegistered === "yes";
+  const isCatCD = empCategory==="C" || empCategory==="D";
+
+  const getBankChargeRule = (desc) => {
+    const d = String(desc||"").toLowerCase();
+    if(/stamp.?duty|sd.charge|fgn.stamp|electronic.transfer.levy|etl/i.test(d))
+      return{taxAllowable:false,vatFlag:false,category:"stamp_duty",autoRule:"Stamp Duty — government levy, never deductible"};
+    if(/vat.on|vat charge|vat.fee|vat.debit|value.added.tax.*bank/i.test(d))
+      return isVatReg
+        ?{taxAllowable:true,vatFlag:true,category:"bank_charge",autoRule:"Input VAT on bank charge — recoverable (NTA 2025)"}
+        :{taxAllowable:false,vatFlag:false,category:"bank_charge",autoRule:"VAT on bank charge — not recoverable (not VAT-registered)"};
+    if(/account.maint|amf|maintenance.fee|monthly.fee.*account|quarterly.fee.*account|acct.maint/i.test(d))
+      return isCompany
+        ?{taxAllowable:true,vatFlag:false,category:"bank_charge",autoRule:"AMF — deductible for company"}
+        :{taxAllowable:false,vatFlag:false,category:"bank_charge",autoRule:"AMF — not deductible (individual mixed account)"};
+    if(/sms.alert|sms.charge|sms.fee|sms.service|ussd.fee|ussd.charge|notification.fee|alert.fee/i.test(d))
+      return isCompany
+        ?{taxAllowable:true,vatFlag:false,category:"bank_charge",autoRule:"SMS/USSD fee — deductible for company"}
+        :{taxAllowable:false,vatFlag:false,category:"bank_charge",autoRule:"SMS/USSD fee — not deductible for individuals"};
+    if(/nips.fee|nibss.fee|transfer.fee|transfer.charge|interbank.fee|rtgs.fee|swift.fee|neft.fee|online.transfer.fee|funds.transfer.charge/i.test(d))
+      return isCompany
+        ?{taxAllowable:true,vatFlag:false,category:"bank_charge",autoRule:"Transfer fee — deductible for company"}
+        :{taxAllowable:false,vatFlag:false,category:"bank_charge",autoRule:"Transfer fee — not deductible for individuals"};
+    if(/card.maint|card.fee|card.renewal|card.issuance|debit.card.fee|atm.card.fee|card.charge/i.test(d))
+      return isCompany
+        ?{taxAllowable:true,vatFlag:false,category:"bank_charge",autoRule:"Card fee — deductible for company"}
+        :{taxAllowable:false,vatFlag:false,category:"bank_charge",autoRule:"Card fee — not deductible for individuals"};
+    if(/cot|commission.on.turnover/i.test(d))
+      return isCompany
+        ?{taxAllowable:true,vatFlag:false,category:"bank_charge",autoRule:"COT — deductible for company"}
+        :{taxAllowable:false,vatFlag:false,category:"bank_charge",autoRule:"COT — not deductible for individuals"};
+    if(/cheque.book|chequebook|returned.cheque|dishonour.fee|unpaid.cheque/i.test(d))
+      return isCompany
+        ?{taxAllowable:true,vatFlag:false,category:"bank_charge",autoRule:"Cheque fee — deductible for company"}
+        :{taxAllowable:false,vatFlag:false,category:"bank_charge",autoRule:"Cheque fee — not deductible for individuals"};
+    if(/loan.interest|interest.charge|overdraft.interest|facility.interest|interest.on.loan/i.test(d))
+      return (isCompany||isCatCD)
+        ?{taxAllowable:true,vatFlag:false,category:"bank_charge",autoRule:"Loan interest — deductible if on business loan"}
+        :{taxAllowable:false,vatFlag:false,category:"bank_charge",autoRule:"Loan interest — not deductible (personal loan)"};
+    return null;
+  };
+
+  // Apply bank charge rules to all transactions regardless of category
+  transactions = transactions.map(t=>{
+    if(t.autoRule) return t; // already resolved by own-account or user rule
+    const rule = getBankChargeRule(t.desc||"");
+    if(!rule) return t;
+    return{...t, taxAllowable:rule.taxAllowable, vatFlag:rule.vatFlag,
+      category:rule.category, autoRule:rule.autoRule,
+      included: rule.taxAllowable ? t.included : false,
+      needsClarification:false}; // bank charges are deterministic — no clarification needed
+  });
+
+  if(empCategory!=="C" && empCategory!=="D") return transactions; // A, B, E: no further clarification needed
 
   // Keywords for patterns that need clarification
   const DRAWINGS = /drawing|personal withdrawal|owner.*withdraw|transfer to self|self.*transfer|atm cash|cash withdrawal|withdrawal.*personal|personal.*draw/i;
@@ -6420,6 +6478,112 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
   const getNonAllowable = (desc) =>
     /loan.*principal|capital repayment|depreciation|income tax|penalty.*tax|drawing|dividend paid/i.test(String(desc));
 
+  // Bank charge classifier — returns {taxAllowable, vatFlag, category, autoRule}
+  // Rules: stamp duty = never deductible for anyone
+  // AMF, SMS, USSD, transfer fees = deductible for companies only; non-deductible for individuals
+  // VAT on bank charges = recoverable input VAT for VAT-registered entities only
+  const classifyBankCharge = (desc) => {
+    const d = String(desc).toLowerCase();
+    const isCompany = profile?.mode === "company";
+    const isVatRegistered = isCompany || profile?.vatRegistered === "yes";
+    const isCatCD = profile?.empCategory === "C" || profile?.empCategory === "D";
+
+    // ── Stamp Duty — NEVER deductible for anyone (government levy, not business expense)
+    if(/stamp.?duty|sd.charge|fgn.stamp|electronic.transfer.levy|etl/i.test(d)){
+      return{taxAllowable:false, vatFlag:false, category:"stamp_duty",
+        autoRule:"Stamp Duty — government levy, not deductible for any taxpayer (Stamp Duties Act / Finance Act)"};
+    }
+
+    // ── VAT on bank charges — only recoverable if VAT-registered
+    if(/vat.on|vat charge|vat.fee|vat.debit|7\.5.*fee|value.added.tax.*bank/i.test(d)){
+      if(isVatRegistered){
+        return{taxAllowable:true, vatFlag:true, category:"bank_charge",
+          autoRule:isCompany?"Input VAT on bank charge — recoverable (NTA 2025 expanded input VAT)":"Input VAT — recoverable if VAT-registered (NTA 2025 Ch.Four Sec 59)"};
+      }
+      return{taxAllowable:false, vatFlag:false, category:"bank_charge",
+        autoRule:"VAT on bank charge — not recoverable (not VAT-registered)"};
+    }
+
+    // ── Account Maintenance Fee — deductible only for companies (dedicated business account)
+    // For individuals (all categories A-D): mixed-use account fails wholly-and-exclusively test
+    if(/account.maint|amf|maintenance.fee|monthly.fee|quarterly.fee|annual.fee.*account|acct.maint/i.test(d)){
+      if(isCompany){
+        return{taxAllowable:true, vatFlag:false, category:"bank_charge",
+          autoRule:"AMF — deductible overhead for company (business account)"};
+      }
+      return{taxAllowable:false, vatFlag:false, category:"bank_charge",
+        autoRule:"AMF — not deductible for individuals (mixed personal-business account fails wholly-and-exclusively test)"};
+    }
+
+    // ── SMS Alert / USSD / Notification fees
+    if(/sms.alert|sms.charge|sms.fee|sms.service|ussd.fee|ussd.charge|\*737|\*822|\*919|notification.fee|alert.fee/i.test(d)){
+      if(isCompany){
+        return{taxAllowable:true, vatFlag:false, category:"bank_charge",
+          autoRule:"SMS/USSD charge — deductible overhead for company"};
+      }
+      return{taxAllowable:false, vatFlag:false, category:"bank_charge",
+        autoRule:"SMS/USSD charge — not deductible for individuals"};
+    }
+
+    // ── Transfer fees (NIPS, NIBSS, interbank, RTGS, SWIFT)
+    if(/nips.fee|nibss.fee|transfer.fee|transfer.charge|interbank.fee|rtgs.fee|swift.fee|neft.fee|online.transfer.fee|e-transfer.fee|funds.transfer.charge/i.test(d)){
+      if(isCompany){
+        return{taxAllowable:true, vatFlag:false, category:"bank_charge",
+          autoRule:"Transfer fee — deductible overhead for company"};
+      }
+      if(isCatCD){
+        // For self-employed: only deductible if the transfer was for a business payment
+        // We can't know without context — flag for clarification
+        return{taxAllowable:false, vatFlag:false, category:"bank_charge",
+          autoRule:"Transfer fee — not deductible (personal account; business transfers: claim on business expense if directly linked)"};
+      }
+      return{taxAllowable:false, vatFlag:false, category:"bank_charge",
+        autoRule:"Transfer fee — not deductible for employed individuals"};
+    }
+
+    // ── Card maintenance / issuance / renewal fees
+    if(/card.maint|card.fee|card.renewal|card.issuance|debit.card.fee|atm.card.fee|card.charge/i.test(d)){
+      if(isCompany){
+        return{taxAllowable:true, vatFlag:false, category:"bank_charge",
+          autoRule:"Card fee — deductible overhead for company"};
+      }
+      return{taxAllowable:false, vatFlag:false, category:"bank_charge",
+        autoRule:"Card fee — not deductible for individuals"};
+    }
+
+    // ── COT (Commission on Turnover) — deductible for companies only
+    if(/cot|commission.on.turnover/i.test(d)){
+      if(isCompany){
+        return{taxAllowable:true, vatFlag:false, category:"bank_charge",
+          autoRule:"COT — deductible overhead for company"};
+      }
+      return{taxAllowable:false, vatFlag:false, category:"bank_charge",
+        autoRule:"COT — not deductible for individuals (mixed account)"};
+    }
+
+    // ── Cheque book / returned cheque fees
+    if(/cheque.book|chequebook|returned.cheque|dishonour.fee|unpaid.cheque|clg.chq.returned/i.test(d)){
+      if(isCompany){
+        return{taxAllowable:true, vatFlag:false, category:"bank_charge",
+          autoRule:"Cheque fee — deductible overhead for company"};
+      }
+      return{taxAllowable:false, vatFlag:false, category:"bank_charge",
+        autoRule:"Cheque fee — not deductible for individuals"};
+    }
+
+    // ── Interest on bank loans — interest deductible (business/investment loans), principal not
+    if(/loan.interest|interest.charge|overdraft.interest|facility.interest|interest.on.loan|accrued.interest/i.test(d)){
+      if(isCompany || isCatCD){
+        return{taxAllowable:true, vatFlag:false, category:"bank_charge",
+          autoRule:"Loan interest — deductible if on a business loan (NTA 2025 Ch.Two Pt.II)"};
+      }
+      return{taxAllowable:false, vatFlag:false, category:"bank_charge",
+        autoRule:"Loan interest — not deductible for employed individuals (personal loan)"};
+    }
+
+    return null; // not a recognised bank charge pattern — let existing classification stand
+  };
+
   // ── File handler ─────────────────────────────────────────────────────────────
   const handleFile = async (e) => {
     const file = e.target.files[0];
@@ -6613,7 +6777,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
         ? "\n\nDATE RANGE FILTER: Only extract transactions between " + (dateFrom||"the beginning") + " and " + (dateTo||"the end of the document") + ". Skip transactions outside this range."
         : "";
 
-      const sysPrompt = "You are a Nigerian bank statement processor. Extract ALL transactions from the pages provided." + dateRangeNote + "\n\nNIGERIAN BANK DATE FORMATS (convert to YYYY-MM-DD):\n04-JAN-16 = 2016-01-04. 04JAN16 = 2016-01-04. DD/MM/YYYY. 2-digit year: add 2000 if < 50.\n\nPOLARIS / SKYE BANK (EntryDate | Details | ValueDate | Debit | Credit | Balance):\nUse EntryDate as date. Ignore ValueDate. Skip Balance B/F and Totals rows.\n\nMULTI-PAGE RULE: Page 1 has column headers. Apply same structure to all pages.\n\nReturn ONLY a JSON array. Each object must have:\ndate (YYYY-MM-DD), desc (max 80 chars), amount (positive), type (income|expense|asset),\ncategory (revenue|salary|rent|professional_fee|supplies|utility|tax_payment|bank_charge|stamp_duty|loan|other),\ntaxAllowable (bool), confidence (high|medium|low), vatFlag (bool), whtFlag (bool).\n\nNON-ALLOWABLE: stamp duty, maintenance fee, loan principal, income tax, drawings, dividends.\nReturn ONLY the JSON array.";
+      const sysPrompt = "You are a Nigerian bank statement processor. Extract ALL transactions from the pages provided." + dateRangeNote + "\n\nNIGERIAN BANK DATE FORMATS (convert to YYYY-MM-DD):\n04-JAN-16 = 2016-01-04. 04JAN16 = 2016-01-04. DD/MM/YYYY. 2-digit year: add 2000 if < 50.\n\nPOLARIS / SKYE BANK (EntryDate | Details | ValueDate | Debit | Credit | Balance):\nUse EntryDate as date. Ignore ValueDate. Skip Balance B/F and Totals rows.\n\nMULTI-PAGE RULE: Page 1 has column headers. Apply same structure to all pages.\n\nReturn ONLY a JSON array. Each object must have:\ndate (YYYY-MM-DD), desc (max 80 chars), amount (positive), type (income|expense|asset),\ncategory (revenue|salary|rent|professional_fee|supplies|utility|tax_payment|bank_charge|stamp_duty|loan|other),\ntaxAllowable (bool), confidence (high|medium|low), vatFlag (bool), whtFlag (bool).\n\nNON-ALLOWABLE (taxAllowable=false): stamp duty, all maintenance fees, loan principal, income tax, drawings, dividends.\n\n\nBANK CHARGES — CRITICAL TAXABILITY RULES (NTA 2025):\nThese rules are NON-NEGOTIABLE regardless of what the narration implies:\n1. STAMP DUTY / FGN STAMP / SD CHARGE / ELECTRONIC TRANSFER LEVY: taxAllowable=false, category=stamp_duty. ALWAYS. For every taxpayer, every category. It is a government levy, never a deductible expense.\n2. VAT ON AMF / VAT ON CHARGES / VAT CHARGE: taxAllowable=false for individuals and companies below VAT threshold. taxAllowable=true, vatFlag=true only for VAT-registered entities (large companies). When in doubt: taxAllowable=false.\n3. ACCOUNT MAINTENANCE FEE / AMF / MONTHLY FEE / QUARTERLY FEE: taxAllowable=false for individuals (all categories A-D). taxAllowable=true only for companies (business account). Personal account AMF is not deductible.\n4. SMS ALERT / SMS CHARGE / USSD FEE: taxAllowable=false for individuals. taxAllowable=true for companies only.\n5. NIPS FEE / NIBSS FEE / TRANSFER FEE / TRANSFER CHARGE / INTERBANK FEE: taxAllowable=false for individuals. taxAllowable=true for companies.\n6. CARD MAINTENANCE / CARD FEE / DEBIT CARD FEE: taxAllowable=false for individuals. taxAllowable=true for companies.\n7. COT / COMMISSION ON TURNOVER: taxAllowable=false for individuals. taxAllowable=true for companies.\n8. LOAN INTEREST / OVERDRAFT INTEREST: taxAllowable=true for self-employed (Cat C) and mixed-income (Cat D) individuals IF the loan is for business. taxAllowable=false for salaried employees (Cat A/B). taxAllowable=true for companies.\n9. LOAN PRINCIPAL REPAYMENT: taxAllowable=false for ALL taxpayers without exception. It is a balance sheet movement, not a P&L expense.\nTAXPAYER TYPE FOR THIS IMPORT: " + (profile?.mode==="company"?"COMPANY":"INDIVIDUAL Cat "+(profile?.empCategory||"A")) + "\nReturn ONLY the JSON array.";
 
       for(let b = 0; b < numBatches; b++){
         const bStart = b * BATCH;
@@ -6673,7 +6837,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       const dateRangeNote2 = (dateFrom||dateTo)
         ? "\n\nDATE RANGE FILTER: Only extract transactions between " + (dateFrom||"the beginning") + " and " + (dateTo||"end") + "."
         : "";
-      const imgSystemPrompt = "You are a Nigerian bank statement processor. Extract ALL transactions from this image." + dateRangeNote2 + "\n\nReturn ONLY a JSON array. Each item: date (YYYY-MM-DD), desc (max 80 chars), amount (positive number), type (income|expense|asset), category (revenue|salary|rent|professional_fee|supplies|utility|tax_payment|bank_charge|stamp_duty|loan|other), taxAllowable (bool), confidence (high|medium|low), vatFlag (bool), whtFlag (bool). No preamble, no markdown.";
+      const imgSystemPrompt = "You are a Nigerian bank statement processor. Extract ALL transactions from this image." + dateRangeNote2 + "\n\nReturn ONLY a JSON array. Each item: date (YYYY-MM-DD), desc (max 80 chars), amount (positive), type (income|expense|asset), category (revenue|salary|rent|professional_fee|supplies|utility|tax_payment|bank_charge|stamp_duty|loan|other), taxAllowable (bool), confidence (high|medium|low), vatFlag (bool), whtFlag (bool).\n\nNON-ALLOWABLE: stamp duty, maintenance fees, loan principal, income tax, drawings.\n\n\nBANK CHARGES — CRITICAL TAXABILITY RULES (NTA 2025):\n1. STAMP DUTY / FGN STAMP / SD: taxAllowable=false, category=stamp_duty. Always, for everyone.\n2. VAT ON CHARGES: taxAllowable=false unless entity is VAT-registered. When in doubt: false.\n3. AMF / ACCOUNT MAINTENANCE / MONTHLY FEE: taxAllowable=false for individuals. true only for companies.\n4. SMS ALERT / USSD FEE: taxAllowable=false for individuals. true for companies.\n5. TRANSFER FEE / NIPS / NIBSS / INTERBANK: taxAllowable=false for individuals. true for companies.\n6. CARD FEE / CARD MAINTENANCE: taxAllowable=false for individuals. true for companies.\n7. COT: taxAllowable=false for individuals. true for companies.\n8. LOAN INTEREST: taxAllowable=true for business loans (Cat C/D and companies). false for personal loans.\n9. LOAN PRINCIPAL: taxAllowable=false for ALL taxpayers.\nTAXPAYER: " + (profile?.mode==="company"?"COMPANY":"INDIVIDUAL Cat "+(profile?.empCategory||"A")) + "\nReturn ONLY the JSON array.";
       setProgress("AI is analysing image…");
       const imgRes = await fetch(SUPA_URL+"/functions/v1/taxwise-ai",{
         method:"POST",
@@ -6706,21 +6870,29 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
 
     const formatted = txnList.map((t,i)=>{
       const nonAllowable = t.taxAllowable===false||getNonAllowable(t.desc||"");
+      const bankCharge = classifyBankCharge(t.desc||"");
+      const baseVatFlag = (profile?.mode==="company"||(profile?.vatRegistered==="yes"&&(profile?.empCategory==="C"||profile?.empCategory==="D"))) ? !!t.vatFlag : false;
+      const finalTaxAllowable = bankCharge ? bankCharge.taxAllowable : !nonAllowable;
+      const finalVatFlag = bankCharge ? bankCharge.vatFlag : baseVatFlag;
+      const finalCategory = bankCharge ? bankCharge.category : (t.category||"other");
+      const finalAutoRule = bankCharge ? bankCharge.autoRule : null;
       return {
         id:`import_${Date.now()}_${i}`,
         date:parseDate(t.date), desc:t.desc||"Transaction",
         amount:Math.abs(parseFloat(t.amount)||0),
         type:t.type==="asset"?"asset":t.type==="income"?"income":"expense",
         source:"import", compliance_status:"pending",
-        taxAllowable:!nonAllowable, included:!nonAllowable&&Math.abs(parseFloat(t.amount)||0)>0,
+        taxAllowable:finalTaxAllowable,
+        included:finalTaxAllowable&&Math.abs(parseFloat(t.amount)||0)>0,
         confidence:t.confidence||"medium",
-        vatFlag: (profile?.mode==="company"||(profile?.vatRegistered==="yes"&&(profile?.empCategory==="C"||profile?.empCategory==="D"))) ? !!t.vatFlag : false,
+        vatFlag:finalVatFlag,
         whtFlag:!!t.whtFlag,
-        assetClass:t.assetClass||"other", category:t.category||"other",
+        assetClass:t.assetClass||"other", category:finalCategory,
+        ...(finalAutoRule?{autoRule:finalAutoRule}:{}),
       };
     }).filter(t=>t.amount>0);
     const rulesApplied2 = applyImportRules(formatted, ownAccounts, importRules);
-    const smartFlagged2 = applySmartFlags(rulesApplied2, profile?.empCategory||"A");
+    const smartFlagged2 = applySmartFlags(rulesApplied2, profile?.empCategory||"A", profile);
     setPreview(smartFlagged2);
     setProcessing(false);
     setMode("review");
@@ -6781,9 +6953,14 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       }
 
       const nonAllowable = getNonAllowable(desc);
+      const bankCharge2 = classifyBankCharge(desc);
+      const ta = bankCharge2 ? bankCharge2.taxAllowable : !nonAllowable;
       return {id:`csv_${Date.now()}_${i}`,date,desc,amount,type,
         source:"import",compliance_status:"pending",
-        taxAllowable:!nonAllowable, included:amount>0&&!nonAllowable};
+        category:bankCharge2?bankCharge2.category:"other",
+        taxAllowable:ta, included:amount>0&&ta,
+        vatFlag:bankCharge2?bankCharge2.vatFlag:false,
+        ...(bankCharge2?.autoRule?{autoRule:bankCharge2.autoRule}:{})};
     }).filter(t=>t&&t.amount>0);
 
     if(!mapped.length) return setError(
@@ -6805,7 +6982,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       `Try widening the range or clearing the filter.`
     );
     const rulesApplied = applyImportRules(rangeFiltered, ownAccounts, importRules);
-    const smartFlagged = applySmartFlags(rulesApplied, profile?.empCategory||"A");
+    const smartFlagged = applySmartFlags(rulesApplied, profile?.empCategory||"A", profile);
     setPreview(smartFlagged);
     setMode("review");
   };
@@ -7573,7 +7750,7 @@ ${isCompany ? `- This taxpayer is a COMPANY. Flag vatFlag=true on all transactio
 - Only flag vatFlag=true if this is clearly a high-turnover self-employed person (turnover > ₦50m/year) who is VAT-registered.
 - When in doubt: vatFlag=false for individuals.`}
 
-Return ONLY the JSON array, no other text or markdown.`;
+BANK CHARGES — MANDATORY RULES (NTA 2025):\nSTAMP DUTY/FGN STAMP/SD/ELECTRONIC TRANSFER LEVY: taxAllowable=false, category=stamp_duty. Always.\nVAT ON AMF/VAT ON CHARGES: taxAllowable=false unless VAT-registered. Default false.\nAMF/ACCOUNT MAINTENANCE/MONTHLY FEE/QUARTERLY FEE: taxAllowable=false for individuals (ALL categories). true only for companies.\nSMS ALERT/SMS CHARGE/USSD FEE: taxAllowable=false for individuals. true for companies.\nNIPS FEE/NIBSS FEE/TRANSFER FEE/TRANSFER CHARGE/INTERBANK FEE: taxAllowable=false for individuals. true for companies.\nCARD MAINTENANCE/CARD FEE/DEBIT CARD FEE: taxAllowable=false for individuals. true for companies.\nCOT/COMMISSION ON TURNOVER: taxAllowable=false for individuals. true for companies.\nLOAN INTEREST: taxAllowable=true for business loans (self-employed, mixed-income, companies). false for personal loans.\nLOAN PRINCIPAL: taxAllowable=false for ALL taxpayers.\nTAXPAYER TYPE: ${isCompany?"COMPANY":"INDIVIDUAL Cat "+(profile?.empCategory||"A")}\n\nReturn ONLY the JSON array, no other text or markdown.`;
 
     const contentBlocks = [];
     pages.forEach((p) => {
@@ -7667,7 +7844,7 @@ Return ONLY the JSON array, no other text or markdown.`;
       };
     });
 
-    const smartDoc = applySmartFlags(formatted, profile?.empCategory||"A");
+    const smartDoc = applySmartFlags(formatted, profile?.empCategory||"A", profile);
     setExtracted(smartDoc);
     setMode("review");
   };

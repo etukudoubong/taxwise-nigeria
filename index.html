@@ -480,39 +480,102 @@ function pitBands(taxable){
 }
 
 function computePIT(p){
+  // Shorthand: pass a number = annual gross, returns simple PIT
   if(typeof p==="number"){
-    if(p/12<=70000)return{annual:0,monthly:0,eff:0,exempt:true};
+    if(p/12<=70000) return{annual:0,monthly:0,eff:0,exempt:true};
     const t=pitBands(Math.max(0,p-p*.08));
     return{annual:t,monthly:t/12,eff:p?(t/p)*100:0,exempt:false};
   }
   const{
-    category="A", monthlyIncome=0, payeDeducted=0, otherIncome=0,
-    rentPaid=0,            // S.30(2)(a)(vi) 20% of annual rent, max 500k
-    nhfAnnual=0,           // S.30(2)(a)(i)  NHF contributions
-    nhisAnnual=0,          // S.30(2)(a)(ii) NHIS contributions
-    pensionAnnual=0,       // S.30(2)(a)(iii) employee pension 8%
-    lifeInsAnnual=0,       // S.30(2)(a)(v)  life insurance premiums
-    housingLoanInterest=0, // S.30(2)(a)(iv) interest on owner-occupied housing loan
+    // ── Category ────────────────────────────────────────────────────────────
+    // A = Employed, employer deducts PAYE
+    // B = Employed, employer does NOT deduct PAYE (self-pay full liability)
+    // C = Self-employed / sole trader / freelancer / business owner
+    // D = Mixed: salary + freelance/rental/other income
+    // E = Minimum wage (<=70k/month, fully exempt)
+    category="A",
+    // ── Income inputs ────────────────────────────────────────────────────────
+    monthlyIncome=0,        // Cat A,B,D: gross monthly salary from employer
+    payeDeducted=0,         // Cat A,D: monthly PAYE deducted by employer
+    otherIncome=0,          // Cat C: annual gross business/freelance revenue
+                             // Cat D: annual freelance/rental/other income
+    businessExpenses=0,     // Cat C,D: wholly-and-exclusively business expenses
+                             // (deductible against business income only, not salary)
+    // ── S.30(2)(a) Personal Relief Deductions (all categories except E) ─────
+    rentPaid=0,             // S.30(2)(a)(vi) — 20% of annual rent, capped ₦500k
+    nhfAnnual=0,            // S.30(2)(a)(i)  — NHF contributions
+    nhisAnnual=0,           // S.30(2)(a)(ii) — NHIS contributions
+    pensionAnnual=0,        // S.30(2)(a)(iii) — employee 8% of basic+housing+transport
+    lifeInsAnnual=0,        // S.30(2)(a)(v)  — life insurance premiums
+    housingLoanInterest=0,  // S.30(2)(a)(iv) — interest on owner-occupied housing loan only
   }=p;
-  const annual=monthlyIncome*12, total=annual+otherIncome;
-  if(category==="E"||monthlyIncome<=70000&&otherIncome===0)
-    return{annual:0,monthly:0,eff:0,exempt:true,totalGross:total,payeCredit:payeDeducted*12,balanceDue:0,refund:payeDeducted*12};
-  const rentRelief        = Math.min(rentPaid*.2, 500000);
-  const pensionDeduction  = pensionAnnual>0 ? pensionAnnual : annual*.08;
+
+  // ── Derived income bases by category ────────────────────────────────────────
+  const annualSalary = (category==="C") ? 0 : monthlyIncome*12;
+  // Cat C: taxable business income = revenue minus allowable expenses
+  // Cat D: employment income + (other income minus business expenses)
+  // Cat A,B: salary only (no business expenses deductible)
+  const netBusinessIncome = Math.max(0, otherIncome - businessExpenses);
+  const totalGross = annualSalary + otherIncome; // before business expense deduction
+  const totalIncome = annualSalary + netBusinessIncome; // after business expense deduction
+
+  // ── Exemption check ──────────────────────────────────────────────────────────
+  if(category==="E" || (monthlyIncome<=70000 && otherIncome===0 && businessExpenses===0))
+    return{annual:0,monthly:0,eff:0,exempt:true,totalGross,payeCredit:payeDeducted*12,balanceDue:0,refund:payeDeducted*12,category};
+
+  // ── S.30(2)(a) Personal relief deductions — applied once against TOTAL income ─
+  // Pension: use actual if provided, else estimate 8% of annual salary component only
+  const pensionDeduction  = pensionAnnual>0 ? pensionAnnual : annualSalary*.08;
   const nhfDeduction      = nhfAnnual;
   const nhisDeduction     = nhisAnnual;
   const lifeInsDeduction  = lifeInsAnnual;
   const housingDeduction  = housingLoanInterest;
+  const rentRelief        = Math.min(rentPaid*.2, 500000); // S.30(2)(a)(vi) cap ₦500k
   const totalDeductions   = pensionDeduction+nhfDeduction+nhisDeduction+lifeInsDeduction+housingDeduction+rentRelief;
-  const taxable = Math.max(0, total-totalDeductions);
-  const tax     = pitBands(taxable);
-  const bal     = tax-(payeDeducted*12);
+
+  // ── Chargeable income ────────────────────────────────────────────────────────
+  // Business expenses are deducted at the income level (before reliefs).
+  // Personal reliefs (S.30(2)(a)) are then deducted from the reduced income.
+  const chargeableIncome = Math.max(0, totalIncome - totalDeductions);
+
+  // ── PIT via progressive bands ────────────────────────────────────────────────
+  const tax = pitBands(chargeableIncome);
+
+  // ── Minimum tax rule — NTA 2025 ──────────────────────────────────────────────
+  // If computed PIT < 1% of total gross income, pay 1% of gross as minimum tax.
+  // Does NOT apply to Cat A (employer handles this in payroll) or Cat E (exempt).
+  const minTax = (category==="A") ? 0 : Math.max(0, totalGross * 0.01);
+  const finalTax = Math.max(tax, minTax);
+  const minimumTaxApplies = finalTax > tax && minTax > 0;
+
+  // ── PAYE credit ──────────────────────────────────────────────────────────────
+  // Cat A,D: employer deducted PAYE — credited against annual liability
+  // Cat B,C: no PAYE credit — full amount self-paid directly to SIRS
+  const payeCredit = (category==="A"||category==="D") ? payeDeducted*12 : 0;
+  const bal = finalTax - payeCredit;
+
+  // ── WHT credits note ─────────────────────────────────────────────────────────
+  // Cat C,D: WHT deducted by clients from freelance/professional fees/rent
+  // reduces the balance. Not computed here (comes from journal) — flagged for user.
+  const whtCreditApplicable = (category==="C"||category==="D");
+
   return{
-    annual:tax, monthly:tax/12, eff:total?(tax/total)*100:0, exempt:false,
-    totalGross:total, taxable,
-    payeCredit:payeDeducted*12, balanceDue:Math.max(0,bal), refund:Math.max(0,-bal),
-    category, rentRelief, pensionDeduction, nhfDeduction, nhisDeduction,
-    lifeInsDeduction, housingDeduction, totalDeductions,
+    annual:finalTax, monthly:finalTax/12, eff:totalGross?(finalTax/totalGross)*100:0,
+    exempt:false, category,
+    // Income breakdown
+    totalGross, annualSalary, netBusinessIncome, businessExpenses,
+    totalIncome, chargeableIncome,
+    // Deductions
+    pensionDeduction, nhfDeduction, nhisDeduction, lifeInsDeduction,
+    housingDeduction, rentRelief, totalDeductions,
+    // Tax computation
+    pitBeforeMinTax:tax, minimumTaxApplies, minTax,
+    // Credits and balance
+    payeCredit, balanceDue:Math.max(0,bal), refund:Math.max(0,-bal),
+    whtCreditApplicable,
+    // Filing guidance
+    selfAssessment: category!=="A", // B,C,D must self-file
+    filingDeadline: "31 March", filingAuthority: "SIRS (state of residence)",
   };
 }
 
@@ -1200,6 +1263,7 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
               <option value="E">Minimum wage earner (≤ ₦70,000 per month)</option>
             </select>
           </div>
+          {/* Category-specific follow-up questions */}
           {data.empCategory==="A"&&(
             <div className="fg">
               <label className="lbl">WHICH DEDUCTIONS DOES YOUR EMPLOYER MAKE? (select all that apply)</label>
@@ -1213,6 +1277,46 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
                 <div key={d.k} onClick={()=>toggleED(d.k)} style={{display:"flex",gap:12,alignItems:"flex-start",padding:"10px 0",borderBottom:"1px solid #F1F5F9",cursor:"pointer"}}>
                   <div className={"ds-check"+(data.employerDeductions[d.k]?" on":"")}>
                     {data.employerDeductions[d.k]&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+                  </div>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{d.label}</div>
+                    <div style={{fontSize:11,color:C.muted,marginTop:1}}>{d.note}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {data.empCategory==="B"&&(
+            <div className="ibox amber" style={{marginTop:4}}>
+              <div className="ititle" style={{color:C.amber}}>⚠ No Employer PAYE Deduction</div>
+              <p style={{fontSize:12,color:C.ink,lineHeight:1.6}}>You are responsible for computing and paying your own Personal Income Tax directly to your State Internal Revenue Service (SIRS) by 31 March each year. TaxWise will track your liability and remind you of the deadline. Your employer can also be penalised by the SIRS for failing to operate PAYE.</p>
+            </div>
+          )}
+          {data.empCategory==="C"&&(
+            <div className="fg">
+              <label className="lbl">ARE YOU REGISTERED FOR VAT?</label>
+              <select className="sel" value={data.vatRegistered||"no"} onChange={e=>set("vatRegistered",e.target.value)}>
+                <option value="no">No — my annual turnover is below ₦50 million</option>
+                <option value="yes">Yes — I am VAT-registered with NRS/FIRS</option>
+                <option value="unsure">Not sure — I will check</option>
+              </select>
+              <div style={{fontSize:11,color:C.muted,marginTop:6,lineHeight:1.5}}>VAT registration is compulsory once your annual turnover exceeds ₦50 million. Below that threshold, you are fully exempt — you do not charge, collect, or remit VAT.</div>
+            </div>
+          )}
+          {data.empCategory==="D"&&(
+            <div className="fg">
+              <label className="lbl">YOUR OTHER INCOME IS FROM: (select all that apply)</label>
+              <div style={{fontSize:12,color:C.muted,marginBottom:10}}>This helps TaxWise classify your transactions correctly and flag the right tax obligations.</div>
+              {[
+                {k:"freelance", label:"Freelance / Consulting fees",  note:"WHT deducted by clients — 10%. You may have VAT obligation above ₦50m turnover."},
+                {k:"rental",    label:"Rental income",                note:"WHT deducted by tenants — 10%. Declare on annual return."},
+                {k:"dividends", label:"Dividends / Investments",      note:"WHT deducted at 10% by company paying dividends."},
+                {k:"business",  label:"Business / Trading income",    note:"Net profit after allowable expenses. Capital allowances apply to assets."},
+              ].map(d=>(
+                <div key={d.k} onClick={()=>set("otherIncomeTypes",{...(data.otherIncomeTypes||{}), [d.k]:!(data.otherIncomeTypes||{})[d.k]})}
+                  style={{display:"flex",gap:12,alignItems:"flex-start",padding:"10px 0",borderBottom:"1px solid #F1F5F9",cursor:"pointer"}}>
+                  <div className={"ds-check"+((data.otherIncomeTypes||{})[d.k]?" on":"")}>
+                    {(data.otherIncomeTypes||{})[d.k]&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
                   </div>
                   <div>
                     <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{d.label}</div>
@@ -1363,10 +1467,10 @@ function Dashboard({profile,txns,kiv,onNav}){
               v:fmt(isCompany?agg.whtOut:agg.whtIn),
               c:"#FCA5A5", nav:isCompany?"schedule_whtOut":"schedule_whtIn",
               sub:"tax only · tap for schedule"},
-            {l:isCompany?"Output VAT":"PAYE Credit",
-              v:fmt(isCompany?agg.vatOut:agg.payeIn),
+            {l:isCompany?"Output VAT":profile.empCategory==="C"?"WHT Credits":profile.empCategory==="B"?"PIT Due":"PAYE Credit",
+              v:fmt(isCompany?agg.vatOut:profile.empCategory==="B"?agg.income*.15:agg.payeIn),
               c:"#93C5FD", nav:isCompany?"schedule_vatOut":"schedule_payeIn",
-              sub:"tax only · tap for schedule"},
+              sub:isCompany?"tax only · tap for schedule":profile.empCategory==="C"?"from clients · tap for schedule":profile.empCategory==="B"?"estimate · self-pay to SIRS":"tax only · tap for schedule"},
           ].map(s=>(
             <div key={s.l} onClick={()=>s.nav&&onNav(s.nav)}
               style={{background:"rgba(255,255,255,.1)",border:`1px solid ${s.nav?"rgba(255,255,255,.25)":"rgba(255,255,255,.12)"}`,borderRadius:10,padding:"10px 12px",cursor:s.nav?"pointer":"default",position:"relative"}}>
@@ -3277,7 +3381,7 @@ function CGTPanel({cgtData,setCgtData}){
 
 function CalculateScreen({profile,onBack}){
   const[tab,setTab]=useState("pit");
-  const[pitData,setPitData]=useState({monthlyIncome:0,payeDeducted:0,otherIncome:0,rentPaid:0,nhfAnnual:0,nhisAnnual:0,pensionAnnual:0,lifeInsAnnual:0,housingLoanInterest:0,category:profile.empCategory||"A"});
+  const[pitData,setPitData]=useState({monthlyIncome:0,payeDeducted:0,otherIncome:0,businessExpenses:0,rentPaid:0,nhfAnnual:0,nhisAnnual:0,pensionAnnual:0,lifeInsAnnual:0,housingLoanInterest:0,category:profile.empCategory||"A"});
   const[whtData,setWhtData]=useState({amount:200000,type:"professional"});
   const[vatData,setVatData]=useState({amount:500000,tier:"standard"});
   const[penData,setPenData]=useState({tax:500000,days:30});
@@ -3315,9 +3419,48 @@ function CalculateScreen({profile,onBack}){
               </div>
               {pitData.category!=="E"&&(
                 <>
-                  {pitData.category!=="C"&&<div className="fg"><label className="lbl">MONTHLY SALARY (₦)</label><input className="inp" type="number" value={pitData.monthlyIncome||""} onChange={e=>setPitData(p=>({...p,monthlyIncome:parseFloat(e.target.value)||0}))}/></div>}
-                  {(pitData.category==="A"||pitData.category==="D")&&<div className="fg"><label className="lbl">MONTHLY PAYE EMPLOYER DEDUCTS (₦)</label><input className="inp" type="number" value={pitData.payeDeducted||""} onChange={e=>setPitData(p=>({...p,payeDeducted:parseFloat(e.target.value)||0}))}/></div>}
-                  {(pitData.category==="C"||pitData.category==="D")&&<div className="fg"><label className="lbl">OTHER MONTHLY INCOME — freelance/rent/dividends (₦)</label><input className="inp" type="number" value={pitData.otherIncome||""} onChange={e=>setPitData(p=>({...p,otherIncome:parseFloat(e.target.value)||0}))}/></div>}
+                  {/* ── Income inputs (vary by category) ── */}
+                  {pitData.category!=="C"&&(
+                    <div className="fg">
+                      <label className="lbl">MONTHLY GROSS SALARY (₦)</label>
+                      <input className="inp" type="number" value={pitData.monthlyIncome||""} onChange={e=>setPitData(p=>({...p,monthlyIncome:parseFloat(e.target.value)||0}))}/>
+                      {pitData.category==="B"&&<div style={{fontSize:10,color:C.amber,marginTop:4}}>Your employer does not deduct PAYE — you must pay this yourself directly to your State IRS by 31 March.</div>}
+                    </div>
+                  )}
+                  {(pitData.category==="A"||pitData.category==="D")&&(
+                    <div className="fg">
+                      <label className="lbl">MONTHLY PAYE DEDUCTED BY EMPLOYER (₦)</label>
+                      <input className="inp" type="number" value={pitData.payeDeducted||""} onChange={e=>setPitData(p=>({...p,payeDeducted:parseFloat(e.target.value)||0}))}/>
+                      <div style={{fontSize:10,color:C.muted,marginTop:4}}>This is credited against your annual liability — enter what appears on your payslip.</div>
+                    </div>
+                  )}
+                  {pitData.category==="C"&&(
+                    <div className="fg">
+                      <label className="lbl">ANNUAL GROSS BUSINESS / FREELANCE REVENUE (₦)</label>
+                      <input className="inp" type="number" value={pitData.otherIncome||""} onChange={e=>setPitData(p=>({...p,otherIncome:parseFloat(e.target.value)||0}))}/>
+                      <div style={{fontSize:10,color:C.muted,marginTop:4}}>Total revenue from all business activities before deducting any expenses.</div>
+                    </div>
+                  )}
+                  {pitData.category==="D"&&(
+                    <div className="fg">
+                      <label className="lbl">ANNUAL OTHER INCOME — freelance / rental / dividends (₦)</label>
+                      <input className="inp" type="number" value={pitData.otherIncome||""} onChange={e=>setPitData(p=>({...p,otherIncome:parseFloat(e.target.value)||0}))}/>
+                      <div style={{fontSize:10,color:C.muted,marginTop:4}}>Income outside your employment — gross, before WHT deductions.</div>
+                    </div>
+                  )}
+                  {(pitData.category==="C"||pitData.category==="D")&&(
+                    <div className="fg">
+                      <label className="lbl">
+                        {pitData.category==="C"?"ALLOWABLE BUSINESS EXPENSES (₦)":"ALLOWABLE EXPENSES ON OTHER INCOME (₦)"}
+                      </label>
+                      <input className="inp" type="number" value={pitData.businessExpenses||""} onChange={e=>setPitData(p=>({...p,businessExpenses:parseFloat(e.target.value)||0}))}/>
+                      <div style={{fontSize:10,color:C.muted,marginTop:4}}>
+                        Only expenses <strong>wholly and exclusively</strong> incurred in earning the business/other income qualify.
+                        {pitData.category==="D"&&" Do NOT include personal living expenses or expenses already covered by your employer."}
+                        {" "}Capital purchases (equipment, vehicles) go to the Asset Register — not here.
+                      </div>
+                    </div>
+                  )}
                   <div className="ibox blue" style={{marginTop:8,marginBottom:4}}>
                     <div className="ititle" style={{color:C.blue}}>ELIGIBLE DEDUCTIONS — S.30(2)(a) NTA 2025</div>
                     <p style={{fontSize:11,color:C.muted,marginBottom:0}}>Enter annual amounts. Only what you actually paid qualifies.</p>
@@ -3334,29 +3477,46 @@ function CalculateScreen({profile,onBack}){
             <div className="card">
               <div className="ctitle">RESULT</div>
               {pitR.exempt?(
-                <div className="ibox green"><div className="ititle" style={{color:C.green}}>🛡 FULLY EXEMPT</div><p style={{fontSize:12,color:C.ink}}>Minimum wage earner — no PAYE or PIT applies.</p></div>
+                <div className="ibox green"><div className="ititle" style={{color:C.green}}>🛡 FULLY EXEMPT</div><p style={{fontSize:12,color:C.ink}}>Minimum wage earner — no PAYE or PIT applies under NTA 2025.</p></div>
               ):(
                 <>
-                  {pitData.category==="A"&&<div className="ibox blue"><div className="ititle" style={{color:C.blue}}>ℹ Salary already taxed via PAYE — not taxed again</div><p style={{fontSize:12,color:C.ink}}>Only additional income outside employment creates further liability.</p></div>}
-                  <DataRow label="Total Gross Income" value={fmt(pitR.totalGross||pitData.monthlyIncome*12)}/>
-                  {pitR.pensionDeduction>0&&<DataRow label="Pension Contribution [S.30(2)(a)(iii)]" value={`-${fmt(pitR.pensionDeduction)}`} color={C.green}/>}
-                  {pitR.nhfDeduction>0&&<DataRow label="NHF Contribution [S.30(2)(a)(i)]" value={`-${fmt(pitR.nhfDeduction)}`} color={C.green}/>}
-                  {pitR.nhisDeduction>0&&<DataRow label="NHIS Contribution [S.30(2)(a)(ii)]" value={`-${fmt(pitR.nhisDeduction)}`} color={C.green}/>}
-                  {pitR.lifeInsDeduction>0&&<DataRow label="Life Insurance Premium [S.30(2)(a)(v)]" value={`-${fmt(pitR.lifeInsDeduction)}`} color={C.green}/>}
-                  {pitR.housingDeduction>0&&<DataRow label="Housing Loan Interest [S.30(2)(a)(iv)]" value={`-${fmt(pitR.housingDeduction)}`} color={C.green}/>}
-                  {pitR.rentRelief>0&&<DataRow label={`Rent Relief 20% of ${fmt(pitData.rentPaid)} [S.30(2)(a)(vi)]`} value={`-${fmt(pitR.rentRelief)}`} color={C.green}/>}
-                  {pitR.totalDeductions>0&&<DataRow label="Total Eligible Deductions" value={`-${fmt(pitR.totalDeductions)}`} color={C.green} total={true}/>}
-                  {pitR.taxable>0&&<DataRow label="Taxable (Chargeable) Income" value={fmt(pitR.taxable)}/>}
-                  <DataRow label="Annual PIT Liability" value={fmt(pitR.annual)} color={C.blue}/>
-                  <DataRow label="Monthly PAYE" value={fmt(pitR.monthly)} color={C.blue}/>
-                  <DataRow label="Effective Rate" value={`${pitR.eff?.toFixed(1)||"0"}%`} color={C.amber}/>
-                  {(pitData.category==="A"||pitData.category==="D")&&(
-                    <>
-                      <DataRow label="PAYE Credit" value={`-${fmt(pitR.payeCredit||0)}`} color={C.green}/>
-                      {pitR.balanceDue>0&&<DataRow label="BALANCE DUE" value={fmt(pitR.balanceDue)} color={C.red} total={true}/>}
-                      {pitR.refund>0&&<DataRow label="OVERPAID — REFUND DUE" value={fmt(pitR.refund)} color={C.green} total={true}/>}
-                    </>
+                  {/* Category-specific notice */}
+                  {pitData.category==="A"&&<div className="ibox blue"><div className="ititle" style={{color:C.blue}}>Category A — Employer Deducts PAYE</div><p style={{fontSize:12,color:C.ink}}>Your employer handles PAYE monthly. You still must file an annual return by 31 March to reconcile. Any underpayment or additional income must be declared.</p></div>}
+                  {pitData.category==="B"&&<div className="ibox amber"><div className="ititle" style={{color:C.amber}}>Category B — No PAYE Deducted</div><p style={{fontSize:12,color:C.ink}}>Your employer did not deduct PAYE — you are personally liable for the full amount. File self-assessment by 31 March and pay directly to your State IRS. SIRS can also pursue your employer for failing to operate PAYE.</p></div>}
+                  {pitData.category==="C"&&<div className="ibox green"><div className="ititle" style={{color:C.green}}>Category C — Self-Employed</div><p style={{fontSize:12,color:C.ink}}>Tax is on net business profit (revenue minus wholly-and-exclusively incurred expenses). File self-assessment by 31 March with your State IRS. WHT deducted by clients offsets your liability — enter it below.</p></div>}
+                  {pitData.category==="D"&&<div className="ibox blue"><div className="ititle" style={{color:C.blue}}>Category D — Mixed Income</div><p style={{fontSize:12,color:C.ink}}>All income streams are added together. Employer PAYE on salary is credited. Allowable expenses on business/freelance income reduce that income stream only. File annual self-assessment by 31 March even if fully employed.</p></div>}
+
+                  {/* Income breakdown */}
+                  {pitR.annualSalary>0&&<DataRow label="Annual Salary (Gross)" value={fmt(pitR.annualSalary)}/>}
+                  {pitR.businessExpenses>0&&<DataRow label="Less: Allowable Business Expenses" value={`-${fmt(pitR.businessExpenses)}`} color={C.green}/>}
+                  {pitR.netBusinessIncome>0&&<DataRow label={pitData.category==="C"?"Net Business Income":"Net Other Income"} value={fmt(pitR.netBusinessIncome)} color={C.blue}/>}
+                  {pitR.totalDeductions>0&&(
+                    <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:8,padding:"8px 10px",margin:"6px 0"}}>
+                      <div style={{fontSize:10,fontWeight:700,color:"#166534",marginBottom:4}}>S.30(2)(a) PERSONAL RELIEF DEDUCTIONS</div>
+                      {pitR.pensionDeduction>0&&<DataRow label="Pension [S.30(2)(a)(iii)]" value={`-${fmt(pitR.pensionDeduction)}`} color={C.green}/>}
+                      {pitR.nhfDeduction>0&&<DataRow label="NHF [S.30(2)(a)(i)]" value={`-${fmt(pitR.nhfDeduction)}`} color={C.green}/>}
+                      {pitR.nhisDeduction>0&&<DataRow label="NHIS [S.30(2)(a)(ii)]" value={`-${fmt(pitR.nhisDeduction)}`} color={C.green}/>}
+                      {pitR.lifeInsDeduction>0&&<DataRow label="Life Insurance [S.30(2)(a)(v)]" value={`-${fmt(pitR.lifeInsDeduction)}`} color={C.green}/>}
+                      {pitR.housingDeduction>0&&<DataRow label="Housing Loan Interest [S.30(2)(a)(iv)]" value={`-${fmt(pitR.housingDeduction)}`} color={C.green}/>}
+                      {pitR.rentRelief>0&&<DataRow label={`Rent Relief 20% capped ₦500k [S.30(2)(a)(vi)]`} value={`-${fmt(pitR.rentRelief)}`} color={C.green}/>}
+                      <DataRow label="Total S.30(2)(a) Deductions" value={`-${fmt(pitR.totalDeductions)}`} color={C.green} total={true}/>
+                    </div>
                   )}
+                  <DataRow label="CHARGEABLE INCOME" value={fmt(pitR.chargeableIncome)} total={true}/>
+                  <DataRow label="PIT on Chargeable Income" value={fmt(pitR.pitBeforeMinTax)} color={C.blue}/>
+                  {pitR.minimumTaxApplies&&(
+                    <div className="ibox amber" style={{margin:"6px 0"}}>
+                      <div className="ititle" style={{color:C.amber}}>Minimum Tax Applies</div>
+                      <p style={{fontSize:12,color:C.ink}}>Computed PIT ({fmt(pitR.pitBeforeMinTax)}) is less than 1% of gross income ({fmt(pitR.minTax)}). Minimum tax of {fmt(pitR.minTax)} applies under NTA 2025.</p>
+                    </div>
+                  )}
+                  <DataRow label="ANNUAL PIT LIABILITY" value={fmt(pitR.annual)} color={C.red} total={true}/>
+                  <DataRow label="Effective Tax Rate" value={`${pitR.eff?.toFixed(1)||"0"}%`} color={C.amber}/>
+                  {pitR.payeCredit>0&&<DataRow label="Less: PAYE Credit (employer deducted)" value={`-${fmt(pitR.payeCredit)}`} color={C.green}/>}
+                  {pitR.whtCreditApplicable&&<div style={{fontSize:10,color:C.blue,margin:"4px 0 8px",padding:"6px 8px",background:C.blueLight,borderRadius:6}}>ℹ WHT deducted by your clients/tenants from fees and rent reduces this balance further — check your WHT Credits schedule in Reports.</div>}
+                  {pitR.balanceDue>0&&<DataRow label="BALANCE DUE — self-pay to SIRS" value={fmt(pitR.balanceDue)} color={C.red} total={true}/>}
+                  {pitR.refund>0&&<DataRow label="OVERPAID — REFUND DUE" value={fmt(pitR.refund)} color={C.green} total={true}/>}
+                  {pitR.selfAssessment&&<div style={{fontSize:10,color:C.muted,marginTop:8,padding:"6px 8px",background:"#F8FAFC",borderRadius:6}}>Filing: Self-assessment return · 31 March · {pitR.filingAuthority}</div>}
                 </>
               )}
             </div>
@@ -3742,8 +3902,7 @@ Personal drawings/withdrawals by sole traders are NOT salary and are NOT deducti
 • Provisions: Accounting = recognise estimated liabilities. Tax = only deductible when crystallised.
 
 ── TRANSACTION SUMMARY ──
-TAXPAYER PROFILE: ${JSON.stringify({name:profile.name,mode:profile.mode,category:profile.empCategory,company:profile.companyName,sector:profile.sector})}
-Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocaleString()} | VAT est: ₦${Math.round(agg.vatPayable).toLocaleString()} | WHT: ₦${Math.round(agg.whtOut).toLocaleString()}
+TAXPAYER PROFILE:\nName: ${profile.name||"Not set"} | TIN: ${profile.tin||"Not set"} | Mode: ${profile.mode==="company"?"Company":"Individual"}\nCategory: ${profile.mode==="company"?"Company — CIT/VAT/WHT/PAYE obligations":profile.empCategory==="A"?"A: Employed — employer deducts PAYE. File annual reconciliation return by 31 March. Non-employment income must be declared.":profile.empCategory==="B"?"B: Employed — NO employer PAYE. Must self-assess and pay full PIT to SIRS by 31 March. Employer is also liable.":profile.empCategory==="C"?"C: Self-employed/freelancer. Tax on net profit after wholly-and-exclusively expenses. Minimum tax 1% gross if PIT lower. WHT from clients is a credit. VAT if turnover >\u20a650m.":profile.empCategory==="D"?"D: Mixed — salary plus freelance/rental/other. PAYE on salary credited. Allowable expenses only on business income. Must file annual self-assessment. WHT from clients/tenants is a credit.":"E: Minimum wage — fully exempt."}\nVAT: ${profile.vatRegistered==="yes"?"Registered — charges 7.5%, monthly return, remit by 21st":profile.empCategory==="C"||profile.empCategory==="D"?"Below \u20a650m — VAT exempt":"Not a VAT collector"}\nIncome: \u20a6${agg.income.toLocaleString()} | Expenses: \u20a6${agg.expenses.toLocaleString()} | Net: \u20a6${(agg.income-agg.expenses).toLocaleString()}\nWHT credits: \u20a6${Math.round(agg.whtIn).toLocaleString()} | WHT to remit: \u20a6${Math.round(agg.whtOut).toLocaleString()} | VAT payable: \u20a6${Math.round(agg.vatPayable).toLocaleString()}
 
 ── RESPONSE GUIDELINES ──
 - Always distinguish between accounting treatment and tax treatment when relevant
@@ -6375,7 +6534,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
         source:"import", compliance_status:"pending",
         taxAllowable:!nonAllowable, included:!nonAllowable&&Math.abs(parseFloat(t.amount)||0)>0,
         confidence:t.confidence||"medium",
-        vatFlag: (profile?.mode==="company") ? !!t.vatFlag : false,
+        vatFlag: (profile?.mode==="company"||(profile?.vatRegistered==="yes"&&(profile?.empCategory==="C"||profile?.empCategory==="D"))) ? !!t.vatFlag : false,
         whtFlag:!!t.whtFlag,
         assetClass:t.assetClass||"other", category:t.category||"other",
       };
@@ -7183,7 +7342,7 @@ Return ONLY the JSON array, no other text or markdown.`;
         compliance_status: "pending",
         confidence: t.confidence||"medium",
         // Individuals don't charge/collect VAT under NTA 2025 — override any AI vatFlag
-        vatFlag: isCompany ? !!t.vatFlag : false,
+        vatFlag: (isCompany||(profile?.vatRegistered==="yes"&&(profile?.empCategory==="C"||profile?.empCategory==="D"))) ? !!t.vatFlag : false,
         whtFlag: !!t.whtFlag,
         taxAllowable: !isNonAllowable,
         included: !isNonAllowable,

@@ -4026,12 +4026,29 @@ function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEdit
 
 // ── TAX SUMMARY SCREEN ────────────────────────────────────────────────────────
 function TaxSummaryScreen({txns,profile,onNav,onBack}){
-  const agg=computeAggregates(txns);
   const isCompany=profile.mode==="company";
-  const flags=txns.filter(t=>{const r=classifyTxn(t.desc,t.type);return r.compliance_required&&t.compliance_status!=="done"&&t.compliance_status!=="waived";});
-  const today=new Date().toISOString().split("T")[0];
-  const period=new Date().toLocaleDateString("en-NG",{month:"long",year:"numeric"});
   const entity=profile.companyName||profile.name||"Taxpayer";
+  const today=new Date().toISOString().split("T")[0];
+
+  // ── Year selector ────────────────────────────────────────────────────────
+  const currentYear=new Date().getFullYear();
+  // Collect all years that have transactions
+  const txnYears=Array.from(new Set(txns.map(t=>{
+    const d=new Date(t.date||"");
+    return isNaN(d.getFullYear())?null:d.getFullYear();
+  }).filter(Boolean))).sort((a,b)=>b-a);
+  if(!txnYears.includes(currentYear)) txnYears.unshift(currentYear);
+  const [selYear,setSelYear]=useState(currentYear);
+
+  // Filter transactions to selected year
+  const yearTxns=txns.filter(t=>{
+    const d=new Date(t.date||"");
+    return !isNaN(d.getFullYear())&&d.getFullYear()===selYear;
+  });
+
+  const agg=computeAggregates(yearTxns);
+  const flags=yearTxns.filter(t=>{const r=classifyTxn(t.desc,t.type);return r.compliance_required&&t.compliance_status!=="done"&&t.compliance_status!=="waived";});
+  const period=selYear.toString();
 
   // ── CSV builder — shared logic ──────────────────────────────────────────────
   function buildCSV(key, lines){
@@ -4105,8 +4122,175 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
     const blob=new Blob([combined],{type:"text/csv"});
     const url=URL.createObjectURL(blob);
     const a=document.createElement("a");
-    a.href=url; a.download=`TaxWise_AllSchedules_${today}.csv`; a.click();
+    a.href=url; a.download=`TaxWise_AllSchedules_${selYear}_${today}.csv`; a.click();
     URL.revokeObjectURL(url);
+  }
+
+  // ── Annual Tax Summary PDF generator ─────────────────────────────────────────
+  function downloadAnnualPDF(){
+    const f2=n=>"\u20A6"+Number(n||0).toLocaleString("en-NG",{minimumFractionDigits:2,maximumFractionDigits:2});
+    const totalObligations=agg.vatPayable+agg.whtOut+(isCompany?agg.payeOut+agg.estCIT:agg.payeIn);
+    const allIncome=yearTxns.filter(t=>t.type==="income"&&t.compliance_status!=="kiv").reduce((s,t)=>s+t.amount,0);
+    const allExpenses=yearTxns.filter(t=>t.type==="expense"&&t.compliance_status!=="kiv").reduce((s,t)=>s+t.amount,0);
+    const netProfit=allIncome-allExpenses;
+    const totalTxns=yearTxns.length;
+    const allowable=yearTxns.filter(t=>t.taxAllowable!==false&&t.type==="expense").reduce((s,t)=>s+t.amount,0);
+    const nonAllowable=allExpenses-allowable;
+
+    // Build schedule rows helper
+    const schedRows=(key)=>{
+      const lines=agg.schedules[key]||[];
+      if(!lines.length) return "<tr><td colspan=\"5\" style=\"text-align:center;color:#94A3B8;font-size:11px;padding:8px\">No transactions</td></tr>";
+      return lines.slice(0,50).map(l=>(
+        "<tr><td>"+l.date+"</td><td style=\"max-width:200px;overflow:hidden\">"+
+        (l.desc||"").replace(/</g,"&lt;").slice(0,60)+
+        "</td><td style=\"text-align:right\">"+f2(l.gross)+"</td><td style=\"text-align:center\">"+
+        (l.rate||"")+"</td><td style=\"text-align:right;font-weight:700\">"+f2(l.tax)+"</td></tr>"
+      )).join("")+(lines.length>50?"<tr><td colspan=\"5\" style=\"text-align:center;color:#64748B;font-size:10px\">"+(lines.length-50)+" more rows — download CSV for full list</td></tr>":"");
+    };
+    const schedTotal=(key)=>{const lines=agg.schedules[key]||[];return{gross:lines.reduce((s,l)=>s+l.gross,0),tax:lines.reduce((s,l)=>s+l.tax,0)};};
+
+    // Individual-specific sections
+    const pitSection=!isCompany?("<section><h2>PERSONAL INCOME TAX SUMMARY</h2><table><tr><td>Total Gross Income</td><td style=\"text-align:right;font-weight:700\">"+f2(allIncome)+"</td></tr><tr><td>Less: Allowable Expenses</td><td style=\"text-align:right\">"+f2(allowable)+"</td></tr><tr><td>Less: Non-Allowable Expenses</td><td style=\"text-align:right;color:#EF4444\">"+f2(nonAllowable)+" (excluded)</td></tr><tr class=\"total\"><td>Chargeable Income (estimated)</td><td style=\"text-align:right\">"+f2(Math.max(0,netProfit))+"</td></tr><tr><td>PAYE Credit (deducted by employer)</td><td style=\"text-align:right;color:#059669\">"+f2(agg.payeIn)+"</td></tr></table><p style=\"font-size:11px;color:#64748B;margin-top:8px\">Note: Use the PIT Calculator in TaxWise for exact relief deductions (NHF, NHIS, Pension, Rent Relief etc.) under Section 30(2)(a) NTA 2025. This summary uses estimated figures from your transaction data.</p></section>"):"";
+
+    const citSection=isCompany?("<section><h2>COMPANIES INCOME TAX SUMMARY</h2><table><tr><td>Total Revenue (Turnover)</td><td style=\"text-align:right;font-weight:700\">"+f2(allIncome)+"</td></tr><tr><td>Less: Allowable Expenses</td><td style=\"text-align:right\">"+f2(allowable)+"</td></tr><tr class=\"total\"><td>Estimated Taxable Profit</td><td style=\"text-align:right\">"+f2(Math.max(0,netProfit))+"</td></tr><tr><td>Estimated CIT @ "+(agg.estCIT>0?"30%":"0% — Small Company")+"</td><td style=\"text-align:right;font-weight:700;color:#1E40AF\">"+f2(agg.estCIT)+"</td></tr></table><p style=\"font-size:11px;color:#64748B;margin-top:8px\">Note: Use the CIT screen for capital allowances, development levy, minimum ETR and accurate tax computation under NTA 2025 Sec 197.</p></section>"):"";
+
+    const whtOutRows=schedRows("whtOut"); const whtOutT=schedTotal("whtOut");
+    const whtInRows=schedRows("whtIn");  const whtInT=schedTotal("whtIn");
+    const vatOutRows=schedRows("vatOut"); const vatOutT=schedTotal("vatOut");
+    const vatInRows=schedRows("vatIn");  const vatInT=schedTotal("vatIn");
+    const payeRows=schedRows(isCompany?"payeOut":"payeIn"); const payeT=schedTotal(isCompany?"payeOut":"payeIn");
+    const cgtRows=schedRows("cgtEvents"); const cgtT=schedTotal("cgtEvents");
+
+    const html="<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>TaxWise Annual Tax Summary "+selYear+" - "+entity+"</title><style>"+
+"*{box-sizing:border-box;margin:0;padding:0;}"+
+"body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1E293B;background:#fff;padding:0;}"+
+"@page{margin:15mm 12mm;size:A4 portrait;}"+
+"@media print{body{padding:0;}.no-print{display:none!important;}section{page-break-inside:avoid;}h2{page-break-after:avoid;}}"+
+".cover{background:linear-gradient(135deg,#0B1628,#1E3A5F);color:#fff;padding:40px 32px;text-align:center;margin-bottom:24px;}"+
+".cover h1{font-size:24px;font-weight:800;margin-bottom:6px;}"+
+".cover .sub{font-size:13px;opacity:.7;margin-bottom:20px;}"+
+".cover .entity{font-size:18px;font-weight:700;margin-bottom:4px;}"+
+".cover .meta{font-size:11px;opacity:.6;}"+
+".cover .badge{display:inline-block;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:6px;padding:4px 12px;margin:3px;font-size:10px;font-weight:700;}"+
+".totals-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin:16px 0;}"+
+".total-box{background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:12px;text-align:center;}"+
+".total-box .lbl{font-size:9px;color:#64748B;font-weight:700;letter-spacing:.08em;margin-bottom:4px;}"+
+".total-box .val{font-size:15px;font-weight:800;color:#1E293B;}"+
+"section{margin-bottom:24px;border:1px solid #E2E8F0;border-radius:8px;overflow:hidden;}"+
+"h2{background:#F1F5F9;border-bottom:1px solid #E2E8F0;padding:10px 14px;font-size:11px;font-weight:700;letter-spacing:.08em;color:#475569;}"+
+"table{width:100%;border-collapse:collapse;}"+
+"th,td{padding:7px 10px;border-bottom:1px solid #F1F5F9;font-size:11px;text-align:left;}"+
+"th{background:#F8FAFC;font-weight:700;color:#64748B;font-size:10px;letter-spacing:.06em;}"+
+"tr:last-child td{border-bottom:none;}"+
+"tr.total td{background:#EFF6FF;font-weight:700;font-size:12px;border-top:2px solid #BFDBFE;}"+
+"tr.grand td{background:#DBEAFE;font-weight:800;font-size:13px;border-top:2px solid #3B82F6;}"+
+".pill{display:inline-block;padding:2px 8px;border-radius:100px;font-size:9px;font-weight:700;}"+
+".pill-blue{background:#DBEAFE;color:#1D4ED8;}.pill-green{background:#DCFCE7;color:#15803D;}.pill-red{background:#FEE2E2;color:#DC2626;}.pill-amber{background:#FEF3C7;color:#92400E;}"+
+".footer{margin-top:32px;padding:16px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;font-size:10px;color:#64748B;text-align:center;line-height:1.7;}"+
+"p{padding:10px 14px;font-size:11px;color:#475569;line-height:1.6;}"+
+"</style></head><body>"+
+
+"<div class=\"cover\">"+
+"<div style=\"font-size:28px;margin-bottom:8px\">&#x20A6;</div>"+
+"<h1>Annual Tax Summary Report</h1>"+
+"<div class=\"sub\">Nigeria Tax Act 2025 (No.3) &middot; Tax Administration Act 2025 (No.5)</div>"+
+"<div class=\"entity\">"+entity+"</div>"+
+"<div class=\"meta\">"+
+(profile.tin?"TIN: "+profile.tin+" &nbsp;&bull;&nbsp; ":"")+
+"Tax Year: "+selYear+" &nbsp;&bull;&nbsp; Generated: "+today+
+"</div>"+
+"<div style=\"margin-top:16px;\">"+
+"<span class=\"badge\">"+totalTxns+" Transactions</span>"+
+"<span class=\"badge\">"+(isCompany?"Company":"Individual")+"</span>"+
+(profile.sector?"<span class=\"badge\">"+profile.sector+"</span>":"")+
+"</div>"+
+"</div>"+
+
+"<div style=\"padding:0 16px\">"+
+
+"<section><h2>FINANCIAL OVERVIEW &mdash; "+selYear+"</h2>"+
+"<div style=\"padding:14px;\">"+
+"<div class=\"totals-grid\">"+
+"<div class=\"total-box\"><div class=\"lbl\">TOTAL INCOME</div><div class=\"val\" style=\"color:#059669\">"+f2(allIncome)+"</div></div>"+
+"<div class=\"total-box\"><div class=\"lbl\">TOTAL EXPENSES</div><div class=\"val\" style=\"color:#EF4444\">"+f2(allExpenses)+"</div></div>"+
+"<div class=\"total-box\"><div class=\"lbl\">"+(netProfit>=0?"NET PROFIT":"NET LOSS")+"</div><div class=\"val\" style=\"color:"+(netProfit>=0?"#1D4ED8":"#DC2626")+"\">"+f2(Math.abs(netProfit))+"</div></div>"+
+"</div>"+
+"<table><tr><th>Item</th><th style=\"text-align:right\">Amount</th><th>Note</th></tr>"+
+"<tr><td>Gross Income</td><td style=\"text-align:right\">"+f2(allIncome)+"</td><td><span class=\"pill pill-green\">Taxable</span></td></tr>"+
+"<tr><td>Allowable Expenses</td><td style=\"text-align:right\">"+f2(allowable)+"</td><td><span class=\"pill pill-blue\">Deductible</span></td></tr>"+
+"<tr><td>Non-Allowable Expenses</td><td style=\"text-align:right\">"+f2(nonAllowable)+"</td><td><span class=\"pill pill-amber\">Not Deductible</span></td></tr>"+
+"<tr class=\"total\"><td>Chargeable Income</td><td style=\"text-align:right\">"+f2(Math.max(0,netProfit))+"</td><td></td></tr>"+
+"</table></div></section>"+
+
+pitSection+citSection+
+
+"<section><h2>WITHHOLDING TAX &mdash; NTA 2025 Ch. Two Pt. IV</h2>"+
+(isCompany?"<h2 style=\"background:#FFF7ED;color:#C2410C;border-top:none\">WHT REMITTANCE (deducted from payments) &mdash; Due 21st of next month</h2>"+
+"<table><thead><tr><th>Date</th><th>Description</th><th style=\"text-align:right\">Gross</th><th style=\"text-align:center\">Rate</th><th style=\"text-align:right\">WHT</th></tr></thead><tbody>"+whtOutRows+"<tr class=\"total\"><td colspan=\"2\">TOTAL WHT REMITTABLE</td><td style=\"text-align:right\">"+f2(whtOutT.gross)+"</td><td></td><td style=\"text-align:right\">"+f2(whtOutT.tax)+"</td></tr></tbody></table>":"")+
+"<h2 style=\"background:#F0FDF4;color:#166534;border-top:none\">WHT CREDITS (deducted from your income)</h2>"+
+"<table><thead><tr><th>Date</th><th>Description</th><th style=\"text-align:right\">Gross</th><th style=\"text-align:center\">Rate</th><th style=\"text-align:right\">WHT Credit</th></tr></thead><tbody>"+whtInRows+"<tr class=\"total\"><td colspan=\"2\">TOTAL WHT CREDITS</td><td style=\"text-align:right\">"+f2(whtInT.gross)+"</td><td></td><td style=\"text-align:right\">"+f2(whtInT.tax)+"</td></tr></tbody></table>"+
+"<tr class=\"grand\"></tr>"+
+"<p><strong>Net WHT Position:</strong> "+f2(Math.abs(agg.whtOut-agg.whtIn))+" "+(agg.whtOut>agg.whtIn?"(payable to NRS)":"(credit — offset against income tax)")+"</p>"+
+"</section>"+
+
+(isCompany?"<section><h2>VALUE ADDED TAX &mdash; NTA 2025 Ch. Four</h2>"+
+"<h2 style=\"background:#FFF7ED;color:#C2410C;border-top:none\">OUTPUT VAT (charged on supplies) &mdash; Due 21st of next month</h2>"+
+"<table><thead><tr><th>Date</th><th>Description</th><th style=\"text-align:right\">Gross</th><th style=\"text-align:center\">Rate</th><th style=\"text-align:right\">Output VAT</th></tr></thead><tbody>"+vatOutRows+"<tr class=\"total\"><td colspan=\"2\">TOTAL OUTPUT VAT</td><td style=\"text-align:right\">"+f2(vatOutT.gross)+"</td><td></td><td style=\"text-align:right\">"+f2(vatOutT.tax)+"</td></tr></tbody></table>"+
+"<h2 style=\"background:#F0FDF4;color:#166534;border-top:none\">INPUT VAT (on qualifying purchases)</h2>"+
+"<table><thead><tr><th>Date</th><th>Description</th><th style=\"text-align:right\">Gross</th><th style=\"text-align:center\">Rate</th><th style=\"text-align:right\">Input VAT</th></tr></thead><tbody>"+vatInRows+"<tr class=\"total\"><td colspan=\"2\">TOTAL INPUT VAT</td><td style=\"text-align:right\">"+f2(vatInT.gross)+"</td><td></td><td style=\"text-align:right\">"+f2(vatInT.tax)+"</td></tr></tbody></table>"+
+"<p><strong>Net VAT Payable:</strong> "+f2(agg.vatPayable)+" &mdash; remit to NRS by 21st of next month</p></section>":"<section><h2>VAT STATUS</h2><p>Individuals below \u20A650 million annual turnover are exempt from VAT registration and collection under NTA 2025. You pay VAT as a consumer but are not required to charge, collect or remit VAT.</p></section>")+
+
+"<section><h2>PAYE &mdash; TAA 2025 Sec 13</h2>"+
+(isCompany?"<h2 style=\"background:#EFF6FF;color:#1D4ED8;border-top:none\">PAYE REMITTANCE (staff salaries) &mdash; Due 10th of next month</h2>":
+"<h2 style=\"background:#F0FDF4;color:#166534;border-top:none\">PAYE CREDITS (deducted by employer from your salary)</h2>")+
+"<table><thead><tr><th>Date</th><th>Description</th><th style=\"text-align:right\">Gross Salary</th><th style=\"text-align:center\">Rate</th><th style=\"text-align:right\">PAYE "+(isCompany?"Remittable":"Credit")+"</th></tr></thead><tbody>"+payeRows+"<tr class=\"total\"><td colspan=\"2\">TOTAL PAYE "+(isCompany?"REMITTABLE":"CREDIT")+"</td><td style=\"text-align:right\">"+f2(payeT.gross)+"</td><td></td><td style=\"text-align:right\">"+f2(payeT.tax)+"</td></tr></tbody></table>"+
+(isCompany?"<p>Remit PAYE to the relevant State Internal Revenue Service by the 10th of the following month &mdash; TAA 2025 Sec 13.</p>":"<p>PAYE credits are offset against your annual PIT liability when you file your income tax return.</p>")+
+"</section>"+
+
+"<section><h2>CAPITAL GAINS TAX EVENTS &mdash; NTA 2025 S.34-S.46</h2>"+
+(agg.schedules.cgtEvents.length?"<table><thead><tr><th>Date</th><th>Description</th><th style=\"text-align:right\">Proceeds</th><th style=\"text-align:center\">Status</th><th style=\"text-align:right\">CGT</th></tr></thead><tbody>"+cgtRows+"</tbody></table><p>Use the CGT Calculator in TaxWise to compute the exact tax due on each disposal. CGT return is due 31 March following the tax year.</p>":"<p>No asset disposal transactions detected in "+selYear+". If you sold any capital assets (property, vehicles, shares, equipment), add them to your journal and flag as CGT events.</p>")+
+"</section>"+
+
+"<section><h2>TAX OBLIGATIONS SUMMARY &mdash; "+selYear+"</h2>"+
+"<table><thead><tr><th>Tax Head</th><th>Law Reference</th><th style=\"text-align:right\">Amount Due</th><th>Due Date</th></tr></thead><tbody>"+
+(isCompany?"<tr><td>Companies Income Tax (CIT)</td><td>NTA 2025 Sec 197</td><td style=\"text-align:right\">"+f2(agg.estCIT)+"</td><td>6 months after year-end</td></tr>":"")+
+"<tr><td>"+(isCompany?"WHT Remittance":"WHT Payable")+"</td><td>NTA 2025 Ch.Two Pt.IV</td><td style=\"text-align:right\">"+f2(agg.whtOut)+"</td><td>21st of next month</td></tr>"+
+(isCompany?"<tr><td>Net VAT Payable</td><td>NTA 2025 Ch.Four Sec 52</td><td style=\"text-align:right\">"+f2(agg.vatPayable)+"</td><td>21st of next month</td></tr>":"")+
+"<tr><td>PAYE "+(isCompany?"Remittance":"Balance")+"</td><td>TAA 2025 Sec 13</td><td style=\"text-align:right\">"+f2(isCompany?agg.payeOut:Math.max(0,agg.payeIn))+"</td><td>"+(isCompany?"10th of next month":"Annual PIT return")+"</td></tr>"+
+"<tr class=\"grand\"><td colspan=\"2\">ESTIMATED TOTAL TAX OBLIGATIONS</td><td style=\"text-align:right\">"+f2(totalObligations)+"</td><td></td></tr>"+
+"</tbody></table></section>"+
+
+"<section><h2>COMPLIANCE CHECKLIST</h2>"+
+"<table><thead><tr><th>Item</th><th>Status</th><th>Action Required</th></tr></thead><tbody>"+
+"<tr><td>TIN Registration</td><td>"+(profile.tin?"<span class=\"pill pill-green\">Done</span>":"<span class=\"pill pill-red\">Pending</span>")+"</td><td>"+(profile.tin?"TIN: "+profile.tin:"Register at FIRS ITAS portal or nearest FIRS office")+"</td></tr>"+
+(isCompany?"<tr><td>CAC Registration</td><td><span class=\"pill pill-blue\">Verify</span></td><td>Confirm RC Number is current with CAC</td></tr>":"")+
+(isCompany?"<tr><td>VAT Registration</td><td><span class=\"pill pill-blue\">Verify</span></td><td>If turnover &gt; &#x20A650m, must be VAT-registered with NRS</td></tr>":"")+
+"<tr><td>WHT Remittance ("+(agg.whtOut>0?agg.schedules.whtOut.length+" transactions":0)+")</td><td>"+(agg.whtOut>0?"<span class=\"pill pill-amber\">Action Needed</span>":"<span class=\"pill pill-green\">None due</span>")+"</td><td>"+(agg.whtOut>0?"Remit "+f2(agg.whtOut)+" to NRS by 21st of each month":"No WHT to remit")+"</td></tr>"+
+(isCompany?"<tr><td>VAT Returns</td><td>"+(agg.vatPayable>0?"<span class=\"pill pill-amber\">Action Needed</span>":"<span class=\"pill pill-green\">Nil Return</span>")+"</td><td>File monthly VAT return on FIRS ITAS even if nil</td></tr>":"")+
+"<tr><td>Annual Tax Return</td><td><span class=\"pill pill-blue\">Due</span></td><td>File "+(isCompany?"CIT return within 6 months after accounting year-end":"PIT return by 31 March "+(selYear+1))+"</td></tr>"+
+"</tbody></table></section>"+
+
+"<div class=\"footer\">"+
+"This report was generated by <strong>TaxWise Nigeria</strong> based on transactions recorded in your journal for the period 1 January "+selYear+" to 31 December "+selYear+"."+
+" Tax figures are <strong>estimates</strong> computed from your transaction data under NTA 2025 (No.3), TAA 2025 (No.5), and NRS Establishment Act 2025 (No.4)."+
+" This report is for informational and preparation purposes only and does not constitute a filed tax return."+
+" For binding tax advice, consult a registered tax consultant or chartered accountant."+
+" &bull; Generated: "+today+" &bull; TaxWise Nigeria &bull; etukudoubong.github.io/taxwise-nigeria"+
+"</div>"+
+"</div>"+
+"<div class=\"no-print\" style=\"position:fixed;bottom:20px;right:20px;display:flex;gap:8px;\">"+
+"<button onclick=\"window.print()\" style=\"padding:12px 20px;background:#059669;border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)\">Print / Save PDF</button>"+
+"<button onclick=\"window.close()\" style=\"padding:12px 16px;background:#64748B;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:600;cursor:pointer\">Close</button>"+
+"</div>"+
+"</body></html>";
+
+    const w=window.open("","_blank","width=900,height=700");
+    if(!w){ alert("Pop-up blocked. Please allow pop-ups for this site, then try again."); return; }
+    w.document.write(html);
+    w.document.close();
+    // Auto-trigger print after a short delay for content to render
+    setTimeout(()=>{ try{ w.focus(); w.print(); }catch(_){} }, 600);
   }
 
   // ── Summary tax row (clickable + download button) ───────────────────────────
@@ -4188,13 +4372,32 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
           </button>
         }/>
 
+      {/* Year selector */}
+      <div style={{background:C.navy,padding:"10px 16px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid rgba(255,255,255,.1)"}}>
+        <div style={{fontSize:11,color:"rgba(255,255,255,.6)",fontWeight:600,flexShrink:0}}>Tax Year:</div>
+        <select value={selYear} onChange={e=>setSelYear(Number(e.target.value))}
+          style={{flex:1,background:"rgba(255,255,255,.12)",border:"1px solid rgba(255,255,255,.2)",
+            borderRadius:7,padding:"6px 10px",color:"#fff",fontSize:13,fontWeight:700,
+            fontFamily:"inherit",cursor:"pointer"}}>
+          {txnYears.map(y=>(
+            <option key={y} value={y} style={{background:"#1E3A5F",color:"#fff"}}>{y}</option>
+          ))}
+        </select>
+        <button onClick={downloadAnnualPDF}
+          style={{flexShrink:0,padding:"7px 12px",background:"#059669",border:"none",
+            borderRadius:8,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit",whiteSpace:"nowrap"}}>
+          📄 PDF
+        </button>
+      </div>
+
       {/* Hero */}
       <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,padding:"18px 16px 22px",color:"#fff"}}>
         <div style={{fontSize:10,opacity:.6,letterSpacing:".1em",marginBottom:4,fontWeight:700}}>
-          TOTAL TAX OBLIGATIONS · {period.toUpperCase()}
+          TOTAL TAX OBLIGATIONS · {period}
         </div>
         <div style={{fontSize:36,fontWeight:800,letterSpacing:"-.02em"}}>{fmt(totalDue)}</div>
-        <div style={{fontSize:11,opacity:.6,marginTop:2}}>{entity} · {txns.length} transactions</div>
+        <div style={{fontSize:11,opacity:.6,marginTop:2}}>{entity} · {yearTxns.length} transactions in {selYear}</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginTop:14}}>
           {[
             {l:"WHT",  v:fmt(agg.whtOut),    c:"#F87171"},

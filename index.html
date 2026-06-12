@@ -303,6 +303,8 @@ const PLANS = {
 };
 const EXTRA_USER_YEAR = 3000000; // ₦30,000/user/year in kobo
 const TRIAL_DAYS = 14;
+// AI import limits per plan per calendar month
+const AI_IMPORT_LIMITS = { trial:5, individual:10, company:30 };
 
 // ── Member roles ──────────────────────────────────────────────────────────────
 const ROLES = {
@@ -3803,7 +3805,7 @@ Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocale
 }
 
 // ── PROFILE SCREEN ────────────────────────────────────────────────────────────
-function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEditSetup,onNav,ownAccountsCount,importRulesCount}){
+function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEditSetup,onNav,ownAccountsCount,importRulesCount,sub}){
   const[edit,setEdit]=useState({...profile});
   const agg=computeAggregates(txns);
   const [signingOut, setSigningOut] = useState(false);
@@ -3883,6 +3885,48 @@ function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEdit
             ✏️ Edit Full Profile Setup
           </button>
         </div>
+
+        {/* AI Import Usage */}
+        {sub&&(()=>{
+          const plan = sub.plan||"individual";
+          const limit = AI_IMPORT_LIMITS[plan]||AI_IMPORT_LIMITS.individual;
+          const thisMonth = currentMonthKey();
+          const used = (sub.ai_imports_month===thisMonth)?(sub.ai_imports_used||0):0;
+          const remaining = Math.max(0, limit-used);
+          const pct = Math.min(100, Math.round((used/limit)*100));
+          const barColor = remaining===0?"#EF4444":remaining<=2?"#F59E0B":"#3B82F6";
+          const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+          const d = new Date(); const mLabel = months[d.getMonth()]+" "+d.getFullYear();
+          return (
+            <div className="card">
+              <div className="ctitle">AI IMPORT USAGE</div>
+              <div style={{fontSize:12,color:C.slate,marginBottom:10,lineHeight:1.5}}>
+                AI imports analyse PDF/image bank statements. {mLabel} usage:
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.ink}}>
+                  {used} of {limit} used
+                </div>
+                <div style={{fontSize:12,color:remaining===0?"#EF4444":C.slate,fontWeight:600}}>
+                  {remaining} remaining
+                </div>
+              </div>
+              <div style={{height:8,background:"#E2E8F0",borderRadius:4,overflow:"hidden",marginBottom:8}}>
+                <div style={{height:"100%",width:pct+"%",background:barColor,borderRadius:4,transition:"width .3s"}}></div>
+              </div>
+              {remaining===0&&(
+                <div style={{fontSize:11,color:"#EF4444",fontWeight:600,textAlign:"center",padding:"8px 0"}}>
+                  Monthly limit reached. Upgrade for more AI imports.
+                </div>
+              )}
+              <div style={{fontSize:10,color:C.muted,marginTop:4}}>
+                {plan==="trial"?"Trial: 5/month":""}
+                {plan==="individual"?"Individual plan: 10/month":""}
+                {plan==="company"?"Business plan: 30/month":""} — resets on the 1st of each month
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Own Accounts & Import Rules */}
         <div className="card">
@@ -4701,10 +4745,10 @@ function App(){
       case "faq":        return <FAQScreen onBack={back}/>;
       case "subscribe":  return <SubscriptionScreen profile={profile} authUser={authUser} sub={sub} onBack={back} onSubscribed={()=>{getSubscription(authUser.id).then(setSub);back();}}/>;
       case "team":       return canManageTeam ? <TeamScreen profile={profile} authUser={authUser} sub={sub} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Admin only</div>;
-      case "upload":     return canEdit ? <CSVUploadScreen setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} profile={profile} authUser={authUser} onBack={back} ownAccounts={ownAccounts} importRules={importRules}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted</div>;
-      case "import":     return canEdit ? <DocumentUploadScreen profile={profile} authUser={authUser} setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Data Entry or above</div>;
+      case "upload":     return canEdit ? <CSVUploadScreen setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} profile={profile} authUser={authUser} onBack={back} ownAccounts={ownAccounts} importRules={importRules} sub={sub} setSub={setSub}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted</div>;
+      case "import":     return canEdit ? <DocumentUploadScreen profile={profile} authUser={authUser} setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} onBack={back} sub={sub} setSub={setSub}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Data Entry or above</div>;
       case "agent":      return <AgentScreen profile={profile} txns={txns} onBack={back}/>;
-      case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")} onEditSetup={()=>setScreen("editSetup")} onNav={nav} ownAccountsCount={ownAccounts.length} importRulesCount={importRules.length}/>;
+      case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")} onEditSetup={()=>setScreen("editSetup")} onNav={nav} ownAccountsCount={ownAccounts.length} importRulesCount={importRules.length} sub={sub}/>;
       case "ownAccounts": return <OwnAccountsScreen ownAccounts={ownAccounts} setOwnAccounts={setOwnAccounts} onBack={back}/>;
       case "importRules": return <ImportRulesScreen importRules={importRules} setImportRules={setImportRules} onBack={back}/>;
       case "editSetup":  return <OnboardingScreen
@@ -4859,6 +4903,42 @@ function trialDaysLeft(sub){
   if(!sub||sub.status!=="trial") return 0;
   const diff = new Date(sub.trial_end) - new Date();
   return Math.max(0, Math.ceil(diff/(1000*60*60*24)));
+}
+
+// Return current calendar month key e.g. "2025-06"
+function currentMonthKey(){
+  const d = new Date();
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
+}
+
+// Get how many AI imports remain this month for the given sub
+function aiImportsRemaining(sub, plan){
+  if(!sub) return 0;
+  const limit = AI_IMPORT_LIMITS[plan] || AI_IMPORT_LIMITS.individual;
+  const thisMonth = currentMonthKey();
+  const used = (sub.ai_imports_month === thisMonth) ? (sub.ai_imports_used||0) : 0;
+  return Math.max(0, limit - used);
+}
+
+// Check limit then increment counter in Supabase. Returns {allowed, remaining}.
+async function checkAndIncrementAiImport(sub, userId, plan){
+  if(!sub || !userId) return { allowed:false, remaining:0 };
+  const limit = AI_IMPORT_LIMITS[plan] || AI_IMPORT_LIMITS.individual;
+  const thisMonth = currentMonthKey();
+  const alreadyUsed = (sub.ai_imports_month === thisMonth) ? (sub.ai_imports_used||0) : 0;
+  if(alreadyUsed >= limit) return { allowed:false, remaining:0 };
+  // Increment in Supabase (columns must exist: ai_imports_used INT, ai_imports_month TEXT)
+  const newUsed = alreadyUsed + 1;
+  try {
+    await sb.from("subscriptions").update({
+      ai_imports_used: newUsed,
+      ai_imports_month: thisMonth,
+    }).eq("user_id", userId);
+  } catch(_) {
+    // Column may not exist yet — still allow the import, just won't persist count
+    console.warn("ai_imports columns not yet created in subscriptions table");
+  }
+  return { allowed:true, remaining: limit - newUsed };
 }
 
 // ── Paystack payment ──────────────────────────────────────────────────────────
@@ -5258,7 +5338,7 @@ function applyImportRules(transactions, ownAccounts=[], importRules=[]){
   });
 }
 
-function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, onBack, ownAccounts=[], importRules=[]}){
+function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, onBack, ownAccounts=[], importRules=[], sub, setSub}){
   const [mode, setMode]         = useState("select");
   const [rows, setRows]         = useState([]);
   const [headers, setHeaders]   = useState([]);
@@ -5488,6 +5568,23 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
 
   // ── AI extraction for PDF/image ───────────────────────────────────────────
   const processViaAI = async (file) => {
+    // AI import usage gate
+    if(authUser && sub){
+      const plan = sub.plan||"individual";
+      const check = await checkAndIncrementAiImport(sub, authUser.id, plan);
+      if(!check.allowed){
+        const limit = AI_IMPORT_LIMITS[plan]||AI_IMPORT_LIMITS.individual;
+        throw new Error(
+          "Monthly AI import limit reached (" + limit + "/" + limit + " used).\n\n" +
+          "Your limit resets on the 1st of next month.\n\n" +
+          "Alternatives:\n" +
+          "1. Download as Excel from your bank app (no AI needed, no limit)\n" +
+          "2. Upgrade to a higher plan for more imports\n" +
+          "3. Use CSV export if your bank supports it"
+        );
+      }
+      if(setSub) setSub(s => s ? ({...s, ai_imports_used:(s.ai_imports_month===currentMonthKey()?(s.ai_imports_used||0)+1:1), ai_imports_month:currentMonthKey()}) : s);
+    }
     const fileMB = file.size/1024/1024;
     const maxSize = 8*1024*1024; // 8MB hard limit
     if(file.size>maxSize) throw new Error(
@@ -5928,6 +6025,27 @@ Return ONLY the JSON array. No preamble, no markdown, no other text.`;
         {error&&<div style={{background:C.redBg,border:`1px solid ${C.red}30`,borderRadius:10,
           padding:"10px 12px",fontSize:12,color:C.red,marginBottom:12}}>⚠️ {error}</div>}
 
+        {/* AI import usage banner */}
+        {sub&&(()=>{
+          const plan = sub.plan||"individual";
+          const rem = aiImportsRemaining(sub, plan);
+          const limit = AI_IMPORT_LIMITS[plan]||AI_IMPORT_LIMITS.individual;
+          if(rem===0) return (
+            <div style={{background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:10,
+              padding:"10px 12px",fontSize:12,color:"#DC2626",marginBottom:12,lineHeight:1.5}}>
+              <strong>AI import limit reached</strong> ({limit}/{limit} used this month).
+              Excel/CSV imports are still unlimited. Limit resets 1st of next month.
+            </div>
+          );
+          if(rem<=2) return (
+            <div style={{background:"#FFFBEB",border:"1px solid #FCD34D",borderRadius:10,
+              padding:"10px 12px",fontSize:12,color:"#92400E",marginBottom:12}}>
+              ⚠️ Only <strong>{rem} AI import{rem===1?"":"s"}</strong> remaining this month. Excel/CSV imports are unlimited.
+            </div>
+          );
+          return null;
+        })()}
+
         <label style={{display:"block",marginBottom:10}}>
           <input type="file"
             accept=".csv,.xlsx,.xls,.xlsm,.pdf,.jpg,.jpeg,.png,.webp,.zip,.txt"
@@ -6200,7 +6318,7 @@ Return ONLY the JSON array. No preamble, no markdown, no other text.`;
 }
 
 // ── DOCUMENT UPLOAD SCREEN ────────────────────────────────────────────────────
-function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAssets, onBack}){
+function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAssets, onBack, sub, setSub}){
   const [mode, setMode]           = useState("select"); // select | camera | processing | review | edit | done
   const [extracted, setExtracted] = useState([]);
   const [editIdx, setEditIdx]     = useState(null);
@@ -6266,6 +6384,24 @@ function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAsse
 
   // ── sendToAI: shared extraction logic ────────────────────────────────────
   const sendToAI = async (pages) => {
+    // AI import usage gate
+    if(authUser && sub){
+      const plan = sub.plan||"individual";
+      const check = await checkAndIncrementAiImport(sub, authUser.id, plan);
+      if(!check.allowed){
+        const limit = AI_IMPORT_LIMITS[plan]||AI_IMPORT_LIMITS.individual;
+        setError(
+          "Monthly AI import limit reached (" + limit + "/" + limit + " used).\n\n" +
+          "Your limit resets on the 1st of next month.\n\n" +
+          "Alternatives:\n" +
+          "1. Download as Excel from your bank app (no AI needed, no limit)\n" +
+          "2. Upgrade to a higher plan for more imports"
+        );
+        setMode("select");
+        return;
+      }
+      if(setSub) setSub(s => s ? ({...s, ai_imports_used:(s.ai_imports_month===currentMonthKey()?(s.ai_imports_used||0)+1:1), ai_imports_month:currentMonthKey()}) : s);
+    }
     setProgress("AI is analysing your document…");
     const isBankStatement = docType === "bank_statement";
     const multiPage = pages.length > 1;
@@ -6733,6 +6869,27 @@ Return ONLY the JSON array, no other text or markdown.`;
       <div style={{padding:"12px 12px 0"}}>
         {error&&<div style={{background:C.redBg,border:`1px solid ${C.red}30`,borderRadius:10,
           padding:"10px 12px",fontSize:12,color:C.red,marginBottom:12}}>⚠️ {error}</div>}
+
+        {/* AI import usage banner */}
+        {sub&&(()=>{
+          const plan = sub.plan||"individual";
+          const rem = aiImportsRemaining(sub, plan);
+          const limit = AI_IMPORT_LIMITS[plan]||AI_IMPORT_LIMITS.individual;
+          if(rem===0) return (
+            <div style={{background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:10,
+              padding:"10px 12px",fontSize:12,color:"#DC2626",marginBottom:12,lineHeight:1.5}}>
+              <strong>AI import limit reached</strong> ({limit}/{limit} used this month).
+              Limit resets 1st of next month.
+            </div>
+          );
+          if(rem<=2) return (
+            <div style={{background:"#FFFBEB",border:"1px solid #FCD34D",borderRadius:10,
+              padding:"10px 12px",fontSize:12,color:"#92400E",marginBottom:12}}>
+              ⚠️ Only <strong>{rem} AI import{rem===1?"":"s"}</strong> remaining this month.
+            </div>
+          );
+          return null;
+        })()}
 
         <div className="card">
           <div className="ctitle">DOCUMENT TYPE</div>

@@ -4544,28 +4544,32 @@ pitSection+citSection+
         }/>
 
       {/* Year selector */}
-      <div style={{background:C.navy,padding:"10px 16px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid rgba(255,255,255,.1)"}}>
-        <div style={{fontSize:11,color:"rgba(255,255,255,.6)",fontWeight:600,flexShrink:0}}>Tax Year:</div>
-        <select value={selYear} onChange={e=>setSelYear(Number(e.target.value))}
-          style={{flex:1,background:"rgba(255,255,255,.12)",border:"1px solid rgba(255,255,255,.2)",
-            borderRadius:7,padding:"6px 10px",color:"#fff",fontSize:13,fontWeight:700,
-            fontFamily:"inherit",cursor:"pointer"}}>
-          {txnYears.map(y=>(
-            <option key={y} value={y} style={{background:"#1E3A5F",color:"#fff"}}>{y}</option>
-          ))}
-        </select>
-        <button onClick={downloadAnnualPDF}
-          style={{flexShrink:0,padding:"7px 12px",background:"#059669",border:"none",
-            borderRadius:8,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",
-            fontFamily:"inherit",whiteSpace:"nowrap"}}>
-          📄 PDF
-        </button>
-        <button onClick={()=>setShowFilingModal(true)}
-          style={{flexShrink:0,padding:"7px 12px",background:"#7C3AED",border:"none",
-            borderRadius:8,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",
-            fontFamily:"inherit",whiteSpace:"nowrap"}}>
-          🏛 File
-        </button>
+      <div style={{background:C.navy,padding:"10px 16px 12px",borderBottom:"1px solid rgba(255,255,255,.1)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+          <div style={{fontSize:11,color:"rgba(255,255,255,.6)",fontWeight:600,flexShrink:0}}>Tax Year:</div>
+          <select value={selYear} onChange={e=>setSelYear(Number(e.target.value))}
+            style={{flex:1,background:"rgba(255,255,255,.12)",border:"1px solid rgba(255,255,255,.2)",
+              borderRadius:7,padding:"6px 10px",color:"#fff",fontSize:14,fontWeight:700,
+              fontFamily:"inherit",cursor:"pointer"}}>
+            {txnYears.map(y=>(
+              <option key={y} value={y} style={{background:"#1E3A5F",color:"#fff"}}>{y}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={downloadAnnualPDF}
+            style={{flex:1,padding:"9px",background:"#059669",border:"none",
+              borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",
+              fontFamily:"inherit"}}>
+            📄 Annual PDF
+          </button>
+          <button onClick={()=>setShowFilingModal(true)}
+            style={{flex:1,padding:"9px",background:"#7C3AED",border:"none",
+              borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",
+              fontFamily:"inherit"}}>
+            🏛 Filing Export
+          </button>
+        </div>
       </div>
 
       {/* Hero */}
@@ -4650,7 +4654,7 @@ pitSection+citSection+
         <div className="card">
           <div className="ctitle">WITHHOLDING TAX — NTA 2025 Ch. Two Pt. IV</div>
           <TaxRow label="WHT to deduct & remit" taxAmount={agg.whtOut}
-            grossAmount={txns.filter(t=>classifyTxn(t.desc,t.type).head.startsWith("WHT-out")).reduce((s,t)=>s+t.amount,0)}
+            grossAmount={yearTxns.filter(t=>classifyTxn(t.desc,t.type).head.startsWith("WHT-out")).reduce((s,t)=>s+t.amount,0)}
             schedKey="whtOut" color={C.red} note="Due 21st of next month"/>
           <TaxRow label="WHT credits on your income" taxAmount={agg.whtIn}
             schedKey="whtIn" color={C.green} note="Deducted by payers — offset against tax liability"/>
@@ -4662,7 +4666,7 @@ pitSection+citSection+
         <div className="card">
           <div className="ctitle">VALUE ADDED TAX — NTA 2025 Ch. Four</div>
           <TaxRow label="Output VAT (on your sales)" taxAmount={agg.vatOut}
-            grossAmount={txns.filter(t=>classifyTxn(t.desc,t.type).head.includes("VAT")).reduce((s,t)=>s+t.amount,0)}
+            grossAmount={yearTxns.filter(t=>classifyTxn(t.desc,t.type).head.includes("VAT")).reduce((s,t)=>s+t.amount,0)}
             schedKey="vatOut" color={C.red} note="VAT charged to customers"/>
           <TaxRow label="Input VAT (on purchases)" taxAmount={agg.vatIn}
             schedKey="vatIn" color={C.green} note="VAT on qualifying purchases — deductible"/>
@@ -4675,7 +4679,7 @@ pitSection+citSection+
           <div className="ctitle">PAYE — TAA 2025 Sec 13</div>
           {isCompany?(
             <TaxRow label="PAYE on staff salaries" taxAmount={agg.payeOut}
-              grossAmount={txns.filter(t=>classifyTxn(t.desc,t.type).head==="PAYE-out").reduce((s,t)=>s+t.amount,0)}
+              grossAmount={yearTxns.filter(t=>classifyTxn(t.desc,t.type).head==="PAYE-out").reduce((s,t)=>s+t.amount,0)}
               schedKey="payeOut" color={C.red} note="Due 10th of next month · Remit to State IRS" total/>
           ):(
             <TaxRow label="PAYE deducted from your salary" taxAmount={agg.payeIn}

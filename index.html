@@ -4126,6 +4126,177 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
     URL.revokeObjectURL(url);
   }
 
+  // ── Filing Export (NRS Rev360 / SIRS) ───────────────────────────────────────
+  const [showFilingModal, setShowFilingModal] = useState(false);
+  const [filingTab, setFilingTab] = useState("wht");
+  const [payeState, setPayeState] = useState(profile.state||"Lagos");
+
+  // All 36 states + FCT with portal links
+  const SIRS = [
+    {s:"Abia",        portal:"https://abirs.ab.gov.ng",          note:"Abia State IRS"},
+    {s:"Adamawa",     portal:"https://adamawarevenue.gov.ng",     note:"Adamawa State Board of Internal Revenue"},
+    {s:"Akwa Ibom",   portal:"https://akirsby.gov.ng",           note:"Akwa Ibom State IRS"},
+    {s:"Anambra",     portal:"https://airs.an.gov.ng",           note:"Anambra State IRS"},
+    {s:"Bauchi",      portal:"https://birsbauchi.gov.ng",        note:"Bauchi State IRS"},
+    {s:"Bayelsa",     portal:"https://bayelsairs.gov.ng",        note:"Bayelsa State IRS"},
+    {s:"Benue",       portal:"https://birs.benue.gov.ng",        note:"Benue State IRS"},
+    {s:"Borno",       portal:"https://borno-irs.gov.ng",         note:"Borno State IRS"},
+    {s:"Cross River", portal:"https://crs-irs.gov.ng",           note:"Cross River State IRS"},
+    {s:"Delta",       portal:"https://dsbir.delta.gov.ng",       note:"Delta State Board of Internal Revenue"},
+    {s:"Ebonyi",      portal:"https://ebirsonline.gov.ng",       note:"Ebonyi State IRS"},
+    {s:"Edo",         portal:"https://eirs.edo.gov.ng",          note:"Edo State IRS"},
+    {s:"Ekiti",       portal:"https://ekitirs.gov.ng",           note:"Ekiti State IRS"},
+    {s:"Enugu",       portal:"https://irs.en.gov.ng",            note:"Enugu State IRS (EIRS)"},
+    {s:"FCT (Abuja)", portal:"https://fcttaxportal.com",         note:"FCT-IRS — federal employees + Abuja residents"},
+    {s:"Gombe",       portal:"https://girs.gombe.gov.ng",        note:"Gombe State IRS"},
+    {s:"Imo",         portal:"https://imors.gov.ng",             note:"Imo State Revenue Service"},
+    {s:"Jigawa",      portal:"https://jigawairs.gov.ng",         note:"Jigawa State IRS"},
+    {s:"Kaduna",      portal:"https://kadirs.kaduna.gov.ng",     note:"Kaduna State IRS"},
+    {s:"Kano",        portal:"https://kirs.kano.gov.ng",         note:"Kano State IRS"},
+    {s:"Katsina",     portal:"https://katsina-irs.gov.ng",       note:"Katsina State IRS"},
+    {s:"Kebbi",       portal:"https://kebbirs.gov.ng",           note:"Kebbi State IRS"},
+    {s:"Kogi",        portal:"https://kogirs.gov.ng",            note:"Kogi State IRS"},
+    {s:"Kwara",       portal:"https://kwirs.gov.ng",             note:"Kwara State IRS"},
+    {s:"Lagos",       portal:"https://etax.lirs.net",            note:"LIRS eTax portal — largest SIRS in Nigeria"},
+    {s:"Nasarawa",    portal:"https://nasarawairs.gov.ng",       note:"Nasarawa State IRS"},
+    {s:"Niger",       portal:"https://www.ngsirs.gov.ng",        note:"Niger State IRS"},
+    {s:"Ogun",        portal:"https://ogirs.ogun.gov.ng",        note:"Ogun State IRS (OGIRS)"},
+    {s:"Ondo",        portal:"https://ondorevenue.gov.ng",       note:"Ondo State Board of Internal Revenue"},
+    {s:"Osun",        portal:"https://osirs.gov.ng",             note:"Osun State IRS"},
+    {s:"Oyo",         portal:"https://oyorevenue.gov.ng",        note:"Oyo State IRS"},
+    {s:"Plateau",     portal:"https://plateau-irs.gov.ng",       note:"Plateau State IRS"},
+    {s:"Rivers",      portal:"https://riversetax.gov.ng",        note:"Rivers State IRS"},
+    {s:"Sokoto",      portal:"https://sokotoira.gov.ng",         note:"Sokoto State IRS"},
+    {s:"Taraba",      portal:"https://tarabairs.gov.ng",         note:"Taraba State IRS"},
+    {s:"Yobe",        portal:"https://yobeiras.gov.ng",          note:"Yobe State IRS"},
+    {s:"Zamfara",     portal:"https://zamfarairs.gov.ng",        note:"Zamfara State IRS"},
+  ];
+
+  // Format date as DD/MM/YY (required by NRS Rev360 — rejects any other format)
+  function fmtNRS(dateStr){
+    const d=new Date(dateStr||"");
+    if(isNaN(d.getTime())) return "01/01/25";
+    const dd=String(d.getDate()).padStart(2,"0");
+    const mm=String(d.getMonth()+1).padStart(2,"0");
+    const yy=String(d.getFullYear()).slice(2);
+    return dd+"/"+mm+"/"+yy;
+  }
+
+  // WHT Remittance schedule for NRS Rev360 upload
+  function buildWHTExport(){
+    const lines=agg.schedules.whtOut||[];
+    if(!lines.length) return null;
+    const header="beneficiary_name,beneficiary_tin,transaction_date,transaction_desc,transaction_amount,rate,tax_type,tax_amount,schedule_reference";
+    const rows=lines.map((l,i)=>{
+      const name=(l.desc||"Unknown Payee").replace(/,/g," ").slice(0,50);
+      const tin="0"; // user must update TIN manually
+      const date=fmtNRS(l.date);
+      const desc="Service Rendered"; // TaxPro Max/Rev360 standard
+      const gross=Number(l.gross||0).toFixed(2);
+      const rate=(parseFloat(l.rate)||10)+"%";
+      const taxType="WHT";
+      const tax=Number(l.tax||0).toFixed(2);
+      const ref="TW-"+selYear+"-"+(i+1);
+      return [name,tin,date,desc,gross,rate,taxType,tax,ref].join(",");
+    });
+    const notes=[
+      "# TaxWise Nigeria — WHT Remittance Schedule for NRS Rev360 Upload",
+      "# Entity: "+entity+" | TIN: "+(profile.tin||"N/A")+" | Period: "+selYear,
+      "# IMPORTANT: Update beneficiary_tin column before uploading to Rev360",
+      "# Date format: DD/MM/YY | Amounts: no commas | tax_type: WHT (uppercase)",
+      "# Portal: selfservice.nrs.gov.ng | Law: NTA 2025 Ch.Two Pt.IV",
+      "# Generated: "+today+" by TaxWise Nigeria",
+      "#",
+    ];
+    return [...notes, header, ...rows].join("\n");
+  }
+
+  // VAT Sales schedule for NRS Rev360 upload
+  function buildVATExport(){
+    const lines=agg.schedules.vatOut||[];
+    const purchases=agg.schedules.vatIn||[];
+    const allLines=[...lines,...purchases];
+    if(!allLines.length) return null;
+    const salesHeader="customer_name,customer_tin,item_description,amount,vat_status,vat_amount,transaction_date,invoice_ref";
+    const purchHeader="supplier_name,supplier_tin,item_description,amount,vat_status,vat_amount,transaction_date,invoice_ref";
+    const salesRows=lines.map((l,i)=>{
+      const name="Customer"; const tin="0";
+      const desc=(l.desc||"Services").replace(/,/g," ").slice(0,60);
+      const amt=Number(l.gross||0).toFixed(2);
+      const vat=Number(l.tax||0).toFixed(2);
+      const date=fmtNRS(l.date);
+      const ref="TW-S-"+selYear+"-"+(i+1);
+      return [name,tin,desc,amt,"Standard Rated",vat,date,ref].join(",");
+    });
+    const purchRows=purchases.map((l,i)=>{
+      const name=(l.desc||"Supplier").replace(/,/g," ").slice(0,40);
+      const tin="0";
+      const desc=(l.desc||"Purchase").replace(/,/g," ").slice(0,60);
+      const amt=Number(l.gross||0).toFixed(2);
+      const vat=Number(l.tax||0).toFixed(2);
+      const date=fmtNRS(l.date);
+      const ref="TW-P-"+selYear+"-"+(i+1);
+      return [name,tin,desc,amt,"Standard Rated",vat,date,ref].join(",");
+    });
+    const notes=[
+      "# TaxWise Nigeria — VAT Schedule for NRS Rev360 Upload",
+      "# Entity: "+entity+" | TIN: "+(profile.tin||"N/A")+" | Period: "+selYear,
+      "# IMPORTANT: Update customer_tin and supplier_tin before uploading",
+      "# Portal: selfservice.nrs.gov.ng | Law: NTA 2025 Ch.Four",
+      "# Generated: "+today+" by TaxWise Nigeria",
+      "#",
+      "# ── SALES SCHEDULE (Output VAT) ──",
+      salesHeader,
+      ...salesRows,
+      "#",
+      "# ── PURCHASES SCHEDULE (Input VAT) ──",
+      purchHeader,
+      ...purchRows,
+    ];
+    return notes.join("\n");
+  }
+
+  // PAYE schedule for SIRS upload
+  function buildPAYEExport(){
+    const lines=isCompany?(agg.schedules.payeOut||[]):(agg.schedules.payeIn||[]);
+    const sInfo=SIRS.find(x=>x.s===payeState)||{s:payeState,portal:"",note:""};
+    const header="employee_name,employee_tin,gross_salary,paye_deducted,month,employer_tin,employer_name";
+    const rows=lines.map((l,i)=>{
+      const name=(l.desc||"Employee "+(i+1)).replace(/,/g," ").slice(0,50);
+      const tin="0";
+      const gross=Number(l.gross||0).toFixed(2);
+      const paye=Number(l.tax||0).toFixed(2);
+      const month=fmtNRS(l.date);
+      const eTin=profile.tin||"0";
+      const eName=(entity).replace(/,/g," ");
+      return [name,tin,gross,paye,month,eTin,eName].join(",");
+    });
+    const notes=[
+      "# TaxWise Nigeria — PAYE Schedule for "+sInfo.s+" SIRS Upload",
+      "# Entity: "+entity+" | TIN: "+(profile.tin||"N/A")+" | Period: "+selYear,
+      "# State: "+sInfo.s+" | Portal: "+sInfo.portal,
+      "# "+sInfo.note,
+      "# PAYE remittance due: 10th of the following month — TAA 2025 Sec 13",
+      "# IMPORTANT: Update employee_tin column with actual employee TINs",
+      "# Generated: "+today+" by TaxWise Nigeria",
+      "#",
+    ];
+    return [...notes, header, ...rows].join("\n");
+  }
+
+  function downloadFilingExport(type){
+    let csv=null, filename="";
+    if(type==="wht"){ csv=buildWHTExport(); filename="TaxWise_WHT_Rev360_"+selYear+".csv"; }
+    if(type==="vat"){ csv=buildVATExport(); filename="TaxWise_VAT_Rev360_"+selYear+".csv"; }
+    if(type==="paye"){ csv=buildPAYEExport(); filename="TaxWise_PAYE_"+payeState.replace(/ /g,"_")+"_"+selYear+".csv"; }
+    if(!csv){ alert("No transactions found for this schedule in "+selYear+"."); return; }
+    const blob=new Blob([csv],{type:"text/csv"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url; a.download=filename; a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // ── Annual Tax Summary PDF generator ─────────────────────────────────────────
   function downloadAnnualPDF(){
     const f2=n=>"\u20A6"+Number(n||0).toLocaleString("en-NG",{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -4389,6 +4560,12 @@ pitSection+citSection+
             fontFamily:"inherit",whiteSpace:"nowrap"}}>
           📄 PDF
         </button>
+        <button onClick={()=>setShowFilingModal(true)}
+          style={{flexShrink:0,padding:"7px 12px",background:"#7C3AED",border:"none",
+            borderRadius:8,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit",whiteSpace:"nowrap"}}>
+          🏛 File
+        </button>
       </div>
 
       {/* Hero */}
@@ -4533,6 +4710,247 @@ pitSection+citSection+
           Tap "⬇ All" at top right to download all schedules in one file
         </div>
       </div>
+
+    {/* ── Filing Export Modal ── */}
+    {showFilingModal&&(
+      <div style={{position:"fixed",inset:0,background:"rgba(11,22,40,.85)",zIndex:600,
+        display:"flex",alignItems:"flex-end",justifyContent:"center"}}
+        onClick={()=>setShowFilingModal(false)}>
+        <div style={{width:"100%",maxWidth:430,background:"#fff",borderRadius:"20px 20px 0 0",
+          padding:"0 0 max(24px,env(safe-area-inset-bottom)) 0",maxHeight:"90vh",overflowY:"auto"}}
+          onClick={e=>e.stopPropagation()}>
+
+          {/* Header */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+            padding:"18px 18px 0"}}>
+            <div>
+              <div style={{fontSize:16,fontWeight:800,color:"#1E293B"}}>
+                🏛 Filing Export — {selYear}
+              </div>
+              <div style={{fontSize:11,color:"#64748B",marginTop:2}}>
+                Ready-to-upload schedules for NRS Rev360 and SIRS portals
+              </div>
+            </div>
+            <button onClick={()=>setShowFilingModal(false)}
+              style={{background:"none",border:"none",fontSize:22,color:"#94A3B8",cursor:"pointer",
+                padding:"0 4px",lineHeight:1}}>✕</button>
+          </div>
+
+          {/* Tabs */}
+          <div style={{display:"flex",gap:0,padding:"14px 18px 0",borderBottom:"1px solid #E2E8F0"}}>
+            {(isCompany?[
+              {k:"wht",l:"WHT"},
+              {k:"vat",l:"VAT"},
+              {k:"paye",l:"PAYE"},
+            ]:[
+              {k:"wht",l:"WHT Credits"},
+              {k:"paye",l:"PAYE"},
+            ]).map(t=>(
+              <button key={t.k} onClick={()=>setFilingTab(t.k)}
+                style={{padding:"8px 16px",fontSize:12,fontWeight:700,border:"none",
+                  background:"none",cursor:"pointer",fontFamily:"inherit",
+                  color:filingTab===t.k?"#7C3AED":"#94A3B8",
+                  borderBottom:filingTab===t.k?"3px solid #7C3AED":"3px solid transparent"}}>
+                {t.l}
+              </button>
+            ))}
+          </div>
+
+          <div style={{padding:"16px 18px"}}>
+
+            {/* WHT Tab */}
+            {filingTab==="wht"&&(()=>{
+              const lines=agg.schedules.whtOut||[];
+              const credits=agg.schedules.whtIn||[];
+              const showOut=isCompany&&lines.length>0;
+              return (
+                <div>
+                  <div style={{background:"#F1F5F9",borderRadius:10,padding:"12px 14px",marginBottom:12}}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:6}}>
+                      Portal: NRS Rev360
+                    </div>
+                    <div style={{fontSize:11,color:"#64748B",lineHeight:1.6}}>
+                      selfservice.nrs.gov.ng → Group Taxes → WHT → Upload Schedule
+                    </div>
+                  </div>
+                  {showOut&&(
+                    <div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:10,
+                      padding:"12px 14px",marginBottom:10}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                        <div style={{fontSize:12,fontWeight:700,color:"#C2410C"}}>
+                          WHT Remittance Schedule
+                        </div>
+                        <span style={{fontSize:10,background:"#FED7AA",color:"#92400E",
+                          padding:"2px 8px",borderRadius:100,fontWeight:700}}>
+                          {lines.length} rows
+                        </span>
+                      </div>
+                      <div style={{fontSize:11,color:"#78350F",lineHeight:1.6,marginBottom:8}}>
+                        Columns: beneficiary_name, beneficiary_tin, transaction_date (DD/MM/YY),
+                        transaction_desc, transaction_amount, rate, tax_type (WHT), tax_amount, schedule_reference
+                      </div>
+                      <div style={{fontSize:10,color:"#92400E",marginBottom:8}}>
+                        ⚠ You must fill in beneficiary TINs before uploading. Use 0 if unknown.
+                      </div>
+                      <button onClick={()=>downloadFilingExport("wht")}
+                        style={{width:"100%",padding:"10px",background:"#C2410C",border:"none",
+                          borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",
+                          fontFamily:"inherit"}}>
+                        ⬇ Download WHT Remittance CSV
+                      </button>
+                    </div>
+                  )}
+                  <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:10,
+                    padding:"12px 14px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                      <div style={{fontSize:12,fontWeight:700,color:"#166534"}}>
+                        WHT Credit Schedule
+                      </div>
+                      <span style={{fontSize:10,background:"#BBF7D0",color:"#166534",
+                        padding:"2px 8px",borderRadius:100,fontWeight:700}}>
+                        {credits.length} rows
+                      </span>
+                    </div>
+                    <div style={{fontSize:11,color:"#14532D",lineHeight:1.6,marginBottom:8}}>
+                      WHT deducted from your income by payers — use this to claim credit on your annual return.
+                    </div>
+                    {credits.length===0&&(
+                      <div style={{fontSize:11,color:"#16A34A",fontStyle:"italic"}}>
+                        No WHT credits in {selYear}.
+                      </div>
+                    )}
+                  </div>
+                  <div style={{marginTop:12,padding:"10px 12px",background:"#EFF6FF",
+                    borderRadius:8,fontSize:10,color:"#1D4ED8",lineHeight:1.6}}>
+                    WHT due date: 21st of the month following payment · NTA 2025 Ch.Two Pt.IV
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* VAT Tab */}
+            {filingTab==="vat"&&isCompany&&(()=>{
+              const out=agg.schedules.vatOut||[];
+              const inp=agg.schedules.vatIn||[];
+              return (
+                <div>
+                  <div style={{background:"#F1F5F9",borderRadius:10,padding:"12px 14px",marginBottom:12}}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:4}}>
+                      Portal: NRS Rev360
+                    </div>
+                    <div style={{fontSize:11,color:"#64748B",lineHeight:1.6}}>
+                      selfservice.nrs.gov.ng → Group Taxes → VAT → Upload Sales/Purchases Schedule
+                    </div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                    <div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:8,padding:"10px 12px"}}>
+                      <div style={{fontSize:10,fontWeight:700,color:"#92400E",marginBottom:2}}>Output VAT</div>
+                      <div style={{fontSize:18,fontWeight:800,color:"#C2410C"}}>{out.length}</div>
+                      <div style={{fontSize:9,color:"#78350F"}}>sales transactions</div>
+                    </div>
+                    <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:8,padding:"10px 12px"}}>
+                      <div style={{fontSize:10,fontWeight:700,color:"#166534",marginBottom:2}}>Input VAT</div>
+                      <div style={{fontSize:18,fontWeight:800,color:"#15803D"}}>{inp.length}</div>
+                      <div style={{fontSize:9,color:"#14532D"}}>purchase transactions</div>
+                    </div>
+                  </div>
+                  <div style={{fontSize:11,color:"#475569",lineHeight:1.6,marginBottom:8}}>
+                    CSV includes Sales Schedule (customer name/TIN, item, amount, VAT status) and
+                    Purchases Schedule (supplier name/TIN, item, amount, input VAT).
+                  </div>
+                  <div style={{fontSize:10,color:"#92400E",background:"#FFF7ED",padding:"8px 10px",
+                    borderRadius:6,marginBottom:10}}>
+                    ⚠ Update customer_tin and supplier_tin columns before uploading. Use 0 if unknown.
+                  </div>
+                  {(out.length>0||inp.length>0)&&(
+                    <button onClick={()=>downloadFilingExport("vat")}
+                      style={{width:"100%",padding:"10px",background:"#D97706",border:"none",
+                        borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",
+                        fontFamily:"inherit",marginBottom:8}}>
+                      ⬇ Download VAT Schedule CSV
+                    </button>
+                  )}
+                  <div style={{marginTop:8,padding:"10px 12px",background:"#EFF6FF",
+                    borderRadius:8,fontSize:10,color:"#1D4ED8",lineHeight:1.6}}>
+                    VAT due date: 21st of the following month · NTA 2025 Ch.Four Sec 54
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* PAYE Tab */}
+            {filingTab==="paye"&&(()=>{
+              const lines=isCompany?(agg.schedules.payeOut||[]):(agg.schedules.payeIn||[]);
+              const sInfo=SIRS.find(x=>x.s===payeState)||{portal:"",note:""};
+              return (
+                <div>
+                  <div style={{marginBottom:12}}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:6}}>
+                      Select employee resident state (SIRS):
+                    </div>
+                    <select value={payeState} onChange={e=>setPayeState(e.target.value)}
+                      style={{width:"100%",padding:"9px 12px",borderRadius:8,
+                        border:"1.5px solid #E2E8F0",fontSize:13,fontWeight:600,
+                        fontFamily:"inherit",color:"#1E293B",background:"#fff"}}>
+                      {SIRS.map(s=>(
+                        <option key={s.s} value={s.s}>{s.s}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,
+                    padding:"12px 14px",marginBottom:12}}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#1D4ED8",marginBottom:4}}>
+                      {sInfo.note||payeState+" IRS"}
+                    </div>
+                    <div style={{fontSize:11,color:"#1E40AF",lineHeight:1.6,marginBottom:4}}>
+                      Portal: {sInfo.portal||"Contact your state IRS for portal details"}
+                    </div>
+                    <div style={{fontSize:10,color:"#3B82F6"}}>
+                      PAYE due: 10th of the following month · TAA 2025 Sec 13
+                    </div>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                    background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:8,
+                    padding:"10px 12px",marginBottom:10}}>
+                    <div style={{fontSize:12,color:"#475569"}}>
+                      {isCompany?"PAYE Remittance":"PAYE Credit"} rows
+                    </div>
+                    <div style={{fontSize:18,fontWeight:800,color:"#1E293B"}}>{lines.length}</div>
+                  </div>
+                  <div style={{fontSize:11,color:"#475569",lineHeight:1.6,marginBottom:10}}>
+                    Columns: employee_name, employee_tin, gross_salary, paye_deducted, month (DD/MM/YY), employer_tin, employer_name
+                  </div>
+                  <div style={{fontSize:10,color:"#92400E",background:"#FFF7ED",padding:"8px 10px",
+                    borderRadius:6,marginBottom:10}}>
+                    ⚠ Update employee_tin column with actual TINs before uploading. Use 0 if unknown.
+                    If you have employees in multiple states, download a separate file per state.
+                  </div>
+                  {lines.length>0&&(
+                    <button onClick={()=>downloadFilingExport("paye")}
+                      style={{width:"100%",padding:"10px",background:"#1D4ED8",border:"none",
+                        borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",
+                        fontFamily:"inherit",marginBottom:8}}>
+                      ⬇ Download PAYE Schedule CSV ({payeState})
+                    </button>
+                  )}
+                  {lines.length===0&&(
+                    <div style={{textAlign:"center",padding:"20px 0",color:"#94A3B8",fontSize:12}}>
+                      No PAYE transactions in {selYear}.
+                    </div>
+                  )}
+                  <div style={{marginTop:8,padding:"10px 12px",background:"#F0FDF4",
+                    borderRadius:8,fontSize:10,color:"#166534",lineHeight:1.6}}>
+                    Note: PAYE for employees resident in FCT/Abuja goes to FCT-IRS, not LIRS.
+                    For employees across multiple states, remit separately to each state IRS.
+                  </div>
+                </div>
+              );
+            })()}
+
+          </div>
+        </div>
+      </div>
+    )}
     </div>
   );
 }

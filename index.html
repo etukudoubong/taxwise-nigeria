@@ -281,6 +281,16 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden;background:#0B1628;}
 <script src="https://js.paystack.co/v1/inline.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script>
+// Configure PDF.js worker (must be set before any PDF.js call)
+(function(){
+  if(window.pdfjsLib){
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  }
+})();
+</script>
 <script type="text/babel">
 const {useState,useEffect,useRef,useCallback,useMemo}=React;
 
@@ -4890,6 +4900,31 @@ async function createTrialSubscription(userId, plan){
   });
 }
 
+// ── PDF.js: render PDF pages to JPEG base64 images ──────────────────────────
+// Returns array of {base64, mediaType} — one entry per page.
+// scale=1.5 gives ~1240px wide for A4, enough for AI text recognition.
+async function pdfToImages(file, onProgress) {
+  if(!window.pdfjsLib) throw new Error("PDF.js not loaded — please refresh the page and try again.");
+  const arrayBuffer = await file.arrayBuffer();
+  const loadingTask = window.pdfjsLib.getDocument({data: arrayBuffer, disableFontFace: true});
+  const pdf = await loadingTask.promise;
+  const numPages = pdf.numPages;
+  const images = [];
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  for(let i = 1; i <= numPages; i++){
+    if(onProgress) onProgress(i, numPages);
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({scale: 1.5});
+    canvas.width  = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({canvasContext: ctx, viewport}).promise;
+    const base64 = canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+    images.push({base64, mediaType: "image/jpeg", isPDF: false});
+  }
+  return images;
+}
+
 function isSubscriptionActive(sub){
   if(!sub) return false;
   if(sub.status==="active") return true;
@@ -5585,143 +5620,157 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       }
       if(setSub) setSub(s => s ? ({...s, ai_imports_used:(s.ai_imports_month===currentMonthKey()?(s.ai_imports_used||0)+1:1), ai_imports_month:currentMonthKey()}) : s);
     }
-    const fileMB = file.size/1024/1024;
-    const maxSize = 8*1024*1024; // 8MB hard limit
-    if(file.size>maxSize) throw new Error(
-      `File too large (${fileMB.toFixed(1)}MB). Maximum is 8MB for AI processing.\n\n` +
-      `To fix:\n` +
-      `1. Split the PDF — open in any PDF viewer, print pages 1-30 to PDF, upload in sections\n` +
-      `2. Download as Excel instead — faster and more reliable than PDF\n` +
-      `3. For GTBank/Access/UBA — use Excel export from internet banking (no password needed)`
-    );
-    // Warn user if file is large — processing will take time
-    const sizeWarning = fileMB > 3
-      ? `AI is analysing your document (${fileMB.toFixed(1)}MB) — this may take up to 60 seconds…`
-      : "AI is analysing your document — this may take up to 30 seconds for large files…";
     const isPDF = file.type==="application/pdf"||file.name.endsWith(".pdf");
-    const mediaType = isPDF?"application/pdf":(file.type||"image/jpeg");
-    setProgress("Reading document…");
-    const base64 = await new Promise((res,rej)=>{
-      const reader=new FileReader();
-      reader.onload=()=>res(reader.result.split(",")[1]);
-      reader.onerror=()=>rej(new Error("Could not read file — try re-saving the PDF and uploading again"));
-      reader.readAsDataURL(file);
-    });
-    setProgress(sizeWarning);
-    // Build date range instruction for AI if set
-    const dateRangeNote = (dateFrom||dateTo)
-      ? `\n\nDATE RANGE FILTER: Only extract transactions between ${dateFrom||"the beginning"} and ${dateTo||"the end of the document"}. Skip transactions outside this range.`
-      : "";
+    const fileMB = file.size/1024/1024;
+    let txnList = []; // hoisted — populated by PDF or image path below
 
-    const systemPrompt = `You are a Nigerian bank statement processor. Extract ALL transactions from this document.${dateRangeNote}
+    // ── PDF.js chunked path: render pages to images, batch-process ────────────
+    // Handles Polaris 80pp and any large PDF — no Anthropic PDF size limit hit.
+    if(isPDF && window.pdfjsLib){
+      setProgress("Reading PDF…");
+      let images;
+      try {
+        images = await pdfToImages(file, (pageNum, total) => {
+          setProgress("Rendering page " + pageNum + " of " + total + "…");
+        });
+      } catch(pdfErr){
+        if(/password|encrypted/i.test(pdfErr.message)){
+          throw new Error("This PDF is password-protected (common with GTBank, Access, UBA statements).
 
-NIGERIAN BANK DATE FORMATS — convert all to YYYY-MM-DD:
-- DD-MON-YY e.g. 04-JAN-16 = 2016-01-04, 15-SEP-20 = 2020-09-15
-- DD-MON-YYYY e.g. 04-JAN-2016
-- DDMONYY e.g. 04JAN16, 01MAR16, 07MAR16 (no separator)
-- DD/MM/YYYY, DD/MM/YY
-- DDMMMYY with 2-digit year: add 2000 if year < 50
+To fix:
+1. Open the PDF and enter the password (usually your date of birth e.g. 15061985)
+2. Print to PDF to create an unlocked copy
+3. Upload the unlocked copy
 
-POLARIS BANK / SKYE BANK FORMAT (EntryDate | Details | ValueDate | Debit | Credit | Balance):
-- Use EntryDate as the transaction date, ignore ValueDate column
-- Debit=0 and Credit=0 means the opposite column has the value
-- "Balance B/F" row = opening balance, SKIP IT
-- Totals row at end = SKIP IT
-
-MULTI-PAGE RULE: First page has headers. All subsequent pages use the same column structure — apply first-page headers to every page even if not repeated.
-
-For EVERY transaction row return:
-- date: "YYYY-MM-DD"
-- desc: narration/description (max 80 chars, trim excess whitespace and reference codes)
-- amount: positive number (Credit value if credit transaction, Debit value if debit)
-- type: "income" if Credit > 0, "expense" if Debit > 0
-- category: one of "revenue"|"salary"|"rent"|"professional_fee"|"supplies"|"utility"|"tax_payment"|"bank_charge"|"stamp_duty"|"loan"|"other"
-- taxAllowable: true for most; false for: stamp duty, account maintenance fee, loan principal, income tax, drawings, dividends, fines/penalties
-- confidence: "high"|"medium"|"low"
-- vatFlag: false
-- whtFlag: false
-
-NIGERIAN TRANSACTION CATEGORY GUIDE:
-CASH DEPOSIT → income / revenue
-CHEQUE WITHDRAWAL, CLG CHQ PAID, CHEQUE PAID → expense
-STAMP DUTY → expense / stamp_duty, taxAllowable=false
-ACCOUNT MAINTENANCE FEE, VAT ON CHARGE, SMS CHARGE, SMS SERVICE → expense / bank_charge, taxAllowable=false
-NIPS TRANSFER FEE, TRANSFER FEE, CHARGE → expense / bank_charge
-FUNDS TRANSFER DEBIT, FUNDS TRANSFER CREDIT → expense or income
-NEFT POS, INTERSWITCHNG, UNIFIED PAYMENTS credits → income / revenue (card/POS sales)
-INWD CLRG RTD (returned cheque credit) → income (reversal)
-REV: prefix → reversal entry, include with correct type
-SIP FT (inter-bank transfer debit) → expense
-NIBSS credit → income / revenue
-
-Return ONLY the JSON array. No preamble, no markdown, no other text.`;
-
-    const res = await fetch(`${SUPA_URL}/functions/v1/taxwise-ai`,{
-      method:"POST",
-      headers:{"Content-Type":"application/json","Authorization":`Bearer ${SUPA_KEY}`,"apikey":SUPA_KEY},
-      body:JSON.stringify({
-        system: systemPrompt,
-        docType: "bank_statement",
-        totalPages: 1,
-        messages:[{role:"user",content:[
-          {type:isPDF?"document":"image",source:{type:"base64",media_type:mediaType,data:base64}},
-          {type:"text",text:"Extract all transactions from this bank statement. Return only the JSON array."}
-        ]}]
-      })
-    });
-    if(!res.ok){
-      const errData = await res.json().catch(()=>({}));
-      const msg = errData?.error || `Server error ${res.status}`;
-      if(res.status===400||msg.toLowerCase().includes("password")||msg.toLowerCase().includes("encrypted")){
-        throw new Error("This PDF is password-protected (common with GTBank, Access, UBA statements).\n\nTo fix:\n1. Open the PDF and enter the password (usually your date of birth e.g. 15061985, or last 4 digits of your phone)\n2. Print → Save as PDF to create an unlocked copy\n3. Upload the unlocked copy to TaxWise\n\nAlternatively, download your statement in Excel format from your bank app and upload that instead.");
+Or download as Excel from your bank app.");
+        }
+        throw pdfErr;
       }
-      if(res.status===413||msg.toLowerCase().includes("too large")){
-        throw new Error("PDF is too large for AI processing. Download as Excel from your bank app instead, or split the PDF into sections of 20 pages and upload each section separately.");
+
+      const totalPages = images.length;
+      const BATCH = 10;
+      const numBatches = Math.ceil(totalPages / BATCH);
+      let allTxns = [];
+
+      const dateRangeNote = (dateFrom||dateTo)
+        ? "
+
+DATE RANGE FILTER: Only extract transactions between " + (dateFrom||"the beginning") + " and " + (dateTo||"the end of the document") + ". Skip transactions outside this range."
+        : "";
+
+      const sysPrompt = "You are a Nigerian bank statement processor. Extract ALL transactions from the pages provided." + dateRangeNote + "
+
+NIGERIAN BANK DATE FORMATS (convert to YYYY-MM-DD):
+04-JAN-16 = 2016-01-04. 04JAN16 = 2016-01-04. DD/MM/YYYY. 2-digit year: add 2000 if < 50.
+
+POLARIS / SKYE BANK (EntryDate | Details | ValueDate | Debit | Credit | Balance):
+Use EntryDate as date. Ignore ValueDate. Skip Balance B/F and Totals rows.
+
+MULTI-PAGE RULE: Page 1 has column headers. Apply same structure to all pages.
+
+Return ONLY a JSON array. Each object must have:
+date (YYYY-MM-DD), desc (max 80 chars), amount (positive), type (income|expense|asset),
+category (revenue|salary|rent|professional_fee|supplies|utility|tax_payment|bank_charge|stamp_duty|loan|other),
+taxAllowable (bool), confidence (high|medium|low), vatFlag (bool), whtFlag (bool).
+
+NON-ALLOWABLE: stamp duty, maintenance fee, loan principal, income tax, drawings, dividends.
+Return ONLY the JSON array.";
+
+      for(let b = 0; b < numBatches; b++){
+        const bStart = b * BATCH;
+        const bEnd   = Math.min(bStart + BATCH, totalPages);
+        setProgress("Processing pages " + (bStart+1) + "–" + bEnd + " of " + totalPages + " (batch " + (b+1) + " of " + numBatches + ")…");
+
+        const batchImgs = b === 0 ? images.slice(bStart, bEnd) : [images[0], ...images.slice(bStart, bEnd)];
+        const cBlocks = batchImgs.map(img => ({
+          type:"image", source:{type:"base64", media_type:img.mediaType, data:img.base64}
+        }));
+        const uText = b === 0
+          ? "Pages 1–" + bEnd + " of " + totalPages + ". Page 1 has headers. Extract all transactions. Return only JSON array."
+          : "First image = page 1 for header reference only, do NOT re-extract it. Extract pages " + (bStart+1) + "–" + bEnd + " only. Return only JSON array.";
+        cBlocks.push({type:"text", text:uText});
+
+        try {
+          const bRes = await fetch(SUPA_URL+"/functions/v1/taxwise-ai",{
+            method:"POST",
+            headers:{"Content-Type":"application/json","Authorization":"Bearer "+SUPA_KEY,"apikey":SUPA_KEY},
+            body:JSON.stringify({system:sysPrompt, docType:"bank_statement", totalPages, messages:[{role:"user",content:cBlocks}]})
+          });
+          if(!bRes.ok){ const ed=await bRes.json().catch(()=>({})); console.warn("Batch "+(b+1)+" HTTP err:",ed?.error||bRes.status); continue; }
+          const bData = await bRes.json();
+          if(bData.error){ console.warn("Batch "+(b+1)+" err:",bData.error); continue; }
+          let clean=(bData.reply||"[]").replace(/```json|```/g,"").trim();
+          const si=clean.indexOf("["),ei=clean.lastIndexOf("]");
+          if(si!==-1&&ei>si) clean=clean.slice(si,ei+1);
+          if(clean&&!clean.endsWith("]")){ const lc=clean.lastIndexOf("}"); clean=lc!==-1?clean.slice(0,lc+1)+"]":"[]"; }
+          try{ const p=JSON.parse(clean); allTxns=allTxns.concat(Array.isArray(p)?p:(p.transactions||p.items||[])); }
+          catch(_){ console.warn("Batch "+(b+1)+" parse fail"); }
+        } catch(bErr){
+          console.warn("Batch "+(b+1)+" exception:",bErr.message); continue;
+        }
       }
-      if(res.status===546||res.status===504||res.status===524||msg.toLowerCase().includes("timeout")||msg.toLowerCase().includes("time out")){
-        throw new Error(
-          `Processing timed out — the PDF is too large to process in one go.\n\n` +
-          `Solutions:\n` +
-          `1. Download as Excel from your bank app — much faster, no timeout risk\n` +
-          `2. Split the PDF into sections (e.g. 3 months at a time) and upload each section\n` +
-          `3. Use the Camera Scan option — photograph each page separately\n\n` +
-          `For GTBank: Internet banking → Accounts → Statement → Download as Excel`
-        );
+
+      setProgress("Parsing results…");
+      txnList = allTxns;
+      if(!txnList.length) throw new Error("No transactions found in the PDF. If the statement is password-protected, unlock it first. Or download as Excel from your bank app.");
+      if(dateFrom||dateTo){
+        const fromDT=dateFrom?new Date(dateFrom):null, toDT=dateTo?new Date(dateTo):null;
+        txnList=txnList.filter(t=>{ const d=new Date(t.date||""); if(isNaN(d.getTime())) return true; if(fromDT&&d<fromDT) return false; if(toDT&&d>toDT) return false; return true; });
+        if(!txnList.length) throw new Error("No transactions in selected date range ("+(dateFrom||"start")+" to "+(dateTo||"today")+"). Try widening the range.");
       }
-      throw new Error(`AI extraction failed: ${msg}`);
-    }
-    const data = await res.json();
-    if(data.error) throw new Error(`AI error: ${data.error}`);
-    let txnList=[];
-    try {
-      const raw=data.reply||"[]";
-      let clean=raw.replace(/```json|```/g,"").trim();
-      const s=clean.indexOf("["), e=clean.lastIndexOf("]");
-      if(s!==-1&&e>s) clean=clean.slice(s,e+1);
-      if(clean&&!clean.endsWith("]")){
-        const lc=clean.lastIndexOf("}");
-        clean=lc!==-1?clean.slice(0,lc+1)+"]":"[]";
-      }
-      const parsed=JSON.parse(clean);
-      txnList=Array.isArray(parsed)?parsed:(parsed.transactions||parsed.items||[]);
-    } catch(e){
-      const preview=(data.reply||"").slice(0,300);
-      throw new Error(`Could not parse AI response. Preview: ${preview}`);
-    }
-    if(!txnList.length) throw new Error("No transactions found in document");
-    // Apply date range filter to AI results
-    if(dateFrom||dateTo){
-      const fromAI = dateFrom ? new Date(dateFrom) : null;
-      const toAI   = dateTo   ? new Date(dateTo)   : null;
-      txnList = txnList.filter(t=>{
-        const d = new Date(t.date||"");
-        if(isNaN(d.getTime())) return true;
-        if(fromAI && d < fromAI) return false;
-        if(toAI   && d > toAI)   return false;
-        return true;
+
+    } else {
+      // ── Image / non-PDF.js fallback path (single image files) ───────────────
+      const maxSize = 8*1024*1024;
+      if(file.size > maxSize) throw new Error("File too large (" + fileMB.toFixed(1) + "MB). Maximum is 8MB.
+
+Download as Excel from your bank app instead.");
+      const mediaType = file.type||"image/jpeg";
+      setProgress("Reading image…");
+      const base64 = await new Promise((res,rej)=>{
+        const reader = new FileReader();
+        reader.onload = ()=>res(reader.result.split(",")[1]);
+        reader.onerror = ()=>rej(new Error("Could not read file"));
+        reader.readAsDataURL(file);
       });
-      if(!txnList.length) throw new Error(`No transactions found in selected date range (${dateFrom||"start"} to ${dateTo||"today"}). Try widening the range or clearing the filter.`);
-    }
+      const dateRangeNote2 = (dateFrom||dateTo)
+        ? "
+
+DATE RANGE FILTER: Only extract transactions between " + (dateFrom||"the beginning") + " and " + (dateTo||"end") + "."
+        : "";
+      const imgSystemPrompt = "You are a Nigerian bank statement processor. Extract ALL transactions from this image." + dateRangeNote2 + "
+
+Return ONLY a JSON array. Each item: date (YYYY-MM-DD), desc (max 80 chars), amount (positive number), type (income|expense|asset), category (revenue|salary|rent|professional_fee|supplies|utility|tax_payment|bank_charge|stamp_duty|loan|other), taxAllowable (bool), confidence (high|medium|low), vatFlag (bool), whtFlag (bool). No preamble, no markdown.";
+      setProgress("AI is analysing image…");
+      const imgRes = await fetch(SUPA_URL+"/functions/v1/taxwise-ai",{
+        method:"POST",
+        headers:{"Content-Type":"application/json","Authorization":"Bearer "+SUPA_KEY,"apikey":SUPA_KEY},
+        body:JSON.stringify({system:imgSystemPrompt, docType:"bank_statement", totalPages:1,
+          messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:mediaType,data:base64}},{type:"text",text:"Extract all transactions. Return only the JSON array."}]}]})
+      });
+      if(!imgRes.ok){
+        const ed=await imgRes.json().catch(()=>({}));
+        const msg=ed?.error||"Server error "+imgRes.status;
+        if(imgRes.status===546||imgRes.status===504||/timeout/i.test(msg)) throw new Error("Processing timed out. Try photographing fewer pages at once.");
+        throw new Error("AI extraction failed: "+msg);
+      }
+      const imgData = await imgRes.json();
+      if(imgData.error) throw new Error("AI error: "+imgData.error);
+      let clean=(imgData.reply||"[]").replace(/```json|```/g,"").trim();
+      const sis=clean.indexOf("["),eis=clean.lastIndexOf("]");
+      if(sis!==-1&&eis>sis) clean=clean.slice(sis,eis+1);
+      if(clean&&!clean.endsWith("]")){ const lci=clean.lastIndexOf("}"); clean=lci!==-1?clean.slice(0,lci+1)+"]":"[]"; }
+      txnList=[];
+      try{ const p=JSON.parse(clean); txnList=Array.isArray(p)?p:(p.transactions||p.items||[]); }
+      catch(_){ throw new Error("Could not parse AI response. Preview: "+(imgData.reply||"").slice(0,200)); }
+      if(!txnList.length) throw new Error("No transactions found in image.");
+      if(dateFrom||dateTo){
+        const fromDT=dateFrom?new Date(dateFrom):null,toDT=dateTo?new Date(dateTo):null;
+        txnList=txnList.filter(t=>{ const d=new Date(t.date||""); if(isNaN(d.getTime())) return true; if(fromDT&&d<fromDT) return false; if(toDT&&d>toDT) return false; return true; });
+        if(!txnList.length) throw new Error("No transactions in date range. Try clearing the filter.");
+      }
+    } // end else (image path)
+
     const formatted = txnList.map((t,i)=>{
       const nonAllowable = t.taxAllowable===false||getNonAllowable(t.desc||"");
       return {

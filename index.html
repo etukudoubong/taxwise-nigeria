@@ -343,7 +343,12 @@ async function syncPull(userId){
         name: prof.data.name, tin: prof.data.tin,
         email: prof.data.email, phone: prof.data.phone,
         mode: prof.data.mode, empCategory: prof.data.emp_category,
-        employerDeductions: prof.data.employer_deductions||{},
+        employerDeductions: (()=>{
+          // NDPA compliance: never pre-tick employer deductions from saved data.
+          // User must explicitly confirm what their employer actually deducts.
+          const saved = prof.data.employer_deductions||{};
+          return {...saved, paye:false, pension:false};
+        })(),
         companyName: prof.data.company_name,
         fixedAssets: prof.data.fixed_assets,
         isProfessional: prof.data.is_professional,

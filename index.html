@@ -9250,6 +9250,84 @@ function AuthScreen({onAuth}){
 }
 
 
+function InstallBanner(){
+  const [prompt, setPrompt]       = React.useState(null);
+  const [show, setShow]           = React.useState(false);
+  const [ios, setIos]             = React.useState(false);
+  const [installed, setInstalled] = React.useState(false);
+  const [dismissed, setDismissed] = React.useState(
+    ()=> localStorage.getItem("tw_install_dismissed")==="1"
+  );
+
+  React.useEffect(()=>{
+    if(window.matchMedia("(display-mode: standalone)").matches ||
+       window.navigator.standalone===true){ setInstalled(true); return; }
+    const handler = e=>{ e.preventDefault(); setPrompt(e); setShow(true); };
+    window.addEventListener("beforeinstallprompt", handler);
+    window.addEventListener("appinstalled",()=>{ setInstalled(true); setShow(false); });
+    const isIos    = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    const isSafari = /safari/i.test(navigator.userAgent) && !/chrome/i.test(navigator.userAgent);
+    if(isIos && isSafari && !dismissed){ setIos(true); setShow(true); }
+    return ()=> window.removeEventListener("beforeinstallprompt", handler);
+  },[]);
+
+  const install = async ()=>{
+    if(!prompt) return;
+    prompt.prompt();
+    const {outcome} = await prompt.userChoice;
+    if(outcome==="accepted") setInstalled(true);
+    setShow(false);
+  };
+
+  const dismiss = ()=>{ setShow(false); localStorage.setItem("tw_install_dismissed","1"); };
+
+  if(installed || !show || dismissed) return null;
+
+  return(
+    <div style={{
+      position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",
+      width:"100%",maxWidth:430,zIndex:9999,
+      background:"#0B1628",borderTop:"1px solid rgba(255,255,255,.12)",
+      padding:"14px 16px max(18px,env(safe-area-inset-bottom))",
+      boxShadow:"0 -8px 32px rgba(0,0,0,.4)",
+    }}>
+      {ios?(
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{width:36,height:36,borderRadius:10,background:"#1E3A5F",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:700,color:"#4ADE80"}}>{"₦"}</div>
+              <div>
+                <div style={{fontSize:13,fontWeight:700,color:"#fff"}}>Install TaxWise</div>
+                <div style={{fontSize:11,color:"rgba(255,255,255,.5)"}}>Add to your home screen</div>
+              </div>
+            </div>
+            <button onClick={dismiss} style={{background:"none",border:"none",color:"rgba(255,255,255,.4)",fontSize:20,cursor:"pointer",padding:"0 4px",lineHeight:1}}>{"✕"}</button>
+          </div>
+          <div style={{background:"rgba(255,255,255,.06)",borderRadius:10,padding:"10px 12px"}}>
+            <div style={{fontSize:11,color:"rgba(255,255,255,.7)",lineHeight:1.9}}>
+              <div>{"1. Tap the "}<strong style={{color:"#60A5FA"}}>Share</strong>{" button at the bottom of Safari"}</div>
+              <div>{"2. Scroll and tap "}<strong style={{color:"#60A5FA"}}>{"Add to Home Screen"}</strong></div>
+              <div>{"3. Tap "}<strong style={{color:"#4ADE80"}}>{"Add"}</strong>{" - TaxWise appears on your home screen"}</div>
+            </div>
+          </div>
+        </div>
+      ):(
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:44,height:44,borderRadius:12,background:"#1E3A5F",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,fontWeight:700,color:"#4ADE80",flexShrink:0}}>{"₦"}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:13,fontWeight:700,color:"#fff"}}>Install TaxWise Nigeria</div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,.5)",marginTop:1}}>Add to home screen - Works offline</div>
+          </div>
+          <div style={{display:"flex",gap:6,flexShrink:0}}>
+            <button onClick={dismiss} style={{padding:"8px 12px",background:"rgba(255,255,255,.08)",border:"1px solid rgba(255,255,255,.15)",borderRadius:8,color:"rgba(255,255,255,.6)",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Not now</button>
+            <button onClick={install} style={{padding:"8px 14px",background:"#2563EB",border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Install</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 ReactDOM.createRoot(document.getElementById("root")).render(
   <><App/><InstallBanner/></>
 );

@@ -277,15 +277,6 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden;background:#0B1628;}
 <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script>
-// Patch Babel immediately after load to force compact output (keeps output under 500KB)
-if(window.Babel){
-  var _orig = window.Babel.transform.bind(window.Babel);
-  window.Babel.transform = function(code, opts){
-    return _orig(code, Object.assign({compact:true}, opts||{}));
-  };
-}
-</script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://js.paystack.co/v1/inline.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -303,18 +294,15 @@ if(window.Babel){
 <script type="text/babel">
 const {useState,useEffect,useRef,useCallback,useMemo}=React;
 
-// ── Live clock ────────────────────────────────────────────────────────────────
 setInterval(()=>{
   const el=document.getElementById('sb-time');
   if(el){const n=new Date();el.textContent=n.getHours()+':'+(n.getMinutes()+'').padStart(2,'0');}
 },10000);
 
-// ── Supabase client ───────────────────────────────────────────────────────────
 const SUPA_URL = "https://rxqhvntlaycobsknmiyn.supabase.co";
 const SUPA_KEY = "sb_publishable_I8CO7uhlMy5Z2ESnpZhFyA_kXa2AZ09";
 const sb = supabase.createClient(SUPA_URL, SUPA_KEY);
 
-// ── Paystack & Billing constants ──────────────────────────────────────────────
 const PAYSTACK_KEY = "pk_test_1d51ed4a9b89bd23a71d60ad0de1b73a6740eba4";
 const PLANS = {
   individual: { name:"Individual", amount:250000, label:"₦2,500/month", yearAmount:2500000, yearLabel:"₦25,000/year" },
@@ -322,10 +310,8 @@ const PLANS = {
 };
 const EXTRA_USER_YEAR = 3000000; // ₦30,000/user/year in kobo
 const TRIAL_DAYS = 14;
-// AI import limits per plan per calendar month
 const AI_IMPORT_LIMITS = { trial:5, individual:10, company:30 };
 
-// ── Member roles ──────────────────────────────────────────────────────────────
 const ROLES = {
   admin:       { label:"Admin",        desc:"Full access + manage users & billing" },
   accountant:  { label:"Accountant",   desc:"Full access except user management" },
@@ -333,10 +319,7 @@ const ROLES = {
   view_only:   { label:"View Only",    desc:"Read-only access to all data" },
 };
 
-
-// ── Sync helpers ──────────────────────────────────────────────────────────────
 async function syncPull(userId){
-  // Pull all user data from Supabase → merge into localStorage
   try {
     const [prof, txns, asst, emps, kiv_] = await Promise.all([
       sb.from("profiles").select("*").eq("id", userId).single(),
@@ -377,7 +360,6 @@ async function syncPull(userId){
 }
 
 async function syncPush(userId, store){
-  // Push localStorage data up to Supabase
   try {
     const p = store.profile||{};
     await sb.from("profiles").upsert({
@@ -425,7 +407,6 @@ async function syncPush(userId, store){
   } catch(e){ console.warn("Sync push failed:", e); return false; }
 }
 
-
 const C={
   navy:"#0B1628",blue:"#1D4ED8",blueMid:"#3B82F6",blueLight:"#EFF6FF",blueBorder:"#BFDBFE",
   green:"#059669",greenBg:"#F0FDF4",greenBorder:"#BBF7D0",
@@ -436,13 +417,10 @@ const C={
   border:"#E2E8F0",surface:"#F8FAFC",white:"#FFFFFF",bg:"#F0F4F8",
 };
 
-// ── Formatters ────────────────────────────────────────────────────────────────
 const fmt=n=>"₦"+Number(n||0).toLocaleString("en-NG",{maximumFractionDigits:0});
 const fmtD=d=>{try{return new Date(d).toLocaleDateString("en-NG",{day:"numeric",month:"short"});}catch{return d;}};
 const today=()=>new Date().toISOString().split('T')[0];
 
-// ── PERSISTENT STORAGE ────────────────────────────────────────────────────────
-// Uses localStorage to persist all data between sessions
 const STORE_KEY="taxwise_v1";
 
 function loadStore(){
@@ -477,10 +455,6 @@ const DEFAULT_STORE={
   importRules:[],   // bulk reclassification rules applied on every import
 };
 
-// ── TAX ENGINE ────────────────────────────────────────────────────────────────
-// NTA 2025 — complete implementation
-
-// PIT bands — 0% on first ₦800k, then graduated
 function pitBands(taxable){
   const bands=[[800000,0],[2000000,.15],[2200000,.18],[3000000,.21],[4000000,.23],[Infinity,.25]];
   let tax=0,rem=Math.max(0,taxable);
@@ -618,7 +592,6 @@ function getDaysLeft(type){
   now.setHours(0,0,0,0);
   const y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
 
-  // Compute this month's deadline date
   const thisMonthDeadlines = {
     PAYE:   new Date(y, m, 10),
     VAT:    new Date(y, m, 21),
@@ -630,7 +603,6 @@ function getDaysLeft(type){
 
   let deadline = thisMonthDeadlines[type] || thisMonthDeadlines.PAYE;
 
-  // If this month's deadline has passed, move to next month
   if(["PAYE","VAT","WHT"].includes(type) && deadline < now){
     const next = new Date(y, m+1, type==="PAYE"?10:21);
     deadline = next;
@@ -639,16 +611,9 @@ function getDaysLeft(type){
   return Math.ceil((deadline - now) / 86400000);
 }
 
-
-// ── TAX CLASSIFICATION ENGINE ─────────────────────────────────────────────────
-// Every transaction is classified into a tax head with full obligation detail.
-// compliance_required = true means the PAYER must take a tax action BEFORE posting.
-// Source: NTA 2025, TAA 2025
-
 function classifyTxn(desc, type){
   const d = desc.toLowerCase();
 
-  // ── INCOME TRANSACTIONS ───────────────────────────────────────────────────
   if(type === "income"){
     if(d.match(/salary|salari|wage|payroll credit|employment income|paye credit|monthly pay/))
       return{head:"PAYE",icon:"💼",color:C.blue,compliance_required:false,
@@ -660,9 +625,7 @@ function classifyTxn(desc, type){
         obligation:"Payer deducts 10% WHT before paying you. You charge 7.5% VAT on your invoice. Obtain WHT credit note from payer.",
         law:"NTA 2025, Ch. Two Pt. IV; Ch. Four Sec 52"};
 
-    // CGT-ELIGIBLE DISPOSALS — must check BEFORE generic sale/sold match
-    // These keywords suggest an asset disposal that may attract CGT
-    if(d.match(/disposal.*house|house.*disposal|dispose.*house|house.*dispose|disposed.*house|house.*disposed|sold.*house|house.*sold|sale.*house|house.*sale|transfer.*house|house.*transfer|assign.*house|house.*assign|realisation.*house|house.*realisation|realization.*house|house.*realization|realise.*house|house.*realise|realize.*house|house.*realize|divest.*house|house.*divest|liquidat.*house|house.*liquidat|derecognit.*house|house.*derecognit|surrender.*house|house.*surrender|proceeds.*house|house.*proceeds|gain.*house|profit.*house|disposal.*home|home.*disposal|dispose.*home|home.*dispose|disposed.*home|home.*disposed|sold.*home|home.*sold|sale.*home|home.*sale|transfer.*home|home.*transfer|assign.*home|home.*assign|realisation.*home|home.*realisation|realization.*home|home.*realization|realise.*home|home.*realise|realize.*home|home.*realize|divest.*home|home.*divest|liquidat.*home|home.*liquidat|derecognit.*home|home.*derecognit|surrender.*home|home.*surrender|proceeds.*home|home.*proceeds|gain.*home|profit.*home|disposal.*residence|residence.*disposal|dispose.*residence|residence.*dispose|disposed.*residence|residence.*disposed|sold.*residence|residence.*sold|sale.*residence|residence.*sale|transfer.*residence|residence.*transfer|assign.*residence|residence.*assign|realisation.*residence|residence.*realisation|realization.*residence|residence.*realization|realise.*residence|residence.*realise|realize.*residence|residence.*realize|divest.*residence|residence.*divest|liquidat.*residence|residence.*liquidat|derecognit.*residence|residence.*derecognit|surrender.*residence|residence.*surrender|proceeds.*residence|residence.*proceeds|gain.*residence|profit.*residence|disposal.*flat|flat.*disposal|dispose.*flat|flat.*dispose|disposed.*flat|flat.*disposed|sold.*flat|flat.*sold|sale.*flat|flat.*sale|transfer.*flat|flat.*transfer|assign.*flat|flat.*assign|realisation.*flat|flat.*realisation|realization.*flat|flat.*realization|realise.*flat|flat.*realise|realize.*flat|flat.*realize|divest.*flat|flat.*divest|liquidat.*flat|flat.*liquidat|derecognit.*flat|flat.*derecognit|surrender.*flat|flat.*surrender|proceeds.*flat|flat.*proceeds|gain.*flat|profit.*flat|disposal.*apartment|apartment.*disposal|dispose.*apartment|apartment.*dispose|disposed.*apartment|apartment.*disposed|sold.*apartment|apartment.*sold|sale.*apartment|apartment.*sale|transfer.*apartment|apartment.*transfer|assign.*apartment|apartment.*assign|realisation.*apartment|apartment.*realisation|realization.*apartment|apartment.*realization|realise.*apartment|apartment.*realise|realize.*apartment|apartment.*realize|divest.*apartment|apartment.*divest|liquidat.*apartment|apartment.*liquidat|derecognit.*apartment|apartment.*derecognit|surrender.*apartment|apartment.*surrender|proceeds.*apartment|apartment.*proceeds|gain.*apartment|profit.*apartment|disposal.*duplex|duplex.*disposal|dispose.*duplex|duplex.*dispose|disposed.*duplex|duplex.*disposed|sold.*duplex|duplex.*sold|sale.*duplex|duplex.*sale|transfer.*duplex|duplex.*transfer|assign.*duplex|duplex.*assign|realisation.*duplex|duplex.*realisation|realization.*duplex|duplex.*realization|realise.*duplex|duplex.*realise|realize.*duplex|duplex.*realize|divest.*duplex|duplex.*divest|liquidat.*duplex|duplex.*liquidat|derecognit.*duplex|duplex.*derecognit|surrender.*duplex|duplex.*surrender|proceeds.*duplex|duplex.*proceeds|gain.*duplex|profit.*duplex|disposal.*land|land.*disposal|dispose.*land|land.*dispose|disposed.*land|land.*disposed|sold.*land|land.*sold|sale.*land|land.*sale|transfer.*land|land.*transfer|assign.*land|land.*assign|realisation.*land|land.*realisation|realization.*land|land.*realization|realise.*land|land.*realise|realize.*land|land.*realize|divest.*land|land.*divest|liquidat.*land|land.*liquidat|derecognit.*land|land.*derecognit|surrender.*land|land.*surrender|proceeds.*land|land.*proceeds|gain.*land|profit.*land|disposal.*plot|plot.*disposal|dispose.*plot|plot.*dispose|disposed.*plot|plot.*disposed|sold.*plot|plot.*sold|sale.*plot|plot.*sale|transfer.*plot|plot.*transfer|assign.*plot|plot.*assign|realisation.*plot|plot.*realisation|realization.*plot|plot.*realization|realise.*plot|plot.*realise|realize.*plot|plot.*realize|divest.*plot|plot.*divest|liquidat.*plot|plot.*liquidat|derecognit.*plot|plot.*derecognit|surrender.*plot|plot.*surrender|proceeds.*plot|plot.*proceeds|gain.*plot|profit.*plot|disposal.*estate|estate.*disposal|dispose.*estate|estate.*dispose|disposed.*estate|estate.*disposed|sold.*estate|estate.*sold|sale.*estate|estate.*sale|transfer.*estate|estate.*transfer|assign.*estate|estate.*assign|realisation.*estate|estate.*realisation|realization.*estate|estate.*realization|realise.*estate|estate.*realise|realize.*estate|estate.*realize|divest.*estate|estate.*divest|liquidat.*estate|estate.*liquidat|derecognit.*estate|estate.*derecognit|surrender.*estate|estate.*surrender|proceeds.*estate|estate.*proceeds|gain.*estate|profit.*estate|disposal.*farm|farm.*disposal|dispose.*farm|farm.*dispose|disposed.*farm|farm.*disposed|sold.*farm|farm.*sold|sale.*farm|farm.*sale|transfer.*farm|farm.*transfer|assign.*farm|farm.*assign|realisation.*farm|farm.*realisation|realization.*farm|farm.*realization|realise.*farm|farm.*realise|realize.*farm|farm.*realize|divest.*farm|farm.*divest|liquidat.*farm|farm.*liquidat|derecognit.*farm|farm.*derecognit|surrender.*farm|farm.*surrender|proceeds.*farm|farm.*proceeds|gain.*farm|profit.*farm|disposal.*property|property.*disposal|dispose.*property|property.*dispose|disposed.*property|property.*disposed|sold.*property|property.*sold|sale.*property|property.*sale|transfer.*property|property.*transfer|assign.*property|property.*assign|realisation.*property|property.*realisation|realization.*property|property.*realization|realise.*property|property.*realise|realize.*property|property.*realize|divest.*property|property.*divest|liquidat.*property|property.*liquidat|derecognit.*property|property.*derecognit|surrender.*property|property.*surrender|proceeds.*property|property.*proceeds|gain.*property|profit.*property|disposal.*real estate|real estate.*disposal|dispose.*real estate|real estate.*dispose|disposed.*real estate|real estate.*disposed|sold.*real estate|real estate.*sold|sale.*real estate|real estate.*sale|transfer.*real estate|real estate.*transfer|assign.*real estate|real estate.*assign|realisation.*real estate|real estate.*realisation|realization.*real estate|real estate.*realization|realise.*real estate|real estate.*realise|realize.*real estate|real estate.*realize|divest.*real estate|real estate.*divest|liquidat.*real estate|real estate.*liquidat|derecognit.*real estate|real estate.*derecognit|surrender.*real estate|real estate.*surrender|proceeds.*real estate|real estate.*proceeds|gain.*real estate|profit.*real estate|disposal.*building|building.*disposal|dispose.*building|building.*dispose|disposed.*building|building.*disposed|sold.*building|building.*sold|sale.*building|building.*sale|transfer.*building|building.*transfer|assign.*building|building.*assign|realisation.*building|building.*realisation|realization.*building|building.*realization|realise.*building|building.*realise|realize.*building|building.*realize|divest.*building|building.*divest|liquidat.*building|building.*liquidat|derecognit.*building|building.*derecognit|surrender.*building|building.*surrender|proceeds.*building|building.*proceeds|gain.*building|profit.*building|disposal.*warehouse|warehouse.*disposal|dispose.*warehouse|warehouse.*dispose|disposed.*warehouse|warehouse.*disposed|sold.*warehouse|warehouse.*sold|sale.*warehouse|warehouse.*sale|transfer.*warehouse|warehouse.*transfer|assign.*warehouse|warehouse.*assign|realisation.*warehouse|warehouse.*realisation|realization.*warehouse|warehouse.*realization|realise.*warehouse|warehouse.*realise|realize.*warehouse|warehouse.*realize|divest.*warehouse|warehouse.*divest|liquidat.*warehouse|warehouse.*liquidat|derecognit.*warehouse|warehouse.*derecognit|surrender.*warehouse|warehouse.*surrender|proceeds.*warehouse|warehouse.*proceeds|gain.*warehouse|profit.*warehouse|disposal.*office|office.*disposal|dispose.*office|office.*dispose|disposed.*office|office.*disposed|sold.*office|office.*sold|sale.*office|office.*sale|transfer.*office|office.*transfer|assign.*office|office.*assign|realisation.*office|office.*realisation|realization.*office|office.*realization|realise.*office|office.*realise|realize.*office|office.*realize|divest.*office|office.*divest|liquidat.*office|office.*liquidat|derecognit.*office|office.*derecognit|surrender.*office|office.*surrender|proceeds.*office|office.*proceeds|gain.*office|profit.*office|disposal.*vehicle|vehicle.*disposal|dispose.*vehicle|vehicle.*dispose|disposed.*vehicle|vehicle.*disposed|sold.*vehicle|vehicle.*sold|sale.*vehicle|vehicle.*sale|transfer.*vehicle|vehicle.*transfer|assign.*vehicle|vehicle.*assign|realisation.*vehicle|vehicle.*realisation|realization.*vehicle|vehicle.*realization|realise.*vehicle|vehicle.*realise|realize.*vehicle|vehicle.*realize|divest.*vehicle|vehicle.*divest|liquidat.*vehicle|vehicle.*liquidat|derecognit.*vehicle|vehicle.*derecognit|surrender.*vehicle|vehicle.*surrender|proceeds.*vehicle|vehicle.*proceeds|gain.*vehicle|profit.*vehicle|disposal.*car|car.*disposal|dispose.*car|car.*dispose|disposed.*car|car.*disposed|sold.*car|car.*sold|sale.*car|car.*sale|transfer.*car|car.*transfer|assign.*car|car.*assign|realisation.*car|car.*realisation|realization.*car|car.*realization|realise.*car|car.*realise|realize.*car|car.*realize|divest.*car|car.*divest|liquidat.*car|car.*liquidat|derecognit.*car|car.*derecognit|surrender.*car|car.*surrender|proceeds.*car|car.*proceeds|gain.*car|profit.*car|disposal.*truck|truck.*disposal|dispose.*truck|truck.*dispose|disposed.*truck|truck.*disposed|sold.*truck|truck.*sold|sale.*truck|truck.*sale|transfer.*truck|truck.*transfer|assign.*truck|truck.*assign|realisation.*truck|truck.*realisation|realization.*truck|truck.*realization|realise.*truck|truck.*realise|realize.*truck|truck.*realize|divest.*truck|truck.*divest|liquidat.*truck|truck.*liquidat|derecognit.*truck|truck.*derecognit|surrender.*truck|truck.*surrender|proceeds.*truck|truck.*proceeds|gain.*truck|profit.*truck|disposal.*van|van.*disposal|dispose.*van|van.*dispose|disposed.*van|van.*disposed|sold.*van|van.*sold|sale.*van|van.*sale|transfer.*van|van.*transfer|assign.*van|van.*assign|realisation.*van|van.*realisation|realization.*van|van.*realization|realise.*van|van.*realise|realize.*van|van.*realize|divest.*van|van.*divest|liquidat.*van|van.*liquidat|derecognit.*van|van.*derecognit|surrender.*van|van.*surrender|proceeds.*van|van.*proceeds|gain.*van|profit.*van|disposal.*bus|bus.*disposal|dispose.*bus|bus.*dispose|disposed.*bus|bus.*disposed|sold.*bus|bus.*sold|sale.*bus|bus.*sale|transfer.*bus|bus.*transfer|assign.*bus|bus.*assign|realisation.*bus|bus.*realisation|realization.*bus|bus.*realization|realise.*bus|bus.*realise|realize.*bus|bus.*realize|divest.*bus|bus.*divest|liquidat.*bus|bus.*liquidat|derecognit.*bus|bus.*derecognit|surrender.*bus|bus.*surrender|proceeds.*bus|bus.*proceeds|gain.*bus|profit.*bus|disposal.*lorry|lorry.*disposal|dispose.*lorry|lorry.*dispose|disposed.*lorry|lorry.*disposed|sold.*lorry|lorry.*sold|sale.*lorry|lorry.*sale|transfer.*lorry|lorry.*transfer|assign.*lorry|lorry.*assign|realisation.*lorry|lorry.*realisation|realization.*lorry|lorry.*realization|realise.*lorry|lorry.*realise|realize.*lorry|lorry.*realize|divest.*lorry|lorry.*divest|liquidat.*lorry|lorry.*liquidat|derecognit.*lorry|lorry.*derecognit|surrender.*lorry|lorry.*surrender|proceeds.*lorry|lorry.*proceeds|gain.*lorry|profit.*lorry|disposal.*automobile|automobile.*disposal|dispose.*automobile|automobile.*dispose|disposed.*automobile|automobile.*disposed|sold.*automobile|automobile.*sold|sale.*automobile|automobile.*sale|transfer.*automobile|automobile.*transfer|assign.*automobile|automobile.*assign|realisation.*automobile|automobile.*realisation|realization.*automobile|automobile.*realization|realise.*automobile|automobile.*realise|realize.*automobile|automobile.*realize|divest.*automobile|automobile.*divest|liquidat.*automobile|automobile.*liquidat|derecognit.*automobile|automobile.*derecognit|surrender.*automobile|automobile.*surrender|proceeds.*automobile|automobile.*proceeds|gain.*automobile|profit.*automobile|disposal.*machinery|machinery.*disposal|dispose.*machinery|machinery.*dispose|disposed.*machinery|machinery.*disposed|sold.*machinery|machinery.*sold|sale.*machinery|machinery.*sale|transfer.*machinery|machinery.*transfer|assign.*machinery|machinery.*assign|realisation.*machinery|machinery.*realisation|realization.*machinery|machinery.*realization|realise.*machinery|machinery.*realise|realize.*machinery|machinery.*realize|divest.*machinery|machinery.*divest|liquidat.*machinery|machinery.*liquidat|derecognit.*machinery|machinery.*derecognit|surrender.*machinery|machinery.*surrender|proceeds.*machinery|machinery.*proceeds|gain.*machinery|profit.*machinery|disposal.*machine|machine.*disposal|dispose.*machine|machine.*dispose|disposed.*machine|machine.*disposed|sold.*machine|machine.*sold|sale.*machine|machine.*sale|transfer.*machine|machine.*transfer|assign.*machine|machine.*assign|realisation.*machine|machine.*realisation|realization.*machine|machine.*realization|realise.*machine|machine.*realise|realize.*machine|machine.*realize|divest.*machine|machine.*divest|liquidat.*machine|machine.*liquidat|derecognit.*machine|machine.*derecognit|surrender.*machine|machine.*surrender|proceeds.*machine|machine.*proceeds|gain.*machine|profit.*machine|disposal.*equipment|equipment.*disposal|dispose.*equipment|equipment.*dispose|disposed.*equipment|equipment.*disposed|sold.*equipment|equipment.*sold|sale.*equipment|equipment.*sale|transfer.*equipment|equipment.*transfer|assign.*equipment|equipment.*assign|realisation.*equipment|equipment.*realisation|realization.*equipment|equipment.*realization|realise.*equipment|equipment.*realise|realize.*equipment|equipment.*realize|divest.*equipment|equipment.*divest|liquidat.*equipment|equipment.*liquidat|derecognit.*equipment|equipment.*derecognit|surrender.*equipment|equipment.*surrender|proceeds.*equipment|equipment.*proceeds|gain.*equipment|profit.*equipment|disposal.*plant|plant.*disposal|dispose.*plant|plant.*dispose|disposed.*plant|plant.*disposed|sold.*plant|plant.*sold|sale.*plant|plant.*sale|transfer.*plant|plant.*transfer|assign.*plant|plant.*assign|realisation.*plant|plant.*realisation|realization.*plant|plant.*realization|realise.*plant|plant.*realise|realize.*plant|plant.*realize|divest.*plant|plant.*divest|liquidat.*plant|plant.*liquidat|derecognit.*plant|plant.*derecognit|surrender.*plant|plant.*surrender|proceeds.*plant|plant.*proceeds|gain.*plant|profit.*plant|disposal.*computer|computer.*disposal|dispose.*computer|computer.*dispose|disposed.*computer|computer.*disposed|sold.*computer|computer.*sold|sale.*computer|computer.*sale|transfer.*computer|computer.*transfer|assign.*computer|computer.*assign|realisation.*computer|computer.*realisation|realization.*computer|computer.*realization|realise.*computer|computer.*realise|realize.*computer|computer.*realize|divest.*computer|computer.*divest|liquidat.*computer|computer.*liquidat|derecognit.*computer|computer.*derecognit|surrender.*computer|computer.*surrender|proceeds.*computer|computer.*proceeds|gain.*computer|profit.*computer|disposal.*laptop|laptop.*disposal|dispose.*laptop|laptop.*dispose|disposed.*laptop|laptop.*disposed|sold.*laptop|laptop.*sold|sale.*laptop|laptop.*sale|transfer.*laptop|laptop.*transfer|assign.*laptop|laptop.*assign|realisation.*laptop|laptop.*realisation|realization.*laptop|laptop.*realization|realise.*laptop|laptop.*realise|realize.*laptop|laptop.*realize|divest.*laptop|laptop.*divest|liquidat.*laptop|laptop.*liquidat|derecognit.*laptop|laptop.*derecognit|surrender.*laptop|laptop.*surrender|proceeds.*laptop|laptop.*proceeds|gain.*laptop|profit.*laptop|disposal.*server|server.*disposal|dispose.*server|server.*dispose|disposed.*server|server.*disposed|sold.*server|server.*sold|sale.*server|server.*sale|transfer.*server|server.*transfer|assign.*server|server.*assign|realisation.*server|server.*realisation|realization.*server|server.*realization|realise.*server|server.*realise|realize.*server|server.*realize|divest.*server|server.*divest|liquidat.*server|server.*liquidat|derecognit.*server|server.*derecognit|surrender.*server|server.*surrender|proceeds.*server|server.*proceeds|gain.*server|profit.*server|disposal.*furniture|furniture.*disposal|dispose.*furniture|furniture.*dispose|disposed.*furniture|furniture.*disposed|sold.*furniture|furniture.*sold|sale.*furniture|furniture.*sale|transfer.*furniture|furniture.*transfer|assign.*furniture|furniture.*assign|realisation.*furniture|furniture.*realisation|realization.*furniture|furniture.*realization|realise.*furniture|furniture.*realise|realize.*furniture|furniture.*realize|divest.*furniture|furniture.*divest|liquidat.*furniture|furniture.*liquidat|derecognit.*furniture|furniture.*derecognit|surrender.*furniture|furniture.*surrender|proceeds.*furniture|furniture.*proceeds|gain.*furniture|profit.*furniture|disposal.*fixture|fixture.*disposal|dispose.*fixture|fixture.*dispose|disposed.*fixture|fixture.*disposed|sold.*fixture|fixture.*sold|sale.*fixture|fixture.*sale|transfer.*fixture|fixture.*transfer|assign.*fixture|fixture.*assign|realisation.*fixture|fixture.*realisation|realization.*fixture|fixture.*realization|realise.*fixture|fixture.*realise|realize.*fixture|fixture.*realize|divest.*fixture|fixture.*divest|liquidat.*fixture|fixture.*liquidat|derecognit.*fixture|fixture.*derecognit|surrender.*fixture|fixture.*surrender|proceeds.*fixture|fixture.*proceeds|gain.*fixture|profit.*fixture|disposal.*shares|shares.*disposal|dispose.*shares|shares.*dispose|disposed.*shares|shares.*disposed|sold.*shares|shares.*sold|sale.*shares|shares.*sale|transfer.*shares|shares.*transfer|assign.*shares|shares.*assign|realisation.*shares|shares.*realisation|realization.*shares|shares.*realization|realise.*shares|shares.*realise|realize.*shares|shares.*realize|divest.*shares|shares.*divest|liquidat.*shares|shares.*liquidat|derecognit.*shares|shares.*derecognit|surrender.*shares|shares.*surrender|proceeds.*shares|shares.*proceeds|gain.*shares|profit.*shares|disposal.*stocks|stocks.*disposal|dispose.*stocks|stocks.*dispose|disposed.*stocks|stocks.*disposed|sold.*stocks|stocks.*sold|sale.*stocks|stocks.*sale|transfer.*stocks|stocks.*transfer|assign.*stocks|stocks.*assign|realisation.*stocks|stocks.*realisation|realization.*stocks|stocks.*realization|realise.*stocks|stocks.*realise|realize.*stocks|stocks.*realize|divest.*stocks|stocks.*divest|liquidat.*stocks|stocks.*liquidat|derecognit.*stocks|stocks.*derecognit|surrender.*stocks|stocks.*surrender|proceeds.*stocks|stocks.*proceeds|gain.*stocks|profit.*stocks|disposal.*stake|stake.*disposal|dispose.*stake|stake.*dispose|disposed.*stake|stake.*disposed|sold.*stake|stake.*sold|sale.*stake|stake.*sale|transfer.*stake|stake.*transfer|assign.*stake|stake.*assign|realisation.*stake|stake.*realisation|realization.*stake|stake.*realization|realise.*stake|stake.*realise|realize.*stake|stake.*realize|divest.*stake|stake.*divest|liquidat.*stake|stake.*liquidat|derecognit.*stake|stake.*derecognit|surrender.*stake|stake.*surrender|proceeds.*stake|stake.*proceeds|gain.*stake|profit.*stake|disposal.*equity|equity.*disposal|dispose.*equity|equity.*dispose|disposed.*equity|equity.*disposed|sold.*equity|equity.*sold|sale.*equity|equity.*sale|transfer.*equity|equity.*transfer|assign.*equity|equity.*assign|realisation.*equity|equity.*realisation|realization.*equity|equity.*realization|realise.*equity|equity.*realise|realize.*equity|equity.*realize|divest.*equity|equity.*divest|liquidat.*equity|equity.*liquidat|derecognit.*equity|equity.*derecognit|surrender.*equity|equity.*surrender|proceeds.*equity|equity.*proceeds|gain.*equity|profit.*equity|disposal.*securities|securities.*disposal|dispose.*securities|securities.*dispose|disposed.*securities|securities.*disposed|sold.*securities|securities.*sold|sale.*securities|securities.*sale|transfer.*securities|securities.*transfer|assign.*securities|securities.*assign|realisation.*securities|securities.*realisation|realization.*securities|securities.*realization|realise.*securities|securities.*realise|realize.*securities|securities.*realize|divest.*securities|securities.*divest|liquidat.*securities|securities.*liquidat|derecognit.*securities|securities.*derecognit|surrender.*securities|securities.*surrender|proceeds.*securities|securities.*proceeds|gain.*securities|profit.*securities|disposal.*bonds|bonds.*disposal|dispose.*bonds|bonds.*dispose|disposed.*bonds|bonds.*disposed|sold.*bonds|bonds.*sold|sale.*bonds|bonds.*sale|transfer.*bonds|bonds.*transfer|assign.*bonds|bonds.*assign|realisation.*bonds|bonds.*realisation|realization.*bonds|bonds.*realization|realise.*bonds|bonds.*realise|realize.*bonds|bonds.*realize|divest.*bonds|bonds.*divest|liquidat.*bonds|bonds.*liquidat|derecognit.*bonds|bonds.*derecognit|surrender.*bonds|bonds.*surrender|proceeds.*bonds|bonds.*proceeds|gain.*bonds|profit.*bonds|disposal.*investment|investment.*disposal|dispose.*investment|investment.*dispose|disposed.*investment|investment.*disposed|sold.*investment|investment.*sold|sale.*investment|investment.*sale|transfer.*investment|investment.*transfer|assign.*investment|investment.*assign|realisation.*investment|investment.*realisation|realization.*investment|investment.*realization|realise.*investment|investment.*realise|realize.*investment|investment.*realize|divest.*investment|investment.*divest|liquidat.*investment|investment.*liquidat|derecognit.*investment|investment.*derecognit|surrender.*investment|investment.*surrender|proceeds.*investment|investment.*proceeds|gain.*investment|profit.*investment|disposal.*portfolio|portfolio.*disposal|dispose.*portfolio|portfolio.*dispose|disposed.*portfolio|portfolio.*disposed|sold.*portfolio|portfolio.*sold|sale.*portfolio|portfolio.*sale|transfer.*portfolio|portfolio.*transfer|assign.*portfolio|portfolio.*assign|realisation.*portfolio|portfolio.*realisation|realization.*portfolio|portfolio.*realization|realise.*portfolio|portfolio.*realise|realize.*portfolio|portfolio.*realize|divest.*portfolio|portfolio.*divest|liquidat.*portfolio|portfolio.*liquidat|derecognit.*portfolio|portfolio.*derecognit|surrender.*portfolio|portfolio.*surrender|proceeds.*portfolio|portfolio.*proceeds|gain.*portfolio|profit.*portfolio|disposal.*crypto|crypto.*disposal|dispose.*crypto|crypto.*dispose|disposed.*crypto|crypto.*disposed|sold.*crypto|crypto.*sold|sale.*crypto|crypto.*sale|transfer.*crypto|crypto.*transfer|assign.*crypto|crypto.*assign|realisation.*crypto|crypto.*realisation|realization.*crypto|crypto.*realization|realise.*crypto|crypto.*realise|realize.*crypto|crypto.*realize|divest.*crypto|crypto.*divest|liquidat.*crypto|crypto.*liquidat|derecognit.*crypto|crypto.*derecognit|surrender.*crypto|crypto.*surrender|proceeds.*crypto|crypto.*proceeds|gain.*crypto|profit.*crypto|disposal.*bitcoin|bitcoin.*disposal|dispose.*bitcoin|bitcoin.*dispose|disposed.*bitcoin|bitcoin.*disposed|sold.*bitcoin|bitcoin.*sold|sale.*bitcoin|bitcoin.*sale|transfer.*bitcoin|bitcoin.*transfer|assign.*bitcoin|bitcoin.*assign|realisation.*bitcoin|bitcoin.*realisation|realization.*bitcoin|bitcoin.*realization|realise.*bitcoin|bitcoin.*realise|realize.*bitcoin|bitcoin.*realize|divest.*bitcoin|bitcoin.*divest|liquidat.*bitcoin|bitcoin.*liquidat|derecognit.*bitcoin|bitcoin.*derecognit|surrender.*bitcoin|bitcoin.*surrender|proceeds.*bitcoin|bitcoin.*proceeds|gain.*bitcoin|profit.*bitcoin|disposal.*ethereum|ethereum.*disposal|dispose.*ethereum|ethereum.*dispose|disposed.*ethereum|ethereum.*disposed|sold.*ethereum|ethereum.*sold|sale.*ethereum|ethereum.*sale|transfer.*ethereum|ethereum.*transfer|assign.*ethereum|ethereum.*assign|realisation.*ethereum|ethereum.*realisation|realization.*ethereum|ethereum.*realization|realise.*ethereum|ethereum.*realise|realize.*ethereum|ethereum.*realize|divest.*ethereum|ethereum.*divest|liquidat.*ethereum|ethereum.*liquidat|derecognit.*ethereum|ethereum.*derecognit|surrender.*ethereum|ethereum.*surrender|proceeds.*ethereum|ethereum.*proceeds|gain.*ethereum|profit.*ethereum|disposal.*token|token.*disposal|dispose.*token|token.*dispose|disposed.*token|token.*disposed|sold.*token|token.*sold|sale.*token|token.*sale|transfer.*token|token.*transfer|assign.*token|token.*assign|realisation.*token|token.*realisation|realization.*token|token.*realization|realise.*token|token.*realise|realize.*token|token.*realize|divest.*token|token.*divest|liquidat.*token|token.*liquidat|derecognit.*token|token.*derecognit|surrender.*token|token.*surrender|proceeds.*token|token.*proceeds|gain.*token|profit.*token|disposal.*nft|nft.*disposal|dispose.*nft|nft.*dispose|disposed.*nft|nft.*disposed|sold.*nft|nft.*sold|sale.*nft|nft.*sale|transfer.*nft|nft.*transfer|assign.*nft|nft.*assign|realisation.*nft|nft.*realisation|realization.*nft|nft.*realization|realise.*nft|nft.*realise|realize.*nft|nft.*realize|divest.*nft|nft.*divest|liquidat.*nft|nft.*liquidat|derecognit.*nft|nft.*derecognit|surrender.*nft|nft.*surrender|proceeds.*nft|nft.*proceeds|gain.*nft|profit.*nft|disposal.*patent|patent.*disposal|dispose.*patent|patent.*dispose|disposed.*patent|patent.*disposed|sold.*patent|patent.*sold|sale.*patent|patent.*sale|transfer.*patent|patent.*transfer|assign.*patent|patent.*assign|realisation.*patent|patent.*realisation|realization.*patent|patent.*realization|realise.*patent|patent.*realise|realize.*patent|patent.*realize|divest.*patent|patent.*divest|liquidat.*patent|patent.*liquidat|derecognit.*patent|patent.*derecognit|surrender.*patent|patent.*surrender|proceeds.*patent|patent.*proceeds|gain.*patent|profit.*patent|disposal.*trademark|trademark.*disposal|dispose.*trademark|trademark.*dispose|disposed.*trademark|trademark.*disposed|sold.*trademark|trademark.*sold|sale.*trademark|trademark.*sale|transfer.*trademark|trademark.*transfer|assign.*trademark|trademark.*assign|realisation.*trademark|trademark.*realisation|realization.*trademark|trademark.*realization|realise.*trademark|trademark.*realise|realize.*trademark|trademark.*realize|divest.*trademark|trademark.*divest|liquidat.*trademark|trademark.*liquidat|derecognit.*trademark|trademark.*derecognit|surrender.*trademark|trademark.*surrender|proceeds.*trademark|trademark.*proceeds|gain.*trademark|profit.*trademark|disposal.*copyright|copyright.*disposal|dispose.*copyright|copyright.*dispose|disposed.*copyright|copyright.*disposed|sold.*copyright|copyright.*sold|sale.*copyright|copyright.*sale|transfer.*copyright|copyright.*transfer|assign.*copyright|copyright.*assign|realisation.*copyright|copyright.*realisation|realization.*copyright|copyright.*realization|realise.*copyright|copyright.*realise|realize.*copyright|copyright.*realize|divest.*copyright|copyright.*divest|liquidat.*copyright|copyright.*liquidat|derecognit.*copyright|copyright.*derecognit|surrender.*copyright|copyright.*surrender|proceeds.*copyright|copyright.*proceeds|gain.*copyright|profit.*copyright|disposal.*licence|licence.*disposal|dispose.*licence|licence.*dispose|disposed.*licence|licence.*disposed|sold.*licence|licence.*sold|sale.*licence|licence.*sale|transfer.*licence|licence.*transfer|assign.*licence|licence.*assign|realisation.*licence|licence.*realisation|realization.*licence|licence.*realization|realise.*licence|licence.*realise|realize.*licence|licence.*realize|divest.*licence|licence.*divest|liquidat.*licence|licence.*liquidat|derecognit.*licence|licence.*derecognit|surrender.*licence|licence.*surrender|proceeds.*licence|licence.*proceeds|gain.*licence|profit.*licence|disposal.*franchise|franchise.*disposal|dispose.*franchise|franchise.*dispose|disposed.*franchise|franchise.*disposed|sold.*franchise|franchise.*sold|sale.*franchise|franchise.*sale|transfer.*franchise|franchise.*transfer|assign.*franchise|franchise.*assign|realisation.*franchise|franchise.*realisation|realization.*franchise|franchise.*realization|realise.*franchise|franchise.*realise|realize.*franchise|franchise.*realize|divest.*franchise|franchise.*divest|liquidat.*franchise|franchise.*liquidat|derecognit.*franchise|franchise.*derecognit|surrender.*franchise|franchise.*surrender|proceeds.*franchise|franchise.*proceeds|gain.*franchise|profit.*franchise|disposal.*goodwill|goodwill.*disposal|dispose.*goodwill|goodwill.*dispose|disposed.*goodwill|goodwill.*disposed|sold.*goodwill|goodwill.*sold|sale.*goodwill|goodwill.*sale|transfer.*goodwill|goodwill.*transfer|assign.*goodwill|goodwill.*assign|realisation.*goodwill|goodwill.*realisation|realization.*goodwill|goodwill.*realization|realise.*goodwill|goodwill.*realise|realize.*goodwill|goodwill.*realize|divest.*goodwill|goodwill.*divest|liquidat.*goodwill|goodwill.*liquidat|derecognit.*goodwill|goodwill.*derecognit|surrender.*goodwill|goodwill.*surrender|proceeds.*goodwill|goodwill.*proceeds|gain.*goodwill|profit.*goodwill|disposal.*brand|brand.*disposal|dispose.*brand|brand.*dispose|disposed.*brand|brand.*disposed|sold.*brand|brand.*sold|sale.*brand|brand.*sale|transfer.*brand|brand.*transfer|assign.*brand|brand.*assign|realisation.*brand|brand.*realisation|realization.*brand|brand.*realization|realise.*brand|brand.*realise|realize.*brand|brand.*realize|divest.*brand|brand.*divest|liquidat.*brand|brand.*liquidat|derecognit.*brand|brand.*derecognit|surrender.*brand|brand.*surrender|proceeds.*brand|brand.*proceeds|gain.*brand|profit.*brand|disposal.*fixed asset|fixed asset.*disposal|dispose.*fixed asset|fixed asset.*dispose|disposed.*fixed asset|fixed asset.*disposed|sold.*fixed asset|fixed asset.*sold|sale.*fixed asset|fixed asset.*sale|transfer.*fixed asset|fixed asset.*transfer|assign.*fixed asset|fixed asset.*assign|realisation.*fixed asset|fixed asset.*realisation|realization.*fixed asset|fixed asset.*realization|realise.*fixed asset|fixed asset.*realise|realize.*fixed asset|fixed asset.*realize|divest.*fixed asset|fixed asset.*divest|liquidat.*fixed asset|fixed asset.*liquidat|derecognit.*fixed asset|fixed asset.*derecognit|surrender.*fixed asset|fixed asset.*surrender|proceeds.*fixed asset|fixed asset.*proceeds|gain.*fixed asset|profit.*fixed asset|disposal.*capital asset|capital asset.*disposal|dispose.*capital asset|capital asset.*dispose|disposed.*capital asset|capital asset.*disposed|sold.*capital asset|capital asset.*sold|sale.*capital asset|capital asset.*sale|transfer.*capital asset|capital asset.*transfer|assign.*capital asset|capital asset.*assign|realisation.*capital asset|capital asset.*realisation|realization.*capital asset|capital asset.*realization|realise.*capital asset|capital asset.*realise|realize.*capital asset|capital asset.*realize|divest.*capital asset|capital asset.*divest|liquidat.*capital asset|capital asset.*liquidat|derecognit.*capital asset|capital asset.*derecognit|surrender.*capital asset|capital asset.*surrender|proceeds.*capital asset|capital asset.*proceeds|gain.*capital asset|profit.*capital asset|disposal.*asset|asset.*disposal|dispose.*asset|asset.*dispose|disposed.*asset|asset.*disposed|sold.*asset|asset.*sold|sale.*asset|asset.*sale|transfer.*asset|asset.*transfer|assign.*asset|asset.*assign|realisation.*asset|asset.*realisation|realization.*asset|asset.*realization|realise.*asset|asset.*realise|realize.*asset|asset.*realize|divest.*asset|asset.*divest|liquidat.*asset|asset.*liquidat|derecognit.*asset|asset.*derecognit|surrender.*asset|asset.*surrender|proceeds.*asset|asset.*proceeds|gain.*asset|profit.*asset|realisation.*asset|realization.*asset|realise.*asset|realize.*asset|asset.*realisation|asset.*realization|gain.*on.*disposal|profit.*on.*disposal|loss.*on.*disposal|proceeds.*on.*disposal|on.*disposal|surrender.*lease|lease.*surrender|share.*disposal|disposal.*share|compulsory acquisition|compensation.*land|compensation.*property|compensation.*compulsory|divestment|divestiture|derecognition|on.*disposal/))
+    if(d.match(/disposal|realisation|realization|sale.of.propert|sale.of.land|sale.of.house|sale.of.vehicle|sale.of.car|sale.of.share|sale.of.asset|transfer.of.propert|assign.*propert|proceed.*sale|capital.gain|cgt.event|sold.*propert|sold.*vehicle|sold.*land|sold.*share|crypto.*sale|nft.*sale|bitcoin.*sale|disposal.*asset/i))
       return{head:"CGT-EVENT",icon:"📊",color:"#7C3AED",compliance_required:true,
         obligation:"POSSIBLE CGT EVENT: This looks like an asset disposal. Capital Gains Tax may apply under NTA 2025 S.34 — Go to Calculator > Cap. Gains tab. NOTE FOR COMPANIES: if this was sale of trading stock/goods/inventory, it is ordinary business income (not CGT) — please confirm.",
         cgt_flag:true,
@@ -713,10 +676,6 @@ function classifyTxn(desc, type){
       law:"NTA 2025, Chapter Two"};
   }
 
-  // ── EXPENSE TRANSACTIONS — these are where compliance actions are triggered ─
-  // Rule: if YOU are paying and the law requires you to deduct WHT/PAYE BEFORE payment, compliance_required = true
-
-  // 1. DIRECTOR FEES — WHT 10% (NTA 2025, Ch. Two Pt. IV)
   if(d.match(/director.*fee|director.*pay|director.*remuneration|board.*fee|director.*allowance|director.*emolument/))
     return{head:"WHT-out",icon:"👔",color:C.red,compliance_required:true,
       wht_rate:10, wht_amount_fn: a => a * 0.10,
@@ -724,7 +683,6 @@ function classifyTxn(desc, type){
       compliance_prompt:"You must deduct 10% WHT (₦{wht}) from this director's fee before paying ₦{net} to the director. Have you made this deduction?",
       law:"NTA 2025, Ch. Two Pt. IV — Director fees: 10% WHT"};
 
-  // 2. RENT PAYMENT — WHT 10% (NTA 2025, Ch. Two Pt. IV)
   if(d.match(/rent paid|rent payment|office rent|shop rent|warehouse rent|lease paid|tenancy paid|space rent/))
     return{head:"WHT-out",icon:"🏢",color:C.amber,compliance_required:true,
       wht_rate:10, wht_amount_fn: a => a * 0.10,
@@ -732,7 +690,6 @@ function classifyTxn(desc, type){
       compliance_prompt:"You must deduct 10% WHT (₦{wht}) from this rent before paying the landlord ₦{net}. Have you made this deduction?",
       law:"NTA 2025, Ch. Two Pt. IV — Rent: 10% WHT"};
 
-  // 3. SALARY/WAGES PAID — PAYE deduction
   if(d.match(/salary paid|salaries paid|wages paid|staff salary|payroll paid|employee pay|staff pay|monthly salary paid/))
     return{head:"PAYE-out",icon:"👥",color:C.blue,compliance_required:true,
       wht_rate:null,
@@ -740,7 +697,6 @@ function classifyTxn(desc, type){
       compliance_prompt:"Have you deducted PAYE from each employee's salary and set it aside for remittance to the State IRS by the 10th?",
       law:"TAA 2025, Sec 13; NTA 2025, Ch. Two Pt. I"};
 
-  // 4. CONSULTING / PROFESSIONAL FEES PAID — WHT 10%
   if(d.match(/consulting fee paid|consultant paid|professional fee paid|advisory fee paid|legal fee paid|audit fee paid|accountant paid|lawyer paid|engineer paid|surveyor paid|architect paid/))
     return{head:"WHT-out",icon:"⚖️",color:C.purple,compliance_required:true,
       wht_rate:10, wht_amount_fn: a => a * 0.10,
@@ -748,7 +704,6 @@ function classifyTxn(desc, type){
       compliance_prompt:"You must deduct 10% WHT (₦{wht}) from this professional fee before paying ₦{net}. Have you made this deduction?",
       law:"NTA 2025, Ch. Two Pt. IV — Professional fees: 10% WHT"};
 
-  // 5. TECHNICAL / MANAGEMENT FEES PAID — WHT 10%
   if(d.match(/technical fee paid|management fee paid|consultancy paid|it service paid|software service paid/))
     return{head:"WHT-out",icon:"🔧",color:C.purple,compliance_required:true,
       wht_rate:10, wht_amount_fn: a => a * 0.10,
@@ -756,7 +711,6 @@ function classifyTxn(desc, type){
       compliance_prompt:"Deduct 10% WHT (₦{wht}) before paying ₦{net}. Have you made this deduction?",
       law:"NTA 2025, Ch. Two Pt. IV — Technical/management fees: 10% WHT"};
 
-  // 6. CONTRACT / SUPPLY PAYMENTS — WHT 5%
   if(d.match(/contractor paid|contract payment|supply payment|supplier paid|maintenance contract|construction paid|building contract/))
     return{head:"WHT-out",icon:"🏗️",color:C.purple,compliance_required:true,
       wht_rate:5, wht_amount_fn: a => a * 0.05,
@@ -764,7 +718,6 @@ function classifyTxn(desc, type){
       compliance_prompt:"You must deduct 5% WHT (₦{wht}) from this contract payment before paying the contractor ₦{net}. Have you made this deduction?",
       law:"NTA 2025, Ch. Two Pt. IV — Contract/supply: 5% WHT"};
 
-  // 7. ROYALTIES PAID — WHT 10%
   if(d.match(/royalt.*paid|licensing fee paid|patent.*paid|franchise.*fee/))
     return{head:"WHT-out",icon:"©️",color:C.purple,compliance_required:true,
       wht_rate:10, wht_amount_fn: a => a * 0.10,
@@ -772,7 +725,6 @@ function classifyTxn(desc, type){
       compliance_prompt:"Deduct 10% WHT (₦{wht}) before paying ₦{net}. Have you made this deduction?",
       law:"NTA 2025, Ch. Two Pt. IV — Royalties: 10% WHT"};
 
-  // 8. COMMISSION / AGENCY FEES PAID — WHT 10%
   if(d.match(/commission paid|agency fee paid|brokerage paid|agent.*paid/))
     return{head:"WHT-out",icon:"💱",color:C.amber,compliance_required:true,
       wht_rate:10, wht_amount_fn: a => a * 0.10,
@@ -780,7 +732,6 @@ function classifyTxn(desc, type){
       compliance_prompt:"Deduct 10% WHT (₦{wht}) before paying ₦{net}. Have you made this deduction?",
       law:"NTA 2025, Ch. Two Pt. IV — Commission: 10% WHT"};
 
-  // 9. DIVIDEND PAID — WHT 10%
   if(d.match(/dividend paid|dividend payment|dividend distribution/))
     return{head:"WHT-out",icon:"📊",color:C.green,compliance_required:true,
       wht_rate:10, wht_amount_fn: a => a * 0.10,
@@ -788,7 +739,6 @@ function classifyTxn(desc, type){
       compliance_prompt:"You must deduct 10% WHT (₦{wht}) from this dividend before distributing ₦{net} to shareholders. Have you made this deduction?",
       law:"NTA 2025, Ch. Two Pt. IV — Dividend: 10% WHT"};
 
-  // 10. INTEREST PAID — WHT 10%
   if(d.match(/interest paid|loan interest|bond interest paid/))
     return{head:"WHT-out",icon:"🏦",color:C.blue,compliance_required:true,
       wht_rate:10, wht_amount_fn: a => a * 0.10,
@@ -796,41 +746,31 @@ function classifyTxn(desc, type){
       compliance_prompt:"Deduct 10% WHT (₦{wht}) before paying interest of ₦{net}. Have you made this deduction?",
       law:"NTA 2025, Ch. Two Pt. IV — Interest: 10% WHT"};
 
-  // 11a. ASSET DISPOSAL — CGT EVENT (catches disposals recorded as expenses)
-  if(d.match(/disposal.*house|house.*disposal|dispose.*house|house.*dispose|disposed.*house|house.*disposed|sold.*house|house.*sold|sale.*house|house.*sale|transfer.*house|house.*transfer|assign.*house|house.*assign|realisation.*house|house.*realisation|realization.*house|house.*realization|realise.*house|house.*realise|realize.*house|house.*realize|divest.*house|house.*divest|liquidat.*house|house.*liquidat|derecognit.*house|house.*derecognit|surrender.*house|house.*surrender|proceeds.*house|house.*proceeds|gain.*house|profit.*house|disposal.*home|home.*disposal|dispose.*home|home.*dispose|disposed.*home|home.*disposed|sold.*home|home.*sold|sale.*home|home.*sale|transfer.*home|home.*transfer|assign.*home|home.*assign|realisation.*home|home.*realisation|realization.*home|home.*realization|realise.*home|home.*realise|realize.*home|home.*realize|divest.*home|home.*divest|liquidat.*home|home.*liquidat|derecognit.*home|home.*derecognit|surrender.*home|home.*surrender|proceeds.*home|home.*proceeds|gain.*home|profit.*home|disposal.*residence|residence.*disposal|dispose.*residence|residence.*dispose|disposed.*residence|residence.*disposed|sold.*residence|residence.*sold|sale.*residence|residence.*sale|transfer.*residence|residence.*transfer|assign.*residence|residence.*assign|realisation.*residence|residence.*realisation|realization.*residence|residence.*realization|realise.*residence|residence.*realise|realize.*residence|residence.*realize|divest.*residence|residence.*divest|liquidat.*residence|residence.*liquidat|derecognit.*residence|residence.*derecognit|surrender.*residence|residence.*surrender|proceeds.*residence|residence.*proceeds|gain.*residence|profit.*residence|disposal.*flat|flat.*disposal|dispose.*flat|flat.*dispose|disposed.*flat|flat.*disposed|sold.*flat|flat.*sold|sale.*flat|flat.*sale|transfer.*flat|flat.*transfer|assign.*flat|flat.*assign|realisation.*flat|flat.*realisation|realization.*flat|flat.*realization|realise.*flat|flat.*realise|realize.*flat|flat.*realize|divest.*flat|flat.*divest|liquidat.*flat|flat.*liquidat|derecognit.*flat|flat.*derecognit|surrender.*flat|flat.*surrender|proceeds.*flat|flat.*proceeds|gain.*flat|profit.*flat|disposal.*apartment|apartment.*disposal|dispose.*apartment|apartment.*dispose|disposed.*apartment|apartment.*disposed|sold.*apartment|apartment.*sold|sale.*apartment|apartment.*sale|transfer.*apartment|apartment.*transfer|assign.*apartment|apartment.*assign|realisation.*apartment|apartment.*realisation|realization.*apartment|apartment.*realization|realise.*apartment|apartment.*realise|realize.*apartment|apartment.*realize|divest.*apartment|apartment.*divest|liquidat.*apartment|apartment.*liquidat|derecognit.*apartment|apartment.*derecognit|surrender.*apartment|apartment.*surrender|proceeds.*apartment|apartment.*proceeds|gain.*apartment|profit.*apartment|disposal.*duplex|duplex.*disposal|dispose.*duplex|duplex.*dispose|disposed.*duplex|duplex.*disposed|sold.*duplex|duplex.*sold|sale.*duplex|duplex.*sale|transfer.*duplex|duplex.*transfer|assign.*duplex|duplex.*assign|realisation.*duplex|duplex.*realisation|realization.*duplex|duplex.*realization|realise.*duplex|duplex.*realise|realize.*duplex|duplex.*realize|divest.*duplex|duplex.*divest|liquidat.*duplex|duplex.*liquidat|derecognit.*duplex|duplex.*derecognit|surrender.*duplex|duplex.*surrender|proceeds.*duplex|duplex.*proceeds|gain.*duplex|profit.*duplex|disposal.*land|land.*disposal|dispose.*land|land.*dispose|disposed.*land|land.*disposed|sold.*land|land.*sold|sale.*land|land.*sale|transfer.*land|land.*transfer|assign.*land|land.*assign|realisation.*land|land.*realisation|realization.*land|land.*realization|realise.*land|land.*realise|realize.*land|land.*realize|divest.*land|land.*divest|liquidat.*land|land.*liquidat|derecognit.*land|land.*derecognit|surrender.*land|land.*surrender|proceeds.*land|land.*proceeds|gain.*land|profit.*land|disposal.*plot|plot.*disposal|dispose.*plot|plot.*dispose|disposed.*plot|plot.*disposed|sold.*plot|plot.*sold|sale.*plot|plot.*sale|transfer.*plot|plot.*transfer|assign.*plot|plot.*assign|realisation.*plot|plot.*realisation|realization.*plot|plot.*realization|realise.*plot|plot.*realise|realize.*plot|plot.*realize|divest.*plot|plot.*divest|liquidat.*plot|plot.*liquidat|derecognit.*plot|plot.*derecognit|surrender.*plot|plot.*surrender|proceeds.*plot|plot.*proceeds|gain.*plot|profit.*plot|disposal.*estate|estate.*disposal|dispose.*estate|estate.*dispose|disposed.*estate|estate.*disposed|sold.*estate|estate.*sold|sale.*estate|estate.*sale|transfer.*estate|estate.*transfer|assign.*estate|estate.*assign|realisation.*estate|estate.*realisation|realization.*estate|estate.*realization|realise.*estate|estate.*realise|realize.*estate|estate.*realize|divest.*estate|estate.*divest|liquidat.*estate|estate.*liquidat|derecognit.*estate|estate.*derecognit|surrender.*estate|estate.*surrender|proceeds.*estate|estate.*proceeds|gain.*estate|profit.*estate|disposal.*farm|farm.*disposal|dispose.*farm|farm.*dispose|disposed.*farm|farm.*disposed|sold.*farm|farm.*sold|sale.*farm|farm.*sale|transfer.*farm|farm.*transfer|assign.*farm|farm.*assign|realisation.*farm|farm.*realisation|realization.*farm|farm.*realization|realise.*farm|farm.*realise|realize.*farm|farm.*realize|divest.*farm|farm.*divest|liquidat.*farm|farm.*liquidat|derecognit.*farm|farm.*derecognit|surrender.*farm|farm.*surrender|proceeds.*farm|farm.*proceeds|gain.*farm|profit.*farm|disposal.*property|property.*disposal|dispose.*property|property.*dispose|disposed.*property|property.*disposed|sold.*property|property.*sold|sale.*property|property.*sale|transfer.*property|property.*transfer|assign.*property|property.*assign|realisation.*property|property.*realisation|realization.*property|property.*realization|realise.*property|property.*realise|realize.*property|property.*realize|divest.*property|property.*divest|liquidat.*property|property.*liquidat|derecognit.*property|property.*derecognit|surrender.*property|property.*surrender|proceeds.*property|property.*proceeds|gain.*property|profit.*property|disposal.*real estate|real estate.*disposal|dispose.*real estate|real estate.*dispose|disposed.*real estate|real estate.*disposed|sold.*real estate|real estate.*sold|sale.*real estate|real estate.*sale|transfer.*real estate|real estate.*transfer|assign.*real estate|real estate.*assign|realisation.*real estate|real estate.*realisation|realization.*real estate|real estate.*realization|realise.*real estate|real estate.*realise|realize.*real estate|real estate.*realize|divest.*real estate|real estate.*divest|liquidat.*real estate|real estate.*liquidat|derecognit.*real estate|real estate.*derecognit|surrender.*real estate|real estate.*surrender|proceeds.*real estate|real estate.*proceeds|gain.*real estate|profit.*real estate|disposal.*building|building.*disposal|dispose.*building|building.*dispose|disposed.*building|building.*disposed|sold.*building|building.*sold|sale.*building|building.*sale|transfer.*building|building.*transfer|assign.*building|building.*assign|realisation.*building|building.*realisation|realization.*building|building.*realization|realise.*building|building.*realise|realize.*building|building.*realize|divest.*building|building.*divest|liquidat.*building|building.*liquidat|derecognit.*building|building.*derecognit|surrender.*building|building.*surrender|proceeds.*building|building.*proceeds|gain.*building|profit.*building|disposal.*warehouse|warehouse.*disposal|dispose.*warehouse|warehouse.*dispose|disposed.*warehouse|warehouse.*disposed|sold.*warehouse|warehouse.*sold|sale.*warehouse|warehouse.*sale|transfer.*warehouse|warehouse.*transfer|assign.*warehouse|warehouse.*assign|realisation.*warehouse|warehouse.*realisation|realization.*warehouse|warehouse.*realization|realise.*warehouse|warehouse.*realise|realize.*warehouse|warehouse.*realize|divest.*warehouse|warehouse.*divest|liquidat.*warehouse|warehouse.*liquidat|derecognit.*warehouse|warehouse.*derecognit|surrender.*warehouse|warehouse.*surrender|proceeds.*warehouse|warehouse.*proceeds|gain.*warehouse|profit.*warehouse|disposal.*office|office.*disposal|dispose.*office|office.*dispose|disposed.*office|office.*disposed|sold.*office|office.*sold|sale.*office|office.*sale|transfer.*office|office.*transfer|assign.*office|office.*assign|realisation.*office|office.*realisation|realization.*office|office.*realization|realise.*office|office.*realise|realize.*office|office.*realize|divest.*office|office.*divest|liquidat.*office|office.*liquidat|derecognit.*office|office.*derecognit|surrender.*office|office.*surrender|proceeds.*office|office.*proceeds|gain.*office|profit.*office|disposal.*vehicle|vehicle.*disposal|dispose.*vehicle|vehicle.*dispose|disposed.*vehicle|vehicle.*disposed|sold.*vehicle|vehicle.*sold|sale.*vehicle|vehicle.*sale|transfer.*vehicle|vehicle.*transfer|assign.*vehicle|vehicle.*assign|realisation.*vehicle|vehicle.*realisation|realization.*vehicle|vehicle.*realization|realise.*vehicle|vehicle.*realise|realize.*vehicle|vehicle.*realize|divest.*vehicle|vehicle.*divest|liquidat.*vehicle|vehicle.*liquidat|derecognit.*vehicle|vehicle.*derecognit|surrender.*vehicle|vehicle.*surrender|proceeds.*vehicle|vehicle.*proceeds|gain.*vehicle|profit.*vehicle|disposal.*car|car.*disposal|dispose.*car|car.*dispose|disposed.*car|car.*disposed|sold.*car|car.*sold|sale.*car|car.*sale|transfer.*car|car.*transfer|assign.*car|car.*assign|realisation.*car|car.*realisation|realization.*car|car.*realization|realise.*car|car.*realise|realize.*car|car.*realize|divest.*car|car.*divest|liquidat.*car|car.*liquidat|derecognit.*car|car.*derecognit|surrender.*car|car.*surrender|proceeds.*car|car.*proceeds|gain.*car|profit.*car|disposal.*truck|truck.*disposal|dispose.*truck|truck.*dispose|disposed.*truck|truck.*disposed|sold.*truck|truck.*sold|sale.*truck|truck.*sale|transfer.*truck|truck.*transfer|assign.*truck|truck.*assign|realisation.*truck|truck.*realisation|realization.*truck|truck.*realization|realise.*truck|truck.*realise|realize.*truck|truck.*realize|divest.*truck|truck.*divest|liquidat.*truck|truck.*liquidat|derecognit.*truck|truck.*derecognit|surrender.*truck|truck.*surrender|proceeds.*truck|truck.*proceeds|gain.*truck|profit.*truck|disposal.*van|van.*disposal|dispose.*van|van.*dispose|disposed.*van|van.*disposed|sold.*van|van.*sold|sale.*van|van.*sale|transfer.*van|van.*transfer|assign.*van|van.*assign|realisation.*van|van.*realisation|realization.*van|van.*realization|realise.*van|van.*realise|realize.*van|van.*realize|divest.*van|van.*divest|liquidat.*van|van.*liquidat|derecognit.*van|van.*derecognit|surrender.*van|van.*surrender|proceeds.*van|van.*proceeds|gain.*van|profit.*van|disposal.*bus|bus.*disposal|dispose.*bus|bus.*dispose|disposed.*bus|bus.*disposed|sold.*bus|bus.*sold|sale.*bus|bus.*sale|transfer.*bus|bus.*transfer|assign.*bus|bus.*assign|realisation.*bus|bus.*realisation|realization.*bus|bus.*realization|realise.*bus|bus.*realise|realize.*bus|bus.*realize|divest.*bus|bus.*divest|liquidat.*bus|bus.*liquidat|derecognit.*bus|bus.*derecognit|surrender.*bus|bus.*surrender|proceeds.*bus|bus.*proceeds|gain.*bus|profit.*bus|disposal.*lorry|lorry.*disposal|dispose.*lorry|lorry.*dispose|disposed.*lorry|lorry.*disposed|sold.*lorry|lorry.*sold|sale.*lorry|lorry.*sale|transfer.*lorry|lorry.*transfer|assign.*lorry|lorry.*assign|realisation.*lorry|lorry.*realisation|realization.*lorry|lorry.*realization|realise.*lorry|lorry.*realise|realize.*lorry|lorry.*realize|divest.*lorry|lorry.*divest|liquidat.*lorry|lorry.*liquidat|derecognit.*lorry|lorry.*derecognit|surrender.*lorry|lorry.*surrender|proceeds.*lorry|lorry.*proceeds|gain.*lorry|profit.*lorry|disposal.*automobile|automobile.*disposal|dispose.*automobile|automobile.*dispose|disposed.*automobile|automobile.*disposed|sold.*automobile|automobile.*sold|sale.*automobile|automobile.*sale|transfer.*automobile|automobile.*transfer|assign.*automobile|automobile.*assign|realisation.*automobile|automobile.*realisation|realization.*automobile|automobile.*realization|realise.*automobile|automobile.*realise|realize.*automobile|automobile.*realize|divest.*automobile|automobile.*divest|liquidat.*automobile|automobile.*liquidat|derecognit.*automobile|automobile.*derecognit|surrender.*automobile|automobile.*surrender|proceeds.*automobile|automobile.*proceeds|gain.*automobile|profit.*automobile|disposal.*machinery|machinery.*disposal|dispose.*machinery|machinery.*dispose|disposed.*machinery|machinery.*disposed|sold.*machinery|machinery.*sold|sale.*machinery|machinery.*sale|transfer.*machinery|machinery.*transfer|assign.*machinery|machinery.*assign|realisation.*machinery|machinery.*realisation|realization.*machinery|machinery.*realization|realise.*machinery|machinery.*realise|realize.*machinery|machinery.*realize|divest.*machinery|machinery.*divest|liquidat.*machinery|machinery.*liquidat|derecognit.*machinery|machinery.*derecognit|surrender.*machinery|machinery.*surrender|proceeds.*machinery|machinery.*proceeds|gain.*machinery|profit.*machinery|disposal.*machine|machine.*disposal|dispose.*machine|machine.*dispose|disposed.*machine|machine.*disposed|sold.*machine|machine.*sold|sale.*machine|machine.*sale|transfer.*machine|machine.*transfer|assign.*machine|machine.*assign|realisation.*machine|machine.*realisation|realization.*machine|machine.*realization|realise.*machine|machine.*realise|realize.*machine|machine.*realize|divest.*machine|machine.*divest|liquidat.*machine|machine.*liquidat|derecognit.*machine|machine.*derecognit|surrender.*machine|machine.*surrender|proceeds.*machine|machine.*proceeds|gain.*machine|profit.*machine|disposal.*equipment|equipment.*disposal|dispose.*equipment|equipment.*dispose|disposed.*equipment|equipment.*disposed|sold.*equipment|equipment.*sold|sale.*equipment|equipment.*sale|transfer.*equipment|equipment.*transfer|assign.*equipment|equipment.*assign|realisation.*equipment|equipment.*realisation|realization.*equipment|equipment.*realization|realise.*equipment|equipment.*realise|realize.*equipment|equipment.*realize|divest.*equipment|equipment.*divest|liquidat.*equipment|equipment.*liquidat|derecognit.*equipment|equipment.*derecognit|surrender.*equipment|equipment.*surrender|proceeds.*equipment|equipment.*proceeds|gain.*equipment|profit.*equipment|disposal.*plant|plant.*disposal|dispose.*plant|plant.*dispose|disposed.*plant|plant.*disposed|sold.*plant|plant.*sold|sale.*plant|plant.*sale|transfer.*plant|plant.*transfer|assign.*plant|plant.*assign|realisation.*plant|plant.*realisation|realization.*plant|plant.*realization|realise.*plant|plant.*realise|realize.*plant|plant.*realize|divest.*plant|plant.*divest|liquidat.*plant|plant.*liquidat|derecognit.*plant|plant.*derecognit|surrender.*plant|plant.*surrender|proceeds.*plant|plant.*proceeds|gain.*plant|profit.*plant|disposal.*computer|computer.*disposal|dispose.*computer|computer.*dispose|disposed.*computer|computer.*disposed|sold.*computer|computer.*sold|sale.*computer|computer.*sale|transfer.*computer|computer.*transfer|assign.*computer|computer.*assign|realisation.*computer|computer.*realisation|realization.*computer|computer.*realization|realise.*computer|computer.*realise|realize.*computer|computer.*realize|divest.*computer|computer.*divest|liquidat.*computer|computer.*liquidat|derecognit.*computer|computer.*derecognit|surrender.*computer|computer.*surrender|proceeds.*computer|computer.*proceeds|gain.*computer|profit.*computer|disposal.*laptop|laptop.*disposal|dispose.*laptop|laptop.*dispose|disposed.*laptop|laptop.*disposed|sold.*laptop|laptop.*sold|sale.*laptop|laptop.*sale|transfer.*laptop|laptop.*transfer|assign.*laptop|laptop.*assign|realisation.*laptop|laptop.*realisation|realization.*laptop|laptop.*realization|realise.*laptop|laptop.*realise|realize.*laptop|laptop.*realize|divest.*laptop|laptop.*divest|liquidat.*laptop|laptop.*liquidat|derecognit.*laptop|laptop.*derecognit|surrender.*laptop|laptop.*surrender|proceeds.*laptop|laptop.*proceeds|gain.*laptop|profit.*laptop|disposal.*server|server.*disposal|dispose.*server|server.*dispose|disposed.*server|server.*disposed|sold.*server|server.*sold|sale.*server|server.*sale|transfer.*server|server.*transfer|assign.*server|server.*assign|realisation.*server|server.*realisation|realization.*server|server.*realization|realise.*server|server.*realise|realize.*server|server.*realize|divest.*server|server.*divest|liquidat.*server|server.*liquidat|derecognit.*server|server.*derecognit|surrender.*server|server.*surrender|proceeds.*server|server.*proceeds|gain.*server|profit.*server|disposal.*furniture|furniture.*disposal|dispose.*furniture|furniture.*dispose|disposed.*furniture|furniture.*disposed|sold.*furniture|furniture.*sold|sale.*furniture|furniture.*sale|transfer.*furniture|furniture.*transfer|assign.*furniture|furniture.*assign|realisation.*furniture|furniture.*realisation|realization.*furniture|furniture.*realization|realise.*furniture|furniture.*realise|realize.*furniture|furniture.*realize|divest.*furniture|furniture.*divest|liquidat.*furniture|furniture.*liquidat|derecognit.*furniture|furniture.*derecognit|surrender.*furniture|furniture.*surrender|proceeds.*furniture|furniture.*proceeds|gain.*furniture|profit.*furniture|disposal.*fixture|fixture.*disposal|dispose.*fixture|fixture.*dispose|disposed.*fixture|fixture.*disposed|sold.*fixture|fixture.*sold|sale.*fixture|fixture.*sale|transfer.*fixture|fixture.*transfer|assign.*fixture|fixture.*assign|realisation.*fixture|fixture.*realisation|realization.*fixture|fixture.*realization|realise.*fixture|fixture.*realise|realize.*fixture|fixture.*realize|divest.*fixture|fixture.*divest|liquidat.*fixture|fixture.*liquidat|derecognit.*fixture|fixture.*derecognit|surrender.*fixture|fixture.*surrender|proceeds.*fixture|fixture.*proceeds|gain.*fixture|profit.*fixture|disposal.*shares|shares.*disposal|dispose.*shares|shares.*dispose|disposed.*shares|shares.*disposed|sold.*shares|shares.*sold|sale.*shares|shares.*sale|transfer.*shares|shares.*transfer|assign.*shares|shares.*assign|realisation.*shares|shares.*realisation|realization.*shares|shares.*realization|realise.*shares|shares.*realise|realize.*shares|shares.*realize|divest.*shares|shares.*divest|liquidat.*shares|shares.*liquidat|derecognit.*shares|shares.*derecognit|surrender.*shares|shares.*surrender|proceeds.*shares|shares.*proceeds|gain.*shares|profit.*shares|disposal.*stocks|stocks.*disposal|dispose.*stocks|stocks.*dispose|disposed.*stocks|stocks.*disposed|sold.*stocks|stocks.*sold|sale.*stocks|stocks.*sale|transfer.*stocks|stocks.*transfer|assign.*stocks|stocks.*assign|realisation.*stocks|stocks.*realisation|realization.*stocks|stocks.*realization|realise.*stocks|stocks.*realise|realize.*stocks|stocks.*realize|divest.*stocks|stocks.*divest|liquidat.*stocks|stocks.*liquidat|derecognit.*stocks|stocks.*derecognit|surrender.*stocks|stocks.*surrender|proceeds.*stocks|stocks.*proceeds|gain.*stocks|profit.*stocks|disposal.*stake|stake.*disposal|dispose.*stake|stake.*dispose|disposed.*stake|stake.*disposed|sold.*stake|stake.*sold|sale.*stake|stake.*sale|transfer.*stake|stake.*transfer|assign.*stake|stake.*assign|realisation.*stake|stake.*realisation|realization.*stake|stake.*realization|realise.*stake|stake.*realise|realize.*stake|stake.*realize|divest.*stake|stake.*divest|liquidat.*stake|stake.*liquidat|derecognit.*stake|stake.*derecognit|surrender.*stake|stake.*surrender|proceeds.*stake|stake.*proceeds|gain.*stake|profit.*stake|disposal.*equity|equity.*disposal|dispose.*equity|equity.*dispose|disposed.*equity|equity.*disposed|sold.*equity|equity.*sold|sale.*equity|equity.*sale|transfer.*equity|equity.*transfer|assign.*equity|equity.*assign|realisation.*equity|equity.*realisation|realization.*equity|equity.*realization|realise.*equity|equity.*realise|realize.*equity|equity.*realize|divest.*equity|equity.*divest|liquidat.*equity|equity.*liquidat|derecognit.*equity|equity.*derecognit|surrender.*equity|equity.*surrender|proceeds.*equity|equity.*proceeds|gain.*equity|profit.*equity|disposal.*securities|securities.*disposal|dispose.*securities|securities.*dispose|disposed.*securities|securities.*disposed|sold.*securities|securities.*sold|sale.*securities|securities.*sale|transfer.*securities|securities.*transfer|assign.*securities|securities.*assign|realisation.*securities|securities.*realisation|realization.*securities|securities.*realization|realise.*securities|securities.*realise|realize.*securities|securities.*realize|divest.*securities|securities.*divest|liquidat.*securities|securities.*liquidat|derecognit.*securities|securities.*derecognit|surrender.*securities|securities.*surrender|proceeds.*securities|securities.*proceeds|gain.*securities|profit.*securities|disposal.*bonds|bonds.*disposal|dispose.*bonds|bonds.*dispose|disposed.*bonds|bonds.*disposed|sold.*bonds|bonds.*sold|sale.*bonds|bonds.*sale|transfer.*bonds|bonds.*transfer|assign.*bonds|bonds.*assign|realisation.*bonds|bonds.*realisation|realization.*bonds|bonds.*realization|realise.*bonds|bonds.*realise|realize.*bonds|bonds.*realize|divest.*bonds|bonds.*divest|liquidat.*bonds|bonds.*liquidat|derecognit.*bonds|bonds.*derecognit|surrender.*bonds|bonds.*surrender|proceeds.*bonds|bonds.*proceeds|gain.*bonds|profit.*bonds|disposal.*investment|investment.*disposal|dispose.*investment|investment.*dispose|disposed.*investment|investment.*disposed|sold.*investment|investment.*sold|sale.*investment|investment.*sale|transfer.*investment|investment.*transfer|assign.*investment|investment.*assign|realisation.*investment|investment.*realisation|realization.*investment|investment.*realization|realise.*investment|investment.*realise|realize.*investment|investment.*realize|divest.*investment|investment.*divest|liquidat.*investment|investment.*liquidat|derecognit.*investment|investment.*derecognit|surrender.*investment|investment.*surrender|proceeds.*investment|investment.*proceeds|gain.*investment|profit.*investment|disposal.*portfolio|portfolio.*disposal|dispose.*portfolio|portfolio.*dispose|disposed.*portfolio|portfolio.*disposed|sold.*portfolio|portfolio.*sold|sale.*portfolio|portfolio.*sale|transfer.*portfolio|portfolio.*transfer|assign.*portfolio|portfolio.*assign|realisation.*portfolio|portfolio.*realisation|realization.*portfolio|portfolio.*realization|realise.*portfolio|portfolio.*realise|realize.*portfolio|portfolio.*realize|divest.*portfolio|portfolio.*divest|liquidat.*portfolio|portfolio.*liquidat|derecognit.*portfolio|portfolio.*derecognit|surrender.*portfolio|portfolio.*surrender|proceeds.*portfolio|portfolio.*proceeds|gain.*portfolio|profit.*portfolio|disposal.*crypto|crypto.*disposal|dispose.*crypto|crypto.*dispose|disposed.*crypto|crypto.*disposed|sold.*crypto|crypto.*sold|sale.*crypto|crypto.*sale|transfer.*crypto|crypto.*transfer|assign.*crypto|crypto.*assign|realisation.*crypto|crypto.*realisation|realization.*crypto|crypto.*realization|realise.*crypto|crypto.*realise|realize.*crypto|crypto.*realize|divest.*crypto|crypto.*divest|liquidat.*crypto|crypto.*liquidat|derecognit.*crypto|crypto.*derecognit|surrender.*crypto|crypto.*surrender|proceeds.*crypto|crypto.*proceeds|gain.*crypto|profit.*crypto|disposal.*bitcoin|bitcoin.*disposal|dispose.*bitcoin|bitcoin.*dispose|disposed.*bitcoin|bitcoin.*disposed|sold.*bitcoin|bitcoin.*sold|sale.*bitcoin|bitcoin.*sale|transfer.*bitcoin|bitcoin.*transfer|assign.*bitcoin|bitcoin.*assign|realisation.*bitcoin|bitcoin.*realisation|realization.*bitcoin|bitcoin.*realization|realise.*bitcoin|bitcoin.*realise|realize.*bitcoin|bitcoin.*realize|divest.*bitcoin|bitcoin.*divest|liquidat.*bitcoin|bitcoin.*liquidat|derecognit.*bitcoin|bitcoin.*derecognit|surrender.*bitcoin|bitcoin.*surrender|proceeds.*bitcoin|bitcoin.*proceeds|gain.*bitcoin|profit.*bitcoin|disposal.*ethereum|ethereum.*disposal|dispose.*ethereum|ethereum.*dispose|disposed.*ethereum|ethereum.*disposed|sold.*ethereum|ethereum.*sold|sale.*ethereum|ethereum.*sale|transfer.*ethereum|ethereum.*transfer|assign.*ethereum|ethereum.*assign|realisation.*ethereum|ethereum.*realisation|realization.*ethereum|ethereum.*realization|realise.*ethereum|ethereum.*realise|realize.*ethereum|ethereum.*realize|divest.*ethereum|ethereum.*divest|liquidat.*ethereum|ethereum.*liquidat|derecognit.*ethereum|ethereum.*derecognit|surrender.*ethereum|ethereum.*surrender|proceeds.*ethereum|ethereum.*proceeds|gain.*ethereum|profit.*ethereum|disposal.*token|token.*disposal|dispose.*token|token.*dispose|disposed.*token|token.*disposed|sold.*token|token.*sold|sale.*token|token.*sale|transfer.*token|token.*transfer|assign.*token|token.*assign|realisation.*token|token.*realisation|realization.*token|token.*realization|realise.*token|token.*realise|realize.*token|token.*realize|divest.*token|token.*divest|liquidat.*token|token.*liquidat|derecognit.*token|token.*derecognit|surrender.*token|token.*surrender|proceeds.*token|token.*proceeds|gain.*token|profit.*token|disposal.*nft|nft.*disposal|dispose.*nft|nft.*dispose|disposed.*nft|nft.*disposed|sold.*nft|nft.*sold|sale.*nft|nft.*sale|transfer.*nft|nft.*transfer|assign.*nft|nft.*assign|realisation.*nft|nft.*realisation|realization.*nft|nft.*realization|realise.*nft|nft.*realise|realize.*nft|nft.*realize|divest.*nft|nft.*divest|liquidat.*nft|nft.*liquidat|derecognit.*nft|nft.*derecognit|surrender.*nft|nft.*surrender|proceeds.*nft|nft.*proceeds|gain.*nft|profit.*nft|disposal.*patent|patent.*disposal|dispose.*patent|patent.*dispose|disposed.*patent|patent.*disposed|sold.*patent|patent.*sold|sale.*patent|patent.*sale|transfer.*patent|patent.*transfer|assign.*patent|patent.*assign|realisation.*patent|patent.*realisation|realization.*patent|patent.*realization|realise.*patent|patent.*realise|realize.*patent|patent.*realize|divest.*patent|patent.*divest|liquidat.*patent|patent.*liquidat|derecognit.*patent|patent.*derecognit|surrender.*patent|patent.*surrender|proceeds.*patent|patent.*proceeds|gain.*patent|profit.*patent|disposal.*trademark|trademark.*disposal|dispose.*trademark|trademark.*dispose|disposed.*trademark|trademark.*disposed|sold.*trademark|trademark.*sold|sale.*trademark|trademark.*sale|transfer.*trademark|trademark.*transfer|assign.*trademark|trademark.*assign|realisation.*trademark|trademark.*realisation|realization.*trademark|trademark.*realization|realise.*trademark|trademark.*realise|realize.*trademark|trademark.*realize|divest.*trademark|trademark.*divest|liquidat.*trademark|trademark.*liquidat|derecognit.*trademark|trademark.*derecognit|surrender.*trademark|trademark.*surrender|proceeds.*trademark|trademark.*proceeds|gain.*trademark|profit.*trademark|disposal.*copyright|copyright.*disposal|dispose.*copyright|copyright.*dispose|disposed.*copyright|copyright.*disposed|sold.*copyright|copyright.*sold|sale.*copyright|copyright.*sale|transfer.*copyright|copyright.*transfer|assign.*copyright|copyright.*assign|realisation.*copyright|copyright.*realisation|realization.*copyright|copyright.*realization|realise.*copyright|copyright.*realise|realize.*copyright|copyright.*realize|divest.*copyright|copyright.*divest|liquidat.*copyright|copyright.*liquidat|derecognit.*copyright|copyright.*derecognit|surrender.*copyright|copyright.*surrender|proceeds.*copyright|copyright.*proceeds|gain.*copyright|profit.*copyright|disposal.*licence|licence.*disposal|dispose.*licence|licence.*dispose|disposed.*licence|licence.*disposed|sold.*licence|licence.*sold|sale.*licence|licence.*sale|transfer.*licence|licence.*transfer|assign.*licence|licence.*assign|realisation.*licence|licence.*realisation|realization.*licence|licence.*realization|realise.*licence|licence.*realise|realize.*licence|licence.*realize|divest.*licence|licence.*divest|liquidat.*licence|licence.*liquidat|derecognit.*licence|licence.*derecognit|surrender.*licence|licence.*surrender|proceeds.*licence|licence.*proceeds|gain.*licence|profit.*licence|disposal.*franchise|franchise.*disposal|dispose.*franchise|franchise.*dispose|disposed.*franchise|franchise.*disposed|sold.*franchise|franchise.*sold|sale.*franchise|franchise.*sale|transfer.*franchise|franchise.*transfer|assign.*franchise|franchise.*assign|realisation.*franchise|franchise.*realisation|realization.*franchise|franchise.*realization|realise.*franchise|franchise.*realise|realize.*franchise|franchise.*realize|divest.*franchise|franchise.*divest|liquidat.*franchise|franchise.*liquidat|derecognit.*franchise|franchise.*derecognit|surrender.*franchise|franchise.*surrender|proceeds.*franchise|franchise.*proceeds|gain.*franchise|profit.*franchise|disposal.*goodwill|goodwill.*disposal|dispose.*goodwill|goodwill.*dispose|disposed.*goodwill|goodwill.*disposed|sold.*goodwill|goodwill.*sold|sale.*goodwill|goodwill.*sale|transfer.*goodwill|goodwill.*transfer|assign.*goodwill|goodwill.*assign|realisation.*goodwill|goodwill.*realisation|realization.*goodwill|goodwill.*realization|realise.*goodwill|goodwill.*realise|realize.*goodwill|goodwill.*realize|divest.*goodwill|goodwill.*divest|liquidat.*goodwill|goodwill.*liquidat|derecognit.*goodwill|goodwill.*derecognit|surrender.*goodwill|goodwill.*surrender|proceeds.*goodwill|goodwill.*proceeds|gain.*goodwill|profit.*goodwill|disposal.*brand|brand.*disposal|dispose.*brand|brand.*dispose|disposed.*brand|brand.*disposed|sold.*brand|brand.*sold|sale.*brand|brand.*sale|transfer.*brand|brand.*transfer|assign.*brand|brand.*assign|realisation.*brand|brand.*realisation|realization.*brand|brand.*realization|realise.*brand|brand.*realise|realize.*brand|brand.*realize|divest.*brand|brand.*divest|liquidat.*brand|brand.*liquidat|derecognit.*brand|brand.*derecognit|surrender.*brand|brand.*surrender|proceeds.*brand|brand.*proceeds|gain.*brand|profit.*brand|disposal.*fixed asset|fixed asset.*disposal|dispose.*fixed asset|fixed asset.*dispose|disposed.*fixed asset|fixed asset.*disposed|sold.*fixed asset|fixed asset.*sold|sale.*fixed asset|fixed asset.*sale|transfer.*fixed asset|fixed asset.*transfer|assign.*fixed asset|fixed asset.*assign|realisation.*fixed asset|fixed asset.*realisation|realization.*fixed asset|fixed asset.*realization|realise.*fixed asset|fixed asset.*realise|realize.*fixed asset|fixed asset.*realize|divest.*fixed asset|fixed asset.*divest|liquidat.*fixed asset|fixed asset.*liquidat|derecognit.*fixed asset|fixed asset.*derecognit|surrender.*fixed asset|fixed asset.*surrender|proceeds.*fixed asset|fixed asset.*proceeds|gain.*fixed asset|profit.*fixed asset|disposal.*capital asset|capital asset.*disposal|dispose.*capital asset|capital asset.*dispose|disposed.*capital asset|capital asset.*disposed|sold.*capital asset|capital asset.*sold|sale.*capital asset|capital asset.*sale|transfer.*capital asset|capital asset.*transfer|assign.*capital asset|capital asset.*assign|realisation.*capital asset|capital asset.*realisation|realization.*capital asset|capital asset.*realization|realise.*capital asset|capital asset.*realise|realize.*capital asset|capital asset.*realize|divest.*capital asset|capital asset.*divest|liquidat.*capital asset|capital asset.*liquidat|derecognit.*capital asset|capital asset.*derecognit|surrender.*capital asset|capital asset.*surrender|proceeds.*capital asset|capital asset.*proceeds|gain.*capital asset|profit.*capital asset|disposal.*asset|asset.*disposal|dispose.*asset|asset.*dispose|disposed.*asset|asset.*disposed|sold.*asset|asset.*sold|sale.*asset|asset.*sale|transfer.*asset|asset.*transfer|assign.*asset|asset.*assign|realisation.*asset|asset.*realisation|realization.*asset|asset.*realization|realise.*asset|asset.*realise|realize.*asset|asset.*realize|divest.*asset|asset.*divest|liquidat.*asset|asset.*liquidat|derecognit.*asset|asset.*derecognit|surrender.*asset|asset.*surrender|proceeds.*asset|asset.*proceeds|gain.*asset|profit.*asset|realisation.*asset|realization.*asset|realise.*asset|realize.*asset|asset.*realisation|asset.*realization|gain.*on.*disposal|profit.*on.*disposal|loss.*on.*disposal|proceeds.*on.*disposal|on.*disposal|surrender.*lease|lease.*surrender|share.*disposal|disposal.*share|compulsory acquisition|compensation.*land|compensation.*property|compensation.*compulsory|divestment|divestiture|derecognition|on.*disposal/))
+  if(d.match(/disposal|realisation|realization|sale.of.propert|sale.of.land|sale.of.house|sale.of.vehicle|sale.of.car|sale.of.share|sale.of.asset|transfer.of.propert|assign.*propert|proceed.*sale|capital.gain|cgt.event|sold.*propert|sold.*vehicle|sold.*land|sold.*share|crypto.*sale|nft.*sale|bitcoin.*sale|disposal.*asset/i))
     return{head:"CGT-EVENT",icon:"📊",color:"#7C3AED",compliance_required:true,
       obligation:"POSSIBLE CGT EVENT: This looks like an asset disposal. Capital Gains Tax may apply under NTA 2025 S.34 — Go to Calculator > Cap. Gains tab. NOTE FOR COMPANIES: if this was sale of trading stock/goods/inventory, it is ordinary business income (not CGT) — please confirm.",
       cgt_flag:true,
       law:"NTA 2025, S.34-S.46 — Capital Gains Tax"};
 
-  // 11b. CAPITAL EXPENDITURE (purchase of new asset)
   if(d.match(/generator|vehicle|car|truck|van|machine|equipment|computer|laptop|furniture|building purchased|asset purchased|software purchased/))
     return{head:"CapEx→CA",icon:"🏭",color:C.green,compliance_required:false,
       obligation:"Capital expenditure — do NOT expense in P&L. Add to asset register and claim Capital Allowance at NTA 2025 rates (10%/20%/25%).",
       law:"NTA 2025, Sec 27 & First Schedule"};
 
-  // 12. OVERHEAD (no compliance action)
   if(d.match(/electricity|utility|water|internet|telephone|fuel|diesel|insurance|repair|maintenance|stationery|office supplies|printing|cleaning/))
     return{head:"Overhead",icon:"⚡",color:C.slate,compliance_required:false,
       obligation:"Deductible business expense under NTA 2025 Sec 20 if wholly and exclusively for business. Keep receipts.",
       law:"NTA 2025, Sec 20"};
 
-  // Default expense — no compliance
   return{head:"Expense",icon:"💸",color:C.slate,compliance_required:false,
     obligation:"Deductible business expense if wholly and exclusively incurred for business purposes. Keep receipts for NRS audit.",
     law:"NTA 2025, Sec 20"};
 }
 
-// ── AGGREGATES & TAX SCHEDULES ────────────────────────────────────────────────
-// KEY RULE: Only the TAX AMOUNT shows under each tax heading — NOT the gross.
-// Each transaction contributes a line item to the relevant tax schedule.
-
 function computeAggregates(txns){
   let income=0, expenses=0;
-  // Tax amounts only (not gross)
   let vatOut=0, vatIn=0, whtIn=0, whtOut=0, payeIn=0, payeOut=0;
 
-  // Individual schedule line items — for clickable breakdown
   const schedules={
     whtOut:[],    // WHT you must deduct & remit
     whtIn:[],     // WHT deducted from your income (credit)
@@ -847,7 +787,6 @@ function computeAggregates(txns){
 
     if(t.type==="income"){
       income+=t.amount;
-      // WHT on income (credit) — only the tax portion
       if(["WHT","WHT+VAT","Zero-VAT"].some(h=>r.head.startsWith(h.split("+")[0]))||r.head==="WHT"){
         const wht=r.wht_amount_fn?r.wht_amount_fn(t.amount):t.amount*.10;
         if(wht>0){
@@ -855,40 +794,33 @@ function computeAggregates(txns){
           schedules.whtIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:wht,rate:"10%",type:"WHT Credit",law:"NTA 2025 Ch.Two Pt.IV"});
         }
       }
-      // VAT on sales — only the VAT amount
       if(r.head==="VAT+CIT"||r.head==="WHT+VAT"){
         const vat=t.amount*.075;
         vatOut+=vat;
         schedules.vatOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:vat,rate:"7.5%",type:"Output VAT",law:"NTA 2025 Ch.Four Sec 52"});
       }
-      // PAYE credit (salary already taxed at source)
       if(r.head==="PAYE"){
         const paye=t.amount*.15; // estimated at 15%
         payeIn+=paye;
         schedules.payeIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE Credit",law:"TAA 2025 Sec 13"});
       }
-      // CGT-flagged asset disposal — flag for review, no tax computed here (user must use CGT calculator)
       if(r.head==="CGT-EVENT"){
         schedules.cgtEvents.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:0,rate:"CGT — check calculator",type:"Asset Disposal",status:t.compliance_status||"pending",law:"NTA 2025 S.34-S.46"});
       }
     } else {
       expenses+=t.amount;
-      // WHT you must deduct — only the WHT amount
       if(r.compliance_required && r.head.startsWith("WHT-out") && r.wht_rate){
         const wht=t.amount*(r.wht_rate/100);
         const net=t.amount-wht;
         whtOut+=wht;
         schedules.whtOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:wht,net,rate:r.wht_rate+"%",type:r.head,status:t.compliance_status||"pending",law:r.law});
       }
-      // PAYE on staff salaries — only the PAYE amount
       if(r.head==="PAYE-out"){
         const paye=t.amount*.15; // estimated; payroll engine gives exact
         payeOut+=paye;
         schedules.payeOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE",status:t.compliance_status||"pending",law:"TAA 2025 Sec 13"});
       }
-      // Input VAT on qualifying purchases — only the VAT amount
       if(r.head==="Overhead"||r.head==="Expense"){
-        // Only if description suggests VATable purchase
         if(t.desc.toLowerCase().match(/purchase|bought|supplies|stock|inventory|material/)){
           const vat=t.amount*.075;
           vatIn+=vat;
@@ -901,7 +833,6 @@ function computeAggregates(txns){
   const vatNet=vatOut-vatIn;
   return{
     income, expenses, net:income-expenses,
-    // Tax amounts only:
     vatOut, vatIn, vatNet, vatPayable:Math.max(0,vatNet), vatRefund:Math.max(0,-vatNet),
     whtIn, whtOut, payeIn, payeOut, cgtEvents:schedules.cgtEvents.length,
     estCIT:Math.max(0,income-expenses)*.30,
@@ -910,37 +841,27 @@ function computeAggregates(txns){
   };
 }
 
-// ── DERIVED METRICS FROM TRANSACTIONS ────────────────────────────────────────
-// IMPROVEMENT 1: turnover computed live from transactions, not entered manually
 function computeTurnover(txns){
-  // Turnover = total income from trading/business transactions to date
   return txns.filter(t=>t.type==="income"&&t.compliance_status!=="kiv").reduce((s,t)=>s+t.amount,0);
 }
 
-// ── PAYROLL ENGINE — NTA 2025, TAA 2025 ──────────────────────────────────────
-// IMPROVEMENT 3
 function computePayroll(employee){
   const{grossMonthly=0,pensionPct=8,employerPensionPct=10,nhfPct=2.5,nhisMonthly=0,lifeInsurance=0}=employee;
   const annualGross=grossMonthly*12;
 
-  // Exempt check
   if(grossMonthly<=70000) return{...employee,paye:0,pensionEmployee:0,nhf:0,nhis:nhisMonthly,netPay:grossMonthly,exempt:true,employerPension:0,total_employer_cost:grossMonthly};
 
-  // Statutory deductions (employee side)
   const pensionEmployee=grossMonthly*(pensionPct/100);
   const nhf=grossMonthly*(nhfPct/100);
   const totalEmployeeDeductions=pensionEmployee+nhf+nhisMonthly+lifeInsurance;
 
-  // PAYE computation — NTA 2025
   const taxableAnnual=Math.max(0,annualGross-totalEmployeeDeductions*12);
   const annualPAYE=pitBands(taxableAnnual);
   const monthlyPAYE=annualPAYE/12;
 
-  // Employer costs
   const employerPension=grossMonthly*(employerPensionPct/100);
   const totalEmployerCost=grossMonthly+employerPension;
 
-  // Net pay
   const netPay=grossMonthly-pensionEmployee-nhf-nhisMonthly-lifeInsurance-monthlyPAYE;
 
   return{
@@ -961,8 +882,6 @@ function computePayroll(employee){
   };
 }
 
-// ── ASSET REGISTER & CA ELIGIBILITY — NTA 2025 Sec 27 ────────────────────────
-// IMPROVEMENT 4
 const CA_CLASSES=[
   {code:"building",   label:"Permanent Buildings",         rate:.10, class:1},
   {code:"masts",      label:"Masts & Communication",        rate:.10, class:1},
@@ -977,8 +896,6 @@ const CA_CLASSES=[
   {code:"other",      label:"Other Qualifying Assets",      rate:.25, class:3},
 ];
 
-// Returns ordered list of eligibility conditions to check at asset entry
-// Each condition has: id, question, hint, failAction, law
 const CA_ELIGIBILITY_STEPS=[
   {
     id:"is_capital",
@@ -1118,10 +1035,6 @@ function ScoreRing({score}){
   );
 }
 
-// ── ONBOARDING ────────────────────────────────────────────────────────────────
-// IMPROVEMENT 1: No turnover field (derived from transactions)
-// IMPROVEMENT 2: Data source selection (multi-select)
-// IMPROVEMENT 3: Employer deduction choices for individuals
 function OnboardingScreen({onComplete, editMode=false, initialData=null}){
   const[step,setStep]=useState(editMode?1:0);
   const[data,setData]=useState(initialData||{
@@ -1137,7 +1050,6 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
   const toggleDS=(ds)=>setData(d=>({...d,dataSources:d.dataSources.includes(ds)?d.dataSources.filter(x=>x!==ds):[...d.dataSources,ds]}));
   const toggleED=(k)=>setData(d=>({...d,employerDeductions:{...d.employerDeductions,[k]:!d.employerDeductions[k]}}));
 
-  // Step 0 — Welcome
   if(step===0) return(
     <div className="onboard-hero">
       <div style={{fontSize:64,marginBottom:20}}>₦</div>
@@ -1158,7 +1070,6 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
     </div>
   );
 
-  // Step 1 — Individual or Company
   if(step===1) return(
     <div style={{padding:24,paddingTop:40,minHeight:"100vh",display:"flex",flexDirection:"column",justifyContent:"center"}}>
       <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:".12em",marginBottom:8}}>STEP 1 OF 4</div>
@@ -1185,7 +1096,6 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
     </div>
   );
 
-  // Step 2 — Your details (NO turnover field — derived from transactions)
   if(step===2) return(
     <div style={{padding:24,paddingTop:32,minHeight:"100vh",display:"flex",flexDirection:"column",justifyContent:"center"}}>
       <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:".12em",marginBottom:8}}>STEP 2 OF 4</div>
@@ -1259,7 +1169,6 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
     </div>
   );
 
-  // Step 3 — IMPROVEMENT 2: Data source selection (multi-select)
   if(step===3) return(
     <div style={{padding:24,paddingTop:32,minHeight:"100vh",display:"flex",flexDirection:"column",justifyContent:"center"}}>
       <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:".12em",marginBottom:8}}>STEP 3 OF 4</div>
@@ -1306,7 +1215,6 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
     </div>
   );
 
-  // Step 4 — Summary & confirm
   return(
     <div style={{padding:24,paddingTop:32,minHeight:"100vh",display:"flex",flexDirection:"column",justifyContent:"center"}}>
       <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:".12em",marginBottom:8}}>{editMode?"REVIEW CHANGES":"STEP 4 OF 4"}</div>
@@ -1337,8 +1245,6 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
   );
 }
 
-
-// ── DASHBOARD ─────────────────────────────────────────────────────────────────
 function Dashboard({profile,txns,kiv,onNav}){
   const isCompany=profile.mode==="company";
   const agg=computeAggregates(txns);
@@ -1350,7 +1256,6 @@ function Dashboard({profile,txns,kiv,onNav}){
     {n:isCompany?"CIT":"PIT", label:isCompany?"CIT Return":"Annual PIT Return",days:getDaysLeft(isCompany?"CIT":"PIT")},
   ];
 
-  // CIT classification based on live turnover
   const citR=isCompany?computeCIT(Math.max(0,agg.net),turnover,profile.fixedAssets||0,profile.isProfessional||false):null;
   const complianceScore=78;
   const totalTax=agg.vatPayable+agg.whtOut+agg.payeOut+(isCompany?citR?.total||0:agg.payeIn);
@@ -1493,7 +1398,6 @@ function Dashboard({profile,txns,kiv,onNav}){
   );
 }
 
-// ── JOURNAL SCREEN ────────────────────────────────────────────────────────────
 function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
   const[filter,setFilter]=useState("all");
   const[showAdd,setShowAdd]=useState(false);
@@ -1503,11 +1407,9 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
   const agg=computeAggregates(txns);
   const kivTxns=kiv||[];
 
-  // IMPROVEMENT 6: Try to post — check compliance_required on the rule first
   const tryPost=(txn)=>{
     const rule=classifyTxn(txn.desc,txn.type);
     if(rule.compliance_required){
-      // Compute WHT amounts for display in popup
       const wht = rule.wht_amount_fn ? rule.wht_amount_fn(txn.amount) : 0;
       const net = txn.amount - wht;
       const prompt = (rule.compliance_prompt||rule.obligation)
@@ -1546,7 +1448,6 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
     tryPost(t);
   };
 
-  // IMPROVEMENT 5: Edit transaction
   const onEditTxn=(txn)=>setEditTxn(txn);
   const onSaveEdit=(updated)=>{
     setTxns(prev=>prev.map(t=>t.id===updated.id?updated:t));
@@ -1694,14 +1595,12 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
   );
 }
 
-// ── COMPLIANCE ACTION POPUP — IMPROVEMENT 6 ───────────────────────────────────
 function CompliancePopup({txn, rule, onDone, onWaive, onLater, onNav}){
   const fmt2=n=>"₦"+Number(n||0).toLocaleString("en-NG",{maximumFractionDigits:0});
   const wht = txn.wht || 0;
   const net = txn.net || txn.amount;
   const isCGT = rule.cgt_flag || rule.head==="CGT-EVENT";
 
-  // CGT-specific popup
   if(isCGT) return(
     <div className="overlay" onClick={onLater}>
       <div className="sheet" onClick={e=>e.stopPropagation()}>
@@ -1822,7 +1721,6 @@ function CompliancePopup({txn, rule, onDone, onWaive, onLater, onNav}){
   );
 }
 
-// ── TRANSACTION EDIT SCREEN — IMPROVEMENT 5 ──────────────────────────────────
 function TxnEditScreen({txn, onSave, onDelete, onBack}){
   const[edit,setEdit]=useState({...txn});
   const set=(k,v)=>setEdit(e=>({...e,[k]:v}));
@@ -1884,7 +1782,6 @@ function TxnEditScreen({txn, onSave, onDelete, onBack}){
   );
 }
 
-// ── PAYROLL SCREEN — IMPROVEMENT 3 ───────────────────────────────────────────
 function PayrollScreen({employees,setEmployees,onBack}){
   const[showAdd,setShowAdd]=useState(false);
   const[newEmp,setNewEmp]=useState({name:"",role:"",grossMonthly:0,pensionPct:8,nhfPct:2.5,nhisMonthly:0,lifeInsurance:0});
@@ -2033,7 +1930,6 @@ function PayrollScreen({employees,setEmployees,onBack}){
   );
 }
 
-// ── ASSET REGISTER — IMPROVEMENT 4 ───────────────────────────────────────────
 function AssetRegisterScreen({assets,setAssets,onBack}){
   const[mode,setMode]=useState("list"); // list | add | eligibility | detail
   const[newAsset,setNewAsset]=useState({name:"",assetClass:"plant",cost:0,dateAcquired:today(),imported:false,yearsHeld:1,businessPct:100});
@@ -2043,7 +1939,6 @@ function AssetRegisterScreen({assets,setAssets,onBack}){
 
   const totalCA=assets.reduce((s,a)=>s+computeAssetCA(a).annual,0);
 
-  // Eligibility check — step by step
   const currentStep=CA_ELIGIBILITY_STEPS[eligStep];
   const allPassed=Object.keys(eligAnswers).length===CA_ELIGIBILITY_STEPS.length&&Object.values(eligAnswers).every(v=>v===true);
 
@@ -2051,13 +1946,11 @@ function AssetRegisterScreen({assets,setAssets,onBack}){
     const newAnswers={...eligAnswers,[currentStep.id]:yes};
     setEligAnswers(newAnswers);
     if(!yes){
-      // Failed condition — show action, stay on step so they can read
       return;
     }
     if(eligStep<CA_ELIGIBILITY_STEPS.length-1){
       setEligStep(s=>s+1);
     } else {
-      // All conditions passed — add asset
       setAssets(prev=>[...prev,{id:Date.now(),...newAsset,eligibility:"passed"}]);
       setMode("list");
       setEligStep(0);setEligAnswers({});
@@ -2170,15 +2063,6 @@ function AssetRegisterScreen({assets,setAssets,onBack}){
     </div>
   );
 
-  // ── Asset schedule helpers ────────────────────────────────────────────────
-  // For each asset, compute all schedule columns:
-  // accDepBF = depreciation accumulated BEFORE current year
-  // depnCharge = current year straight-line depreciation (cost × rate × businessPct%)
-  // accDepCF = accumulated after current year
-  // nbv = cost - accDepCF  (Net Book Value)
-  // caAnnual = NTA 2025 capital allowance (may differ from accounting depn)
-  // twdv = Tax Written Down Value
-  // disposals / additions tracked via asset flags
   function buildScheduleRow(a){
     const cls = CA_CLASSES.find(c=>c.code===a.assetClass)||CA_CLASSES[10];
     const cost = a.cost||0;
@@ -2186,17 +2070,14 @@ function AssetRegisterScreen({assets,setAssets,onBack}){
     const bPct = (a.businessPct||100)/100;
     const yrs  = a.yearsHeld||1;
     const residual = cost*0.01;
-    // Accounting straight-line over useful life mirrors CA rate for simplicity
     const depnRate = rate; // same basis as CA
     const annualDepn = cost * depnRate * bPct;
     const maxYrs = cost > 0 ? Math.floor((cost-residual)/annualDepn)||1 : 1;
-    // Accumulated depn b/f = prior years
     const priorYrs = Math.max(0, yrs - 1);
     const accDepBF  = Math.min(cost - residual, annualDepn * priorYrs);
     const depnCharge= (yrs <= maxYrs) ? annualDepn : 0;
     const accDepCF  = Math.min(cost - residual, accDepBF + depnCharge);
     const nbv       = cost - accDepCF;
-    // CA columns (NTA 2025)
     const caAnnual  = cost * rate * bPct;
     const caEffective = caAnnual * Math.min(yrs, maxYrs);
     const twdv      = Math.max(residual, cost - caEffective);
@@ -2218,7 +2099,6 @@ function AssetRegisterScreen({assets,setAssets,onBack}){
     };
   }
 
-  // CSV export — full schedule
   const exportScheduleCSV = () => {
     const rows = assets.map(buildScheduleRow);
     const totals = rows.reduce((t,r)=>({
@@ -2263,7 +2143,6 @@ function AssetRegisterScreen({assets,setAssets,onBack}){
     URL.revokeObjectURL(url);
   };
 
-  // ── Schedule view ─────────────────────────────────────────────────────────
   if(mode==="schedule"){
     const rows = assets.map(buildScheduleRow);
     const tot  = rows.reduce((t,r)=>({
@@ -2272,7 +2151,6 @@ function AssetRegisterScreen({assets,setAssets,onBack}){
       nbv:t.nbv+r.nbv, caAnnual:t.caAnnual+r.caAnnual, twdv:t.twdv+r.twdv
     }),{cost:0,accDepBF:0,depnCharge:0,accDepCF:0,nbv:0,caAnnual:0,twdv:0});
 
-    // Mini column cell
     const Col=({label,val,color,bold})=>(
       <div style={{marginBottom:6}}>
         <div style={{fontSize:9,color:C.muted,fontWeight:700,letterSpacing:".05em",marginBottom:1}}>{label}</div>
@@ -2392,7 +2270,6 @@ function AssetRegisterScreen({assets,setAssets,onBack}){
     );
   }
 
-  // ── List view ─────────────────────────────────────────────────────────────
   return(
     <div style={{paddingBottom:80}}>
       <Hdr title="Asset Register" onBack={onBack}
@@ -2453,10 +2330,6 @@ function AssetRegisterScreen({assets,setAssets,onBack}){
   );
 }
 
-// ── TAX SCHEDULE SCREEN ───────────────────────────────────────────────────────
-// Shows only the TAX AMOUNTS per transaction — formatted for TaxProMax upload
-// Accessed by tapping any tax figure on dashboard or tax summary
-
 function TaxScheduleScreen({scheduleKey, schedules, profile, onBack}){
   const lines = schedules[scheduleKey] || [];
   const total = lines.reduce((s,l)=>s+l.tax,0);
@@ -2473,7 +2346,6 @@ function TaxScheduleScreen({scheduleKey, schedules, profile, onBack}){
   };
   const meta = labels[scheduleKey]||{title:"Tax Schedule",sub:"",color:C.blue,icon:"📊"};
 
-  // TaxProMax CSV format
   const exportCSV=()=>{
     const header="Date,Description,Gross Amount (₦),Tax Rate,Tax Amount (₦),Net Amount (₦),Status,Law Reference";
     const rows=lines.map(l=>`${l.date},"${l.desc}",${l.gross},${l.rate||""},${l.tax.toFixed(2)},${((l.net||l.gross-l.tax)).toFixed(2)},${l.status||"posted"},${l.law||""}`);
@@ -2591,16 +2463,11 @@ function TaxScheduleScreen({scheduleKey, schedules, profile, onBack}){
   );
 }
 
-// ── CALCULATE SCREEN (individual) ─────────────────────────────────────────────
-// ── CIT COMPUTATION SCREEN — NTA 2025 ────────────────────────────────────────
-// Hybrid: auto-populated from transactions + manual override fields
-// Covers: Gross Profit → Adjusted Profit → CA → CIT/Dev Levy → WHT credit → Balance
 function CITScreen({profile, txns, assets, onBack}){
   const agg = computeAggregates(txns);
   const turnover = computeTurnover(txns);
   const totalCA = assets.reduce((s,a)=>s+computeAssetCA(a).annual,0);
 
-  // Seeded from live transaction data — user can override each field
   const [override, setOverride] = useState(false);
   const [f, setF] = useState({
     turnover:      Math.round(turnover),
@@ -2615,27 +2482,22 @@ function CITScreen({profile, txns, assets, onBack}){
   });
   const set = (k,v) => setF(p=>({...p,[k]:v}));
 
-  // ── Core computation ──
   const grossProfit   = f.turnover - f.cogs;
   const ebitda        = grossProfit - f.opex + (f.otherIncome||0);
   const adjProfit     = ebitda + (f.depreciation||0) - f.ca - (f.prevLoss||0);
   const taxableProfit = Math.max(0, adjProfit);
 
-  // Tier
   const isSmall = f.turnover<=50e6 && (profile.fixedAssets||0)<=250e6 && !profile.isProfessional;
   const tier    = isSmall ? "Small Company (0%)" : "Standard (30% + 4% Dev Levy)";
 
-  // Tax
   const cit     = isSmall ? 0 : taxableProfit * 0.30;
   const dev     = isSmall ? 0 : taxableProfit * 0.04;
 
-  // Minimum tax: 0.5% of gross turnover — applies when company has no assessable profit OR computed tax < minimum
   const minTax  = f.turnover * 0.005;
   const grossTax = cit + dev;
   const applyMin = !isSmall && grossTax < minTax;
   const finalGrossTax = isSmall ? 0 : (applyMin ? minTax : grossTax);
 
-  // WHT credit offset
   const whtCredit = Math.min(f.whtCredit, finalGrossTax);
   const balanceDue = Math.max(0, finalGrossTax - whtCredit);
   const overpaid   = Math.max(0, f.whtCredit - finalGrossTax);
@@ -2843,24 +2705,18 @@ function CITScreen({profile, txns, assets, onBack}){
   );
 }
 
-// ── OWN ACCOUNTS SCREEN ──────────────────────────────────────────────────────
-// All CBN-licensed Nigerian banks and fintechs
 const NIGERIAN_BANKS = [
-  // International
   "Access Bank","Citibank Nigeria","Ecobank Nigeria","Fidelity Bank",
   "First Bank of Nigeria","First City Monument Bank (FCMB)","Guaranty Trust Bank (GTBank)",
   "Stanbic IBTC Bank","Standard Chartered Bank Nigeria","Union Bank of Nigeria",
   "United Bank for Africa (UBA)","Zenith Bank",
-  // National
   "Globus Bank","Keystone Bank","Optimus Bank","Parallex Bank",
   "Polaris Bank","Premium Trust Bank","Providus Bank","Signature Bank",
   "Sterling Bank","SunTrust Bank Nigeria","Titan Trust Bank","Unity Bank",
   "Wema Bank / ALAT",
-  // Fintechs & MFBs
   "Kuda Bank","MoniePoint","OPay","PalmPay",
   "Carbon (Paylater)","FairMoney","Renmoney","VFD Microfinance Bank",
   "LAPO Microfinance Bank","Accion Microfinance Bank",
-  // Others
   "Jaiz Bank","TAJBank","Lotus Bank", // non-interest
   "Heritage Bank (in liquidation)",
   "Other",
@@ -2941,7 +2797,6 @@ function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
   );
 }
 
-// ── IMPORT RULES SCREEN ───────────────────────────────────────────────────────
 function ImportRulesScreen({importRules, setImportRules, onBack}){
   const blank={id:null,name:"",pattern:"",matchType:"contains",
     newType:"",newCategory:"",taxAllowable:true,included:true,appendNote:""};
@@ -3445,7 +3300,6 @@ function CalculateScreen({profile,onBack}){
   );
 }
 
-// ── DEADLINES SCREEN ──────────────────────────────────────────────────────────
 function DeadlinesScreen({profile,onBack}){
   const isCompany=profile.mode==="company";
   const deadlines=[
@@ -3493,7 +3347,6 @@ function DeadlinesScreen({profile,onBack}){
   );
 }
 
-// ── VAT SCREEN ────────────────────────────────────────────────────────────────
 function VATScreen({txns,onBack}){
   const[output,setOutput]=useState(0);
   const[input,setInput]=useState(0);
@@ -3538,7 +3391,6 @@ function VATScreen({txns,onBack}){
   );
 }
 
-// ── FAQ SCREEN ────────────────────────────────────────────────────────────────
 function FAQScreen({onBack}){
   const [open, setOpen] = useState(null);
   const faqs = [
@@ -3634,7 +3486,6 @@ function FAQScreen({onBack}){
   );
 }
 
-// ── AI AGENT ──────────────────────────────────────────────────────────────────
 function AgentScreen({profile,txns,onBack}){
   const[msgs,setMsgs]=useState([{role:"assistant",text:`Hello${profile.name?` ${profile.name.split(" ")[0]}`:""}! I'm your TaxWise AI agent, trained on the Nigeria Tax Act 2025, Tax Administration Act 2025 and NRS Establishment Act 2025.\n\nI know your profile and transactions, so I can give you personalised tax advice. What would you like to know?`}]);
   const[input,setInput]=useState("");
@@ -3649,7 +3500,6 @@ function AgentScreen({profile,txns,onBack}){
     const newMsgs=[...msgs,{role:"user",text:msg}];
     setMsgs(newMsgs);setLoading(true);
     try{
-      // Call via Supabase Edge Function (avoids CORS + keeps API key secure)
       const res=await fetch(`${SUPA_URL}/functions/v1/taxwise-ai`,{
         method:"POST",
         headers:{
@@ -3823,7 +3673,6 @@ Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocale
   );
 }
 
-// ── PROFILE SCREEN ────────────────────────────────────────────────────────────
 function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEditSetup,onNav,ownAccountsCount,importRulesCount,sub}){
   const[edit,setEdit]=useState({...profile});
   const agg=computeAggregates(txns);
@@ -4033,7 +3882,6 @@ function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEdit
   );
 }
 
-// ── TAX SUMMARY SCREEN ────────────────────────────────────────────────────────
 function TaxSummaryScreen({txns,profile,onNav,onBack}){
   const agg=computeAggregates(txns);
   const isCompany=profile.mode==="company";
@@ -4042,7 +3890,6 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
   const period=new Date().toLocaleDateString("en-NG",{month:"long",year:"numeric"});
   const entity=profile.companyName||profile.name||"Taxpayer";
 
-  // ── CSV builder — shared logic ──────────────────────────────────────────────
   function buildCSV(key, lines){
     const META={
       whtOut:{title:"WHT Remittance Schedule",law:"NTA 2025 Ch.Two Pt.IV — Sec 28",due:"21st of next month",note:"WHT deducted from payments made — remit to NRS"},
@@ -4094,7 +3941,6 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
   }
 
   function downloadAll(){
-    // All six schedules concatenated into one CSV with section breaks
     const keys=isCompany
       ?["whtOut","whtIn","vatOut","vatIn","payeOut","cgtEvents"]
       :["whtIn","vatIn","payeIn","cgtEvents"];
@@ -4118,7 +3964,6 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
     URL.revokeObjectURL(url);
   }
 
-  // ── Summary tax row (clickable + download button) ───────────────────────────
   const TaxRow=({label,taxAmount,grossAmount,schedKey,color,note,total})=>(
     <div style={{
       display:"flex",justifyContent:"space-between",alignItems:"flex-start",
@@ -4143,7 +3988,6 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
     </div>
   );
 
-  // ── Schedule card (compact preview + download) ──────────────────────────────
   const SchedCard=({schedKey,title,subtitle,color,icon,due,law})=>{
     const lines=agg.schedules[schedKey]||[];
     const taxTotal=lines.reduce((s,l)=>s+l.tax,0);
@@ -4343,8 +4187,6 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
   );
 }
 
-
-// ── BANK CONNECT SCREEN (simplified) ─────────────────────────────────────────
 function BankScreen({connectedBanks,setConnectedBanks,onBack}){
   const[step,setStep]=useState(connectedBanks.length>0?"connected":"intro");
   const[selectedBank,setSelectedBank]=useState(null);
@@ -4442,9 +4284,7 @@ function BankScreen({connectedBanks,setConnectedBanks,onBack}){
   );
 }
 
-// ── MAIN APP ──────────────────────────────────────────────────────────────────
 function App(){
-  // ── Auth state ──────────────────────────────────────────────────────────────
   const [authUser, setAuthUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [syncStatus, setSyncStatus] = useState("idle");
@@ -4459,20 +4299,17 @@ function App(){
     const {data:{subscription}} = sb.auth.onAuthStateChange((_event, session)=>{
       setAuthUser(session?.user||null);
     });
-    // Handle nav events from profile screen buttons
     const handleNavEvent = (e) => setScreen(e.detail);
     window.addEventListener("nav", handleNavEvent);
     return ()=>{ subscription.unsubscribe(); window.removeEventListener("nav",handleNavEvent); };
   },[]);
 
-  // Load subscription when user logs in
   useEffect(()=>{
     if(authUser){
       setSubLoading(true);
       getSubscription(authUser.id).then(s=>{
         setSub(s);
         setSubLoading(false);
-        // Create trial if no subscription exists
         if(!s){
           const store = loadStore();
           const plan = store?.profile?.mode==="company"?"company":"individual";
@@ -4497,7 +4334,6 @@ function App(){
     if(s?.kiv) setKivRaw(s.kiv);
     setTimeout(()=>setSyncStatus("idle"),3000);
 
-    // Check for pending invite token in URL
     const params = new URLSearchParams(window.location.search);
     const inviteToken = params.get("invite_token");
     if(inviteToken){
@@ -4509,14 +4345,12 @@ function App(){
         });
         const data = await res.json();
         if(data.success){
-          // Reload profile with company linkage
           await syncPull(user.id);
           const updated = loadStore();
           if(updated?.profile) setProfileRaw(updated.profile);
           alert(`✅ ${data.message}\nYou now have ${data.role} access.`);
         }
       } catch(e){ console.warn("Invite accept failed:", e); }
-      // Clean URL
       window.history.replaceState({},"",window.location.pathname);
     }
   };
@@ -4531,7 +4365,6 @@ function App(){
     setSub(null);
   };
 
-  // Load persisted data
   const saved=loadStore();
   const[profile,setProfileRaw]=useState(saved?.profile||DEFAULT_STORE.profile);
   const[txns,setTxnsRaw]=useState(saved?.transactions||DEFAULT_STORE.transactions);
@@ -4544,7 +4377,6 @@ function App(){
   const[screen,setScreen]=useState("dashboard");
   const[prevScreen,setPrevScreen]=useState(null);
 
-  // Auto-save helpers (localStorage + cloud sync)
   const doSync = useCallback((store) => {
     if(authUser) syncPush(authUser.id, store).catch(()=>{});
   },[authUser]);
@@ -4614,7 +4446,6 @@ function App(){
   const nav=(s)=>{setPrevScreen(screen);setScreen(s);};
   const back=()=>setScreen(prevScreen||"dashboard");
 
-  // ── Invite token detection (runs on app load) ──────────────────────────────
   const [inviteData, setInviteData] = useState(()=>{
     const params = new URLSearchParams(window.location.search);
     const token = params.get("invite_token");
@@ -4624,12 +4455,8 @@ function App(){
     return null;
   });
 
-  // ── Onboarding gate ─────────────────────────────────────────────────────────
-  // Onboarding shows ONLY once — on first use after signup.
-  // After completion it is saved to cloud. Subsequent logins go straight to dashboard.
   useEffect(()=>{
     if(authUser && !profile.onboarded){
-      // Verify against cloud — localStorage may be stale or cleared
       sb.from("profiles").select("onboarded").eq("id", authUser.id).single()
         .then(({data})=>{
           if(data?.onboarded === true){
@@ -4639,9 +4466,7 @@ function App(){
     }
   },[authUser, profile.onboarded]);
 
-  // Show onboarding if not completed — but skip for invited members
   if(!profile.onboarded){
-    // If user arrived via invite link — show invite welcome instead of onboarding
     if(inviteData && authUser){
       return(
         <div style={{minHeight:"100vh",background:`linear-gradient(160deg,${C.navy},#1E3A5F)`,
@@ -4677,10 +4502,8 @@ function App(){
                 });
                 const data = await res.json();
                 if(data.success){
-                  // Pull company owner's data into this account
                   await syncPull(data.companyOwnerId);
                   const updated = loadStore();
-                  // Mark as onboarded with restricted role
                   const memberProfile = {
                     ...(updated?.profile||DEFAULT_STORE.profile),
                     onboarded: true,
@@ -4714,13 +4537,11 @@ function App(){
       );
     }
 
-    // Normal onboarding for new users
     return(
       <OnboardingScreen onComplete={p=>{
         const newProfile={...DEFAULT_STORE.profile,...p,onboarded:true};
         setProfileRaw(newProfile);
         saveStore({profile:newProfile,transactions:[],kiv:[],employees:[],assets:[],connectedBanks:[]});
-        // Immediately persist onboarded=true to cloud so it survives localStorage clear
         if(authUser){
           sb.from("profiles").upsert({id:authUser.id, onboarded:true, updated_at:new Date().toISOString()})
             .catch(()=>{});
@@ -4729,17 +4550,14 @@ function App(){
     );
   }
 
-  // Bottom nav always visible when onboarded
   document.getElementById("bnav").style.display="flex";
 
   const isCompany=profile.mode==="company";
 
-  // Bottom nav items
   const navItems=isCompany
     ?[{id:"dashboard",icon:"⬡",label:"Home"},{id:"journal",icon:"📒",label:"Journal"},{id:"payroll",icon:"👥",label:"Payroll"},{id:"agent",icon:"💬",label:"AI"},{id:"profile",icon:"👤",label:"Profile"}]
     :[{id:"dashboard",icon:"⬡",label:"Home"},{id:"journal",icon:"📒",label:"Journal"},{id:"calculate",icon:"🧮",label:"Calculate"},{id:"agent",icon:"💬",label:"AI"},{id:"profile",icon:"👤",label:"Profile"}];
 
-  // Role-based access control for company members
   const memberRole = profile.member_role || "admin";
   const isCompanyMember = !!profile.isCompanyMember;
   const canEdit = !isCompanyMember || ["admin","accountant","data_entry"].includes(memberRole);
@@ -4747,9 +4565,7 @@ function App(){
   const canManageTeam = !isCompanyMember || memberRole==="admin";
   const canViewBilling = !isCompanyMember || memberRole==="admin";
 
-  // Render correct screen
   const renderScreen=()=>{
-    // Handle schedule routes: "schedule_whtOut", "schedule_vatOut" etc.
     if(screen.startsWith("schedule_")){
       const key=screen.replace("schedule_","");
       const agg=computeAggregates(txns);
@@ -4892,7 +4708,6 @@ function App(){
   );
 }
 
-// ── Subscription helpers ──────────────────────────────────────────────────────
 async function getSubscription(userId){
   const {data} = await sb.from("subscriptions").select("*").eq("user_id",userId).single();
   return data;
@@ -4909,9 +4724,6 @@ async function createTrialSubscription(userId, plan){
   });
 }
 
-// ── PDF.js: render PDF pages to JPEG base64 images ──────────────────────────
-// Returns array of {base64, mediaType} — one entry per page.
-// scale=1.5 gives ~1240px wide for A4, enough for AI text recognition.
 async function pdfToImages(file, onProgress) {
   if(!window.pdfjsLib) throw new Error("PDF.js not loaded — please refresh the page and try again.");
   const arrayBuffer = await file.arrayBuffer();
@@ -4949,13 +4761,11 @@ function trialDaysLeft(sub){
   return Math.max(0, Math.ceil(diff/(1000*60*60*24)));
 }
 
-// Return current calendar month key e.g. "2025-06"
 function currentMonthKey(){
   const d = new Date();
   return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
 }
 
-// Get how many AI imports remain this month for the given sub
 function aiImportsRemaining(sub, plan){
   if(!sub) return 0;
   const limit = AI_IMPORT_LIMITS[plan] || AI_IMPORT_LIMITS.individual;
@@ -4964,14 +4774,12 @@ function aiImportsRemaining(sub, plan){
   return Math.max(0, limit - used);
 }
 
-// Check limit then increment counter in Supabase. Returns {allowed, remaining}.
 async function checkAndIncrementAiImport(sub, userId, plan){
   if(!sub || !userId) return { allowed:false, remaining:0 };
   const limit = AI_IMPORT_LIMITS[plan] || AI_IMPORT_LIMITS.individual;
   const thisMonth = currentMonthKey();
   const alreadyUsed = (sub.ai_imports_month === thisMonth) ? (sub.ai_imports_used||0) : 0;
   if(alreadyUsed >= limit) return { allowed:false, remaining:0 };
-  // Increment in Supabase (columns must exist: ai_imports_used INT, ai_imports_month TEXT)
   const newUsed = alreadyUsed + 1;
   try {
     await sb.from("subscriptions").update({
@@ -4979,13 +4787,11 @@ async function checkAndIncrementAiImport(sub, userId, plan){
       ai_imports_month: thisMonth,
     }).eq("user_id", userId);
   } catch(_) {
-    // Column may not exist yet — still allow the import, just won't persist count
     console.warn("ai_imports columns not yet created in subscriptions table");
   }
   return { allowed:true, remaining: limit - newUsed };
 }
 
-// ── Paystack payment ──────────────────────────────────────────────────────────
 function initPaystack({email, amount, onSuccess, onClose, metadata={}}) {
   const handler = window.PaystackPop.setup({
     key: PAYSTACK_KEY,
@@ -5000,7 +4806,6 @@ function initPaystack({email, amount, onSuccess, onClose, metadata={}}) {
   handler.openIframe();
 }
 
-// ── SUBSCRIPTION SCREEN ───────────────────────────────────────────────────────
 function SubscriptionScreen({profile, authUser, sub, onBack, onSubscribed}){
   const [billing, setBilling] = useState("monthly"); // monthly | yearly
   const [loading, setLoading] = useState(false);
@@ -5021,7 +4826,6 @@ function SubscriptionScreen({profile, authUser, sub, onBack, onSubscribed}){
         amount: totalAmount,
         metadata: { plan, billing, extraUsers, userId: authUser.id },
         onSuccess: async (response) => {
-          // Record subscription
           const now = new Date();
           const periodEnd = new Date(now.getTime() + (billing==="yearly"?365:30)*24*60*60*1000);
           await sb.from("subscriptions").upsert({
@@ -5163,7 +4967,6 @@ function SubscriptionScreen({profile, authUser, sub, onBack, onSubscribed}){
   );
 }
 
-// ── TEAM MANAGEMENT SCREEN ────────────────────────────────────────────────────
 function TeamScreen({profile, authUser, sub, onBack}){
   const [members, setMembers] = useState([]);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -5321,13 +5124,7 @@ function TeamScreen({profile, authUser, sub, onBack}){
   );
 }
 
-
-// ── UNIVERSAL IMPORT SCREEN ───────────────────────────────────────────────────
-// Supports: CSV, Excel (.xlsx/.xls), PDF, Images, ZIP (auto-extracts)
-// ── IMPORT RULES ENGINE ──────────────────────────────────────────────────────
-// Applies ownAccounts + importRules to a list of transactions before review
 function applyImportRules(transactions, ownAccounts=[], importRules=[]){
-  // Build matcher strings from own accounts (account numbers and names)
   const ownMatchers = ownAccounts.flatMap(a=>[
     a.accountNumber?.replace(/\s/g,"").toLowerCase(),
     a.accountName?.toLowerCase(),
@@ -5337,7 +5134,6 @@ function applyImportRules(transactions, ownAccounts=[], importRules=[]){
   return transactions.map(t=>{
     const desc = (t.desc||"").toLowerCase();
 
-    // 1. Own account transfer detection
     if(ownMatchers.length > 0){
       const isOwnTransfer = ownMatchers.some(m=>m && desc.includes(m));
       if(isOwnTransfer){
@@ -5352,7 +5148,6 @@ function applyImportRules(transactions, ownAccounts=[], importRules=[]){
       }
     }
 
-    // 2. User-defined import rules
     for(const rule of importRules){
       if(!rule.pattern||!rule.pattern.trim()) continue;
       const pattern = rule.pattern.toLowerCase().trim();
@@ -5396,7 +5191,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
   const [dateFrom, setDateFrom] = useState(""); // optional date range filter
   const [dateTo,   setDateTo]   = useState("");
 
-  // ── Helpers ─────────────────────────────────────────────────────────────────
   const parseCSVText = (text) => {
     const lines = text.split(/\r?\n/).filter(l=>l.trim());
     if(lines.length < 2) return {headers:[], rows:[]};
@@ -5420,17 +5214,11 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     const find = (...terms) => hdrs.find(h=>terms.some(t=>h.toLowerCase().trim()===t.toLowerCase().trim())) ||
       hdrs.find(h=>terms.some(t=>h.toLowerCase().includes(t.toLowerCase()))) || "";
     return {
-      // Date variants — MoniePoint uses "Date"
       date:   find("Date","Transaction Date","Trans Date","Value Date","Txn Date","Posting Date","date","time"),
-      // Description — MoniePoint uses "Narration"
       desc:   find("Narration","Description","Details","Remarks","Particulars","Reference","Notes","Transaction","narration","description","details","remarks"),
-      // Single amount
       amount: find("Amount","Value","Sum","Total","amount","value"),
-      // Credit — MoniePoint uses "Credit"
       credit: find("Credit","Cr","Deposit","Money In","Inflow","Receipts","credit","cr","deposit"),
-      // Debit — MoniePoint uses "Debit"
       debit:  find("Debit","Dr","Withdrawal","Money Out","Outflow","Payments","debit","dr","withdrawal"),
-      // Type
       type:   find("Type","Dr/Cr","Cr/Dr","Direction","DR_CR","type"),
     };
   };
@@ -5438,18 +5226,15 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
   const parseDate = (date) => {
     if(!date) return new Date().toISOString().split("T")[0];
     date = String(date).trim();
-    // Excel serial number
     if(/^\d{5}$/.test(date)){
       const d = new Date((parseInt(date)-25569)*86400*1000);
       return d.toISOString().split("T")[0];
     }
-    // DD/MM/YYYY or DD-MM-YYYY
     const dm = date.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
     if(dm){
       const [,a,b,c]=dm; const yr=c.length===2?`20${c}`:c;
       return `${yr}-${b.padStart(2,"0")}-${a.padStart(2,"0")}`;
     }
-    // DD MMM YYYY or DD-MMM-YYYY
     const dm2 = date.match(/^(\d{1,2})[\s\-]([A-Za-z]{3})[\s\-](\d{2,4})$/);
     if(dm2){
       const months={jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",
@@ -5457,7 +5242,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       const [,d,m,y]=dm2;
       return `${y.length===2?"20"+y:y}-${months[m.toLowerCase()]||"01"}-${d.padStart(2,"0")}`;
     }
-    // Already YYYY-MM-DD
     if(/^\d{4}-\d{2}-\d{2}/.test(date)) return date.slice(0,10);
     return new Date().toISOString().split("T")[0];
   };
@@ -5465,7 +5249,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
   const getNonAllowable = (desc) =>
     /loan.*principal|capital repayment|depreciation|income tax|penalty.*tax|drawing|dividend paid/i.test(String(desc));
 
-  // ── File handler ─────────────────────────────────────────────────────────────
   const handleFile = async (e) => {
     const file = e.target.files[0];
     if(!file) return;
@@ -5475,10 +5258,8 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     try {
       const ext = file.name.split(".").pop().toLowerCase();
 
-      // ── ZIP — could be an xlsx file OR a zip containing xlsx/csv ──
       if(ext==="zip"){
         setProgress("Reading file…");
-        // First try to parse as Excel directly (xlsx files ARE zip files)
         try {
           const ab = await file.arrayBuffer();
           if(window.XLSX){
@@ -5491,7 +5272,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
           }
         } catch(e){ /* not a direct xlsx — try as archive */ }
 
-        // Try as actual zip archive containing csv/xlsx
         setProgress("Extracting ZIP…");
         if(window.JSZip){
           const zip = await window.JSZip.loadAsync(file);
@@ -5513,7 +5293,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
         throw new Error("Could not read file. Please extract the ZIP and upload the Excel or CSV file directly.");
       }
 
-      // ── CSV / TXT ──
       if(ext==="csv"||ext==="txt"){
         setProgress("Parsing CSV…");
         const text = await file.text();
@@ -5521,7 +5300,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
         return;
       }
 
-      // ── Excel ──
       if(ext==="xlsx"||ext==="xls"||ext==="xlsm"){
         setProgress("Reading Excel file…");
         if(!window.XLSX) throw new Error("Excel library loading — please try again in a moment");
@@ -5530,7 +5308,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
         return;
       }
 
-      // ── PDF / Image — send to AI ──
       if(ext==="pdf"||/^image\//.test(file.type)||["jpg","jpeg","png","webp","gif"].includes(ext)){
         setProgress("Sending to AI for extraction…");
         setFileType("pdf");
@@ -5557,10 +5334,8 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       });
       if(!bestSheet||bestSheet.data.length<2) throw new Error("No data found in Excel file");
 
-      // Re-read with raw values to get proper dates
       const rawData = window.XLSX.utils.sheet_to_json(bestSheet.ws, {header:1, raw:true, defval:""});
 
-      // Find header row — look for row where ALL of these appear: date + (narration OR description) + (debit OR credit OR amount)
       const dataKeywords = [
         ["date","trans date","value date","txn date"],
         ["narration","description","details","narr","trans description","transaction"],
@@ -5576,20 +5351,15 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       }
       if(headerIdx<0) headerIdx=0;
 
-      // Get clean headers — strip trailing colons and whitespace
       const hdrs = rawData[headerIdx].map(h=>String(h||"").trim().replace(/:+$/,"")).filter(h=>h);
 
-      // Build data rows — convert Excel serial dates to YYYY-MM-DD
       const dataRows = rawData.slice(headerIdx+1)
         .filter(r=>r.some(c=>String(c||"").trim()))
         .map(r=>r.map((c,colIdx)=>{
-          // Check if this column is the date column (index 0 usually)
           if(colIdx===0 && typeof c==="number" && c>40000 && c<60000){
-            // Excel serial date — convert to YYYY-MM-DD
             const d = new Date(Math.round((c-25569)*86400*1000));
             return d.toISOString().split("T")[0];
           }
-          // Convert 0 to empty string for debit/credit columns
           if(c===0||c==="0") return "";
           return String(c||"").trim();
         }));
@@ -5610,9 +5380,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     setMode("mapping");
   };
 
-  // ── AI extraction for PDF/image ───────────────────────────────────────────
   const processViaAI = async (file) => {
-    // AI import usage gate
     if(authUser && sub){
       const plan = sub.plan||"individual";
       const check = await checkAndIncrementAiImport(sub, authUser.id, plan);
@@ -5633,8 +5401,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     const fileMB = file.size/1024/1024;
     let txnList = []; // hoisted — populated by PDF or image path below
 
-    // ── PDF.js chunked path: render pages to images, batch-process ────────────
-    // Handles Polaris 80pp and any large PDF — no Anthropic PDF size limit hit.
     if(isPDF && window.pdfjsLib){
       setProgress("Reading PDF…");
       let images;
@@ -5704,7 +5470,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       }
 
     } else {
-      // ── Image / non-PDF.js fallback path (single image files) ───────────────
       const maxSize = 8*1024*1024;
       if(file.size > maxSize) throw new Error("File too large (" + fileMB.toFixed(1) + "MB). Maximum is 8MB. Download as Excel from your bank app instead.");
       const mediaType = file.type||"image/jpeg";
@@ -5770,24 +5535,18 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     setMode("review");
   };
 
-  // ── Build preview from column mapping ────────────────────────────────────
   const buildPreview = () => {
     if(!mapping.date&&!mapping.desc) return setError("Please map at least Date and Description");
     const idx = (f) => headers.indexOf(mapping[f]);
     const [dI,nI,aI,cI,drI,tI] = ["date","desc","amount","credit","debit","type"].map(idx);
 
-    // Helper to parse amount — Nigerian transactions are often in millions, so no upper limit
-    // Only reject values that look like Excel serial dates: 5-digit integers in range 40000-60000
-    // with no decimal component (serial dates are whole numbers like 45678)
     const isExcelSerialDate = (n) => Number.isInteger(n) && n >= 40000 && n <= 60000;
     const parseAmt = (val) => {
       if(val===null||val===undefined||val==="") return 0;
-      // If already a number (from SheetJS), check for serial date
       if(typeof val === "number"){
         if(isExcelSerialDate(val)) return 0;
         return Math.abs(val);
       }
-      // String — strip currency symbols, commas, spaces
       const cleaned = String(val).replace(/[₦$£€,\s]/g,"").trim();
       if(!cleaned || cleaned==="-" || cleaned==="0.00") return 0;
       const n = parseFloat(cleaned);
@@ -5805,11 +5564,9 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       if(cI>=0&&drI>=0){
         const cr = parseAmt(row[cI]);
         const dr = parseAmt(row[drI]);
-        // Both may be present in same row (some banks put 0 in the other column)
         if(dr>0&&cr<=0){amount=dr;type="expense";}
         else if(cr>0&&dr<=0){amount=cr;type="income";}
         else if(cr>0&&dr>0){
-          // Both non-zero — net them or pick the larger one (reversal entries)
           amount=Math.max(cr,dr); type=cr>dr?"income":"expense";
         }
       } else if(aI>=0){
@@ -5834,7 +5591,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       `No valid transactions found. Make sure Credit and Debit columns are correctly mapped. ` +
       `Detected columns: ${headers.join(", ")}`
     );
-    // Apply date range filter if set
     const fromD = dateFrom ? new Date(dateFrom) : null;
     const toD   = dateTo   ? new Date(dateTo)   : null;
     const rangeFiltered = (fromD||toD) ? mapped.filter(t=>{
@@ -5869,7 +5625,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     </div>
   );
 
-  // ── DONE ──
   if(mode==="done") return(
     <div style={{paddingBottom:100}}>
       <Hdr title="Import Complete" onBack={onBack}/>
@@ -5887,7 +5642,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     </div>
   );
 
-  // ── REVIEW ──
   if(mode==="review") return(
     <div style={{paddingBottom:100}}>
       <Hdr title="Review Transactions" onBack={()=>setMode(fileType==="pdf"?"select":"mapping")}
@@ -5948,7 +5702,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     </div>
   );
 
-  // ── COLUMN MAPPING ──
   if(mode==="mapping") return(
     <div style={{paddingBottom:100}}>
       <Hdr title="Map Columns" onBack={()=>setMode("select")} subtitle={fileName}/>
@@ -6031,7 +5784,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     </div>
   );
 
-  // ── SELECT ──
   return(
     <div style={{paddingBottom:100}}>
       <Hdr title="Import Transactions" onBack={onBack} subtitle="CSV · Excel · PDF · Image"/>
@@ -6162,7 +5914,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
           </div>
 
           {[
-            // ── INTERNATIONAL LICENCE ──────────────────────────────────────
             {bank:"GTBank (Guaranty Trust)",icon:"🟠",tier:"International",
               recommended:"Excel — no password needed",
               steps:["Internet banking → Accounts → Statement of Account → Download as Excel (.xlsx)","Mobile app: Menu → Account Statement → Export → Excel"],
@@ -6191,7 +5942,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
               recommended:"Excel or CSV",
               steps:["Internet banking → Accounts → Account Statement → Export as Excel","Zenith Mobile → Account → Statement → Share/Export"],
               pdf:"Password is usually your account number."},
-            // ── NATIONAL LICENCE ───────────────────────────────────────────
             {bank:"Stanbic IBTC Bank",icon:"⚫",tier:"National",
               recommended:"Excel",
               steps:["Internet banking → Accounts → Download Statement → Excel","Mobile app → Account → Statement → Export"],
@@ -6248,7 +5998,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
               recommended:"Excel or PDF",
               steps:["Optimus app → Account → Statement → Export","Internet banking → Accounts → Account Statement → Download"],
               pdf:"Generally not password-protected. Upload directly."},
-            // ── REGIONAL LICENCE ───────────────────────────────────────────
             {bank:"Providus Bank",icon:"🟪",tier:"Regional",
               recommended:"Excel or PDF",
               steps:["Providus app → Account → Statement → Export","Internet banking → Accounts → Statement → Download"],
@@ -6265,7 +6014,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
               recommended:"Excel or PDF",
               steps:["Signature Bank app → Account → Statement → Export"],
               pdf:"Generally not password-protected. Upload directly."},
-            // ── DIGITAL BANKS & FINTECHS ───────────────────────────────────
             {bank:"MoniePoint",icon:"🟢",tier:"Fintech/MFB",
               recommended:"Excel — no password, fastest",
               steps:["App → Transactions → Filter (set date range) → Download Statement → Excel","No password required — upload .xlsx directly to TaxWise"],
@@ -6344,7 +6092,6 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
   );
 }
 
-// ── DOCUMENT UPLOAD SCREEN ────────────────────────────────────────────────────
 function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAssets, onBack, sub, setSub}){
   const [mode, setMode]           = useState("select"); // select | camera | processing | review | edit | done
   const [extracted, setExtracted] = useState([]);
@@ -6356,7 +6103,6 @@ function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAsse
   const [capturedPages, setCapturedPages] = useState([]); // [{base64, mediaType, label}]
   const isCompany = profile.mode==="company";
 
-  // CA class options for asset classification
   const CA_CLASSES_SIMPLE = [
     {code:"buildings",  label:"Buildings / Masts / Agric (10%)",   rate:10},
     {code:"plant",      label:"Plant / Furniture / Mining (20%)",   rate:20},
@@ -6365,7 +6111,6 @@ function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAsse
     {code:"other",      label:"Other Plant & Equipment (20%)",       rate:20},
   ];
 
-  // ── processFile: single file (PDF or image) ─────────────────────────────
   const processFile = async (file) => {
     setMode("processing"); setError("");
     setProgress("Reading document…");
@@ -6375,7 +6120,6 @@ function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAsse
         throw new Error(`File too large (${(file.size/1024/1024).toFixed(1)}MB). Maximum is 10MB. Try compressing the PDF or splitting it into smaller sections.`);
       }
       const validTypes = ["application/pdf","image/jpeg","image/jpg","image/png","image/webp","image/gif"];
-      // Also check by extension for cases where MIME type is wrong
       const ext = (file.name||"").split(".").pop().toLowerCase();
       const validExts = ["pdf","jpg","jpeg","png","webp","gif"];
       if(!validTypes.includes(file.type) && !validExts.includes(ext)){
@@ -6397,7 +6141,6 @@ function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAsse
     }
   };
 
-  // ── processPages: multiple camera-captured images ────────────────────────
   const processPages = async (pages) => {
     setMode("processing"); setError("");
     setProgress("AI is reading your document…");
@@ -6409,9 +6152,7 @@ function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAsse
     }
   };
 
-  // ── sendToAI: shared extraction logic ────────────────────────────────────
   const sendToAI = async (pages) => {
-    // AI import usage gate
     if(authUser && sub){
       const plan = sub.plan||"individual";
       const check = await checkAndIncrementAiImport(sub, authUser.id, plan);
@@ -6528,15 +6269,12 @@ Return ONLY the JSON array, no other text or markdown.`;
     let txnList = [];
     try {
       const raw = data.reply||"[]";
-      // Strip markdown fences
       let clean = raw.replace(/```json|```/g,"").trim();
-      // Extract JSON array — handles preamble/postamble text from Claude
       const arrStart = clean.indexOf("[");
       const arrEnd   = clean.lastIndexOf("]");
       if(arrStart !== -1 && arrEnd > arrStart){
         clean = clean.slice(arrStart, arrEnd + 1);
       }
-      // If truncated mid-JSON, close at last complete object
       if(clean && !clean.endsWith("]")){
         const lastClose = clean.lastIndexOf("}");
         clean = lastClose !== -1 ? clean.slice(0, lastClose+1)+"]" : "[]";
@@ -6566,7 +6304,6 @@ Return ONLY the JSON array, no other text or markdown.`;
         source: "document",
         compliance_status: "pending",
         confidence: t.confidence||"medium",
-        // Individuals don't charge/collect VAT under NTA 2025 — override any AI vatFlag
         vatFlag: isCompany ? !!t.vatFlag : false,
         whtFlag: !!t.whtFlag,
         taxAllowable: !isNonAllowable,
@@ -6626,7 +6363,6 @@ Return ONLY the JSON array, no other text or markdown.`;
   const expenses_ = incl.filter(t=>t.type==="expense");
   const income_ = incl.filter(t=>t.type==="income");
 
-  // ── EDIT MODE ──
   if(mode==="edit"&&editForm.id) return(
     <div style={{paddingBottom:100}}>
       <Hdr title="Edit Transaction" onBack={()=>setMode("review")} subtitle="Make corrections before importing"/>
@@ -6689,7 +6425,6 @@ Return ONLY the JSON array, no other text or markdown.`;
     </div>
   );
 
-  // ── DONE ──
   if(mode==="done") return(
     <div style={{paddingBottom:100}}>
       <Hdr title="Import Complete" onBack={onBack}/>
@@ -6726,7 +6461,6 @@ Return ONLY the JSON array, no other text or markdown.`;
     </div>
   );
 
-  // ── PROCESSING ──
   if(mode==="processing") return(
     <div style={{paddingBottom:100}}>
       <Hdr title="Analysing Document" onBack={onBack}/>
@@ -6744,7 +6478,6 @@ Return ONLY the JSON array, no other text or markdown.`;
     </div>
   );
 
-  // ── REVIEW MODE ──
   if(mode==="review") return(
     <div style={{paddingBottom:100}}>
       <Hdr title="Review & Edit" onBack={()=>setMode("select")}
@@ -6881,7 +6614,6 @@ Return ONLY the JSON array, no other text or markdown.`;
     </div>
   );
 
-  // ── SELECT MODE ──
   return(
     <div style={{paddingBottom:100}}>
       <Hdr title="Import Document" onBack={onBack} subtitle="AI-powered extraction & classification"/>
@@ -7043,7 +6775,6 @@ Return ONLY the JSON array, no other text or markdown.`;
   );
 }
 
-// ── AUTH SCREEN — Email only ──────────────────────────────────────────────────
 function AuthScreen({onAuth}){
   const [mode, setMode]         = useState("login"); // login | signup | reset
   const [email, setEmail]       = useState("");
@@ -7210,7 +6941,6 @@ function AuthScreen({onAuth}){
     </div>
   );
 }
-
 
 function InstallBanner(){
   const [prompt, setPrompt]       = React.useState(null);

@@ -227,19 +227,28 @@ Provide a redesigned flow in JSON only (no markdown, no preamble):
       const [error, setError] = useState("");
       const app = APPS[activeApp];
 
+      const SUPABASE_URL = "https://rxqhvntlaycobsknmiyn.supabase.co";
+      const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ4cWh2bnRsYXljb2Jza25taXluIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDkzMDYwMjYsImV4cCI6MjA2NDg4MjAyNn0.wDMeF2pVkDESGBNiGRSNqfHKqfXQKWfCsJjVJggCLm0";
+
       async function callClaude(prompt) {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
+        const res = await fetch(SUPABASE_URL + "/functions/v1/taxwise-ai", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+          },
           body: JSON.stringify({
-            model: "claude-sonnet-4-6",
-            max_tokens: 4000,
+            system: "You are a UX auditor. Respond only with valid JSON as instructed.",
             messages: [{ role: "user", content: prompt }],
           }),
         });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || "API error: " + res.status);
+        }
         const data = await res.json();
-        if (data.error) throw new Error(data.error.message);
-        const text = data.content.map(b => b.text || "").join("");
+        // taxwise-ai returns { reply: "..." }
+        const text = typeof data.reply === "string" ? data.reply : JSON.stringify(data);
         const start = text.indexOf("{");
         const end = text.lastIndexOf("}");
         if (start === -1 || end === -1) throw new Error("No JSON in response. Try again.");

@@ -1,0 +1,11 @@
+{
+  "name": "taxwise-nigeria",
+  "version": "1.0.0",
+  "description": "TaxWise Nigeria — AI-powered tax management PWA",
+  "scripts": {
+    "build": "node compile.js"
+  },
+  "dependencies": {
+    "sucrase": "^3.35.0"
+  }
+}

@@ -6032,7 +6032,7 @@ function App(){
                         {v:txnCount,l:"Transactions"},
                         {v:fmt(incomeTracked),l:"Income tracked"},
                         {v:fmt(taxTracked),l:"Tax obligations"},
-                        {v:(assets.length||0)+" assets",l:"Asset register"},
+                        {v:fmt(taxTracked),l:"Tax obligations"},
                       ].map((item,i)=>(
                         <div key={i} style={{background:"rgba(255,255,255,.06)",borderRadius:10,
                           padding:"10px 12px"}}>
@@ -8847,46 +8847,35 @@ function PrePermissionModal({type, onAllow, onDeny}){
 }
 
 function AuthScreen({onAuth}){
-  const [mode, setMode]           = useState("login"); // login | signup | verify | reset
+  const [mode, setMode]           = useState("login");
   const [email, setEmail]         = useState("");
   const [password, setPassword]   = useState("");
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState("");
   const [info, setInfo]           = useState("");
   const [showPass, setShowPass]   = useState(false);
-  const [consentTerms, setConsentTerms]     = useState(false);
+  const [consentTerms, setConsentTerms] = useState(false);
   const [consentMarketing, setConsentMarketing] = useState(false);
   const [showPolicy, setShowPolicy] = useState(null);
-  const [resendCooldown, setResendCooldown] = useState(0); // seconds until resend allowed
+  const [resendSent, setResendSent] = useState(false);
+  const [showVerify, setShowVerify] = useState(false);
+
+  // Password strength
+  const pwLen = password.length;
+  const pwHasNum = /[0-9]/.test(password);
+  const pwHasCap = /[A-Z]/.test(password);
+  const pwScore = (pwLen>=8?1:0)+(pwLen>=12?1:0)+(pwHasNum?1:0)+(pwHasCap?1:0);
+  const pwColors = ["#E2E8F0","#EF4444","#F59E0B","#3B82F6","#059669"];
+  const pwLabels = ["","Weak","Fair","Good","Strong"];
 
   const err = msg => { setError(msg); setLoading(false); };
   const inf = msg => { setInfo(msg); setError(""); setLoading(false); };
-
-  // Password strength: 0-4
-  const pwStrength = (pw) => {
-    if(!pw) return 0;
-    let s = 0;
-    if(pw.length >= 8) s++;
-    if(pw.length >= 12) s++;
-    if(/[A-Z]/.test(pw) && /[a-z]/.test(pw)) s++;
-    if(/[0-9]/.test(pw)) s++;
-    if(/[^A-Za-z0-9]/.test(pw)) s++;
-    return Math.min(4, s);
-  };
-  const strength = pwStrength(password);
-  const strengthLabel = ["","Weak  -  add numbers","Fair  -  add uppercase","Good","Strong"][strength];
-  const strengthColor = ["#E2E8F0","#EF4444","#F59E0B","#3B82F6","#059669"][strength];
-
-  const startResendTimer = () => {
-    setResendCooldown(60);
-    const t = setInterval(()=>setResendCooldown(s=>{ if(s<=1){clearInterval(t);return 0;} return s-1; }), 1000);
-  };
 
   const handleSubmit = async () => {
     setError(""); setLoading(true);
     if(!email.includes("@")) return err("Enter a valid email address");
     if(mode !== "reset" && password.length < 6) return err("Password must be at least 6 characters");
-    if(mode === "signup" && !consentTerms) return err("You must agree to the Terms of Service and Privacy Policy to create an account.");
+    if(mode === "signup" && !consentTerms) return err("Please agree to the Terms of Service and Privacy Policy to continue.");
     try {
       if(mode === "signup"){
         const {data, error:e} = await sb.auth.signUp({email, password});
@@ -8903,8 +8892,8 @@ function AuthScreen({onAuth}){
           await syncPull(data.user.id);
           onAuth(data.user);
         } else {
-          setMode("verify");
-          startResendTimer();
+          setShowVerify(true);
+          setLoading(false);
         }
       } else if(mode === "reset"){
         const {error:e} = await sb.auth.resetPasswordForEmail(email);
@@ -8917,73 +8906,56 @@ function AuthScreen({onAuth}){
         await syncPull(data.user.id);
         onAuth(data.user);
       }
-    } catch(e){ err("Connection error  -  check your internet and try again"); }
+    } catch(e){ err("Connection error - check your internet and try again"); }
     setLoading(false);
   };
 
   const handleResend = async () => {
-    if(resendCooldown > 0) return;
-    setLoading(true);
     const {error:e} = await sb.auth.resend({type:"signup", email});
-    setLoading(false);
-    if(e) setError("Could not resend  -  " + e.message);
-    else { inf("Confirmation email resent to " + email); startResendTimer(); }
+    if(e) setError("Could not resend - " + e.message);
+    else { setResendSent(true); setInfo("Confirmation email resent to " + email); }
   };
 
   const handleKey = e => { if(e.key==="Enter") handleSubmit(); };
 
-  // ── Verify email screen ─────────────────────────────────────────────────────
-  if(mode === "verify") return(
+  if(showVerify) return(
     <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#0B1628 0%,#1E3A5F 100%)",
       display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
       padding:"24px 20px"}}>
       <div style={{width:"100%",maxWidth:400,background:"#fff",borderRadius:22,
         padding:"32px 24px",boxShadow:"0 24px 64px rgba(0,0,0,.35)",textAlign:"center"}}>
-        <div style={{fontSize:52,marginBottom:14}}>📧</div>
-        <div style={{fontSize:20,fontWeight:800,color:"#0B1628",marginBottom:8}}>
-          Check your email
-        </div>
-        <div style={{fontSize:13,color:"#64748B",lineHeight:1.7,marginBottom:20}}>
-          We sent a confirmation link to<br/>
-          <strong style={{color:"#0B1628"}}>{email}</strong>
+        <div style={{fontSize:52,marginBottom:14}}>{"📧"}</div>
+        <div style={{fontSize:20,fontWeight:800,color:"#0B1628",marginBottom:8}}>Check your email</div>
+        <div style={{fontSize:13,color:"#64748B",lineHeight:1.7,marginBottom:16}}>
+          We sent a confirmation link to <strong style={{color:"#0B1628"}}>{email}</strong>
         </div>
         <div style={{fontSize:12,color:"#94A3B8",marginBottom:20,lineHeight:1.6}}>
-          On slow networks, this can take 2–5 minutes.
-          Check your spam/junk folder if it does not arrive.
+          On slow networks, this can take 2-5 minutes. Check your spam/junk folder if it does not arrive.
         </div>
-
-        {/* Inbox deep-link shortcuts */}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:20}}>
-          {[
-            {label:"Open Gmail", url:"https://mail.google.com", icon:"✉️"},
-            {label:"Open Yahoo Mail", url:"https://mail.yahoo.com", icon:"📬"},
-          ].map((m,i)=>(
-            <a key={i} href={m.url} target="_blank" rel="noopener noreferrer"
-              style={{padding:"10px",background:"#F1F5F9",border:"1px solid #E2E8F0",
-                borderRadius:10,textDecoration:"none",fontSize:12,fontWeight:600,
-                color:"#334155",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-              <span style={{fontSize:20}}>{m.icon}</span>
-              {m.label}
-            </a>
-          ))}
+          <a href="https://mail.google.com" target="_blank" rel="noopener noreferrer"
+            style={{padding:"10px",background:"#F1F5F9",border:"1px solid #E2E8F0",
+              borderRadius:10,textDecoration:"none",fontSize:12,fontWeight:600,
+              color:"#334155",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+            <span style={{fontSize:20}}>{"✉️"}</span>Open Gmail
+          </a>
+          <a href="https://mail.yahoo.com" target="_blank" rel="noopener noreferrer"
+            style={{padding:"10px",background:"#F1F5F9",border:"1px solid #E2E8F0",
+              borderRadius:10,textDecoration:"none",fontSize:12,fontWeight:600,
+              color:"#334155",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+            <span style={{fontSize:20}}>{"📬"}</span>Open Yahoo
+          </a>
         </div>
-
-        {/* Resend with cooldown */}
-        <button onClick={handleResend}
-          disabled={resendCooldown > 0 || loading}
-          style={{width:"100%",padding:"12px",marginBottom:10,
-            background:resendCooldown>0?"#F1F5F9":"#0B1628",
-            border:"none",borderRadius:12,
-            color:resendCooldown>0?"#94A3B8":"#fff",
-            fontSize:13,fontWeight:700,cursor:resendCooldown>0?"not-allowed":"pointer",
-            fontFamily:"inherit"}}>
-          {loading?"Resending...":resendCooldown>0?"Resend available in "+resendCooldown+"s":"Resend Confirmation Email"}
-        </button>
-
         {error&&<div style={{fontSize:12,color:"#DC2626",marginBottom:8}}>{error}</div>}
         {info&&<div style={{fontSize:12,color:"#059669",marginBottom:8}}>{info}</div>}
-
-        <button onClick={()=>setMode("login")}
+        <button onClick={handleResend} disabled={resendSent}
+          style={{width:"100%",padding:"12px",marginBottom:10,
+            background:resendSent?"#F1F5F9":"#0B1628",border:"none",borderRadius:12,
+            color:resendSent?"#94A3B8":"#fff",fontSize:13,fontWeight:700,
+            cursor:resendSent?"not-allowed":"pointer",fontFamily:"inherit"}}>
+          {resendSent?"Confirmation email resent":"Resend Confirmation Email"}
+        </button>
+        <button onClick={()=>{setShowVerify(false);setMode("login");}}
           style={{background:"none",border:"none",fontSize:12,color:"#94A3B8",
             cursor:"pointer",fontFamily:"inherit"}}>
           Back to Sign In
@@ -8997,178 +8969,150 @@ function AuthScreen({onAuth}){
       display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
       padding:"24px 20px"}}>
 
-      {/* Logo */}
       <div style={{textAlign:"center",marginBottom:24}}>
         <div style={{width:72,height:72,borderRadius:20,background:"rgba(255,255,255,.1)",
           border:"1.5px solid rgba(255,255,255,.15)",display:"flex",alignItems:"center",
           justifyContent:"center",fontSize:36,fontWeight:800,color:"#4ADE80",
-          margin:"0 auto 12px",boxShadow:"0 8px 32px rgba(0,0,0,.3)"}}>&#8358;</div>
+          margin:"0 auto 12px",boxShadow:"0 8px 32px rgba(0,0,0,.3)"}}>{"₦"}</div>
         <div style={{fontSize:24,fontWeight:800,color:"#fff",letterSpacing:"-.02em"}}>TaxWise Nigeria</div>
-        <div style={{fontSize:11,color:"rgba(255,255,255,.45)",marginTop:4}}>NTA 2025 · Smart Tax Management</div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,.45)",marginTop:4}}>NTA 2025 Smart Tax Management</div>
       </div>
 
-      {/* Trust anchors  -  shown on signup */}
+      {/* Trust badges - signup only */}
       {mode==="signup"&&(
-        <div style={{width:"100%",maxWidth:400,marginBottom:14}}>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center"}}>
-            {[
-              "🔒 No BVN or NIN required",
-              "🛡 Data encrypted at rest",
-              "🚫 We are not FIRS",
-              "✦ 14-day free trial",
-            ].map((t,i)=>(
-              <div key={i} style={{padding:"4px 10px",background:"rgba(255,255,255,.1)",
-                border:"1px solid rgba(255,255,255,.15)",borderRadius:100,
-                fontSize:10,fontWeight:600,color:"rgba(255,255,255,.8)"}}>
-                {t}
-              </div>
-            ))}
-          </div>
+        <div style={{width:"100%",maxWidth:400,marginBottom:14,display:"flex",
+          gap:6,flexWrap:"wrap",justifyContent:"center"}}>
+          {["🔒 No BVN or NIN required","🛡 Data encrypted","🚫 We are not FIRS","✦ 14-day free trial"].map((t,i)=>(
+            <div key={i} style={{padding:"4px 10px",background:"rgba(255,255,255,.1)",
+              border:"1px solid rgba(255,255,255,.15)",borderRadius:100,
+              fontSize:10,fontWeight:600,color:"rgba(255,255,255,.8)"}}>
+              {t}
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Card */}
       <div style={{width:"100%",maxWidth:400,background:"#fff",borderRadius:22,
         padding:"24px 20px",boxShadow:"0 24px 64px rgba(0,0,0,.35)"}}>
 
         <div style={{fontSize:19,fontWeight:800,color:"#0F172A",marginBottom:3}}>
           {mode==="signup"?"Create your account":mode==="reset"?"Reset password":"Welcome back"}
         </div>
-        <div style={{fontSize:12,color:"#64748B",marginBottom:18,lineHeight:1.5}}>
+        <div style={{fontSize:12,color:"#64748B",marginBottom:16,lineHeight:1.5}}>
           {mode==="signup"
-            ?"Your tax data syncs securely to the cloud. We help you file  -  we are not FIRS."
+            ?"Your tax data syncs securely. We help you file - we are not FIRS."
             :mode==="reset"?"We will send a reset link to your email"
             :"Sign in to access your tax records"}
         </div>
 
-        {/* Nigeria context callout on signup */}
         {mode==="signup"&&(
           <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:10,
-            padding:"10px 12px",marginBottom:14,fontSize:11,color:"#166534",lineHeight:1.6}}>
-            <strong>TaxWise is a tax preparation tool, not a government portal.</strong>
-            {" "}We help you understand and prepare for your obligations under NTA 2025.
-            We do not report to FIRS or share your data with any government agency.
+            padding:"10px 12px",marginBottom:12,fontSize:11,color:"#166534",lineHeight:1.6}}>
+            <strong>TaxWise is a preparation tool, not a government portal.</strong>
+            {" "}We do not report to FIRS or share your data with any government agency.
           </div>
         )}
 
-        {/* Email field */}
         <div style={{marginBottom:12}}>
           <label style={{display:"block",fontSize:11,fontWeight:700,color:"#475569",
             letterSpacing:".06em",marginBottom:5}}>EMAIL ADDRESS</label>
           <input className="inp" type="email" placeholder="you@example.com"
             value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={handleKey}
-            aria-label="Email address"
             style={{fontSize:15}}/>
           {mode==="signup"&&(
-            <div style={{fontSize:10,color:"#94A3B8",marginTop:4}}>
-              No BVN, NIN, or phone number required
-            </div>
+            <div style={{fontSize:10,color:"#94A3B8",marginTop:4}}>No BVN, NIN, or phone number required</div>
           )}
         </div>
 
-        {/* Password field with strength meter */}
         {mode!=="reset"&&(
-          <div style={{marginBottom:16}}>
+          <div style={{marginBottom:14}}>
             <label style={{display:"block",fontSize:11,fontWeight:700,color:"#475569",
               letterSpacing:".06em",marginBottom:5}}>PASSWORD</label>
             <div style={{position:"relative"}}>
               <input className="inp" type={showPass?"text":"password"}
-                placeholder={mode==="signup"?"Minimum 6 characters  -  stronger is better":"Enter your password"}
+                placeholder={mode==="signup"?"Minimum 6 characters":"Enter your password"}
                 value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKey}
-                aria-label="Password"
                 style={{fontSize:15,paddingRight:44}}/>
-              <button onClick={()=>setShowPass(s=>!s)} aria-label={showPass?"Hide password":"Show password"}
+              <button onClick={()=>setShowPass(s=>!s)}
                 style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",
                   background:"none",border:"none",cursor:"pointer",fontSize:16,color:"#94A3B8"}}>
                 {showPass?"🙈":"👁"}
               </button>
             </div>
-            {/* Password strength bar  -  signup only */}
             {mode==="signup"&&password.length>0&&(
               <div style={{marginTop:6}}>
                 <div style={{display:"flex",gap:3,marginBottom:3}}>
                   {[1,2,3,4].map(i=>(
                     <div key={i} style={{flex:1,height:3,borderRadius:2,
-                      background:strength>=i?strengthColor:"#E2E8F0",
-                      transition:"background .2s"}}/>
+                      background:pwScore>=i?pwColors[pwScore]:"#E2E8F0"}}/>
                   ))}
                 </div>
-                <div style={{fontSize:10,color:strengthColor,fontWeight:600}}>
-                  {strengthLabel}
+                <div style={{fontSize:10,color:pwColors[pwScore],fontWeight:600}}>
+                  {pwLabels[pwScore]}
                 </div>
-              </div>
-            )}
-            {mode==="signup"&&(
-              <div style={{fontSize:10,color:"#94A3B8",marginTop:4,lineHeight:1.5}}>
-                Tip: Use a mix of letters, numbers and symbols. E.g. Tax@2025!
               </div>
             )}
           </div>
         )}
 
-        {/* Trial callout  -  signup only */}
         {mode==="signup"&&(
           <div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:10,
-            padding:"10px 12px",marginBottom:14,
-            display:"flex",alignItems:"center",gap:10}}>
-            <div style={{fontSize:24,flexShrink:0}}>🎁</div>
+            padding:"10px 12px",marginBottom:12,display:"flex",gap:10,alignItems:"center"}}>
+            <div style={{fontSize:22,flexShrink:0}}>{"🎁"}</div>
             <div>
               <div style={{fontSize:12,fontWeight:700,color:"#92400E"}}>14-day free trial included</div>
               <div style={{fontSize:11,color:"#78350F",lineHeight:1.4}}>
-                Full access, no credit card required. From ₦2,500/month after trial.
+                Full access, no credit card required. From N2,500/month after trial.
               </div>
             </div>
           </div>
         )}
 
-        {/* TIN prompt  -  signup only, non-blocking */}
         {mode==="signup"&&(
           <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,
-            padding:"10px 12px",marginBottom:14,fontSize:11,color:"#1E40AF",lineHeight:1.6}}>
-            <strong>NTA 2025 requires a TIN</strong> for tax filing. You can add yours
-            after signup in your Profile  -  you do not need it now to create an account.
-            Get yours free at <strong>jtb.gov.ng</strong> if you do not have one.
+            padding:"10px 12px",marginBottom:12,fontSize:11,color:"#1E40AF",lineHeight:1.6}}>
+            <strong>NTA 2025 requires a TIN for tax filing.</strong>
+            {" "}You can add yours after signup in Profile. Get yours free at jtb.gov.ng.
           </div>
         )}
 
-        {/* Consent checkboxes  -  signup only */}
         {mode==="signup"&&(
-          <div style={{marginBottom:16}}>
+          <div style={{marginBottom:14}}>
             <div onClick={()=>setConsentTerms(v=>!v)}
-              style={{display:"flex",gap:10,alignItems:"flex-start",
-                padding:"10px 12px",border:`1.5px solid ${consentTerms?"#059669":"#E2E8F0"}`,
+              style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 12px",
+                border:"1.5px solid "+(consentTerms?"#059669":"#E2E8F0"),
                 borderRadius:10,cursor:"pointer",marginBottom:8,
                 background:consentTerms?"#F0FDF4":"#fff"}}>
-              <div style={{width:18,height:18,borderRadius:4,
-                border:`2px solid ${consentTerms?"#059669":"#CBD5E1"}`,
-                background:consentTerms?"#059669":"#fff",flexShrink:0,marginTop:1,
+              <div style={{width:18,height:18,borderRadius:4,flexShrink:0,marginTop:1,
+                border:"2px solid "+(consentTerms?"#059669":"#CBD5E1"),
+                background:consentTerms?"#059669":"#fff",
                 display:"flex",alignItems:"center",justifyContent:"center"}}>
-                {consentTerms&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+                {consentTerms&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>{"✓"}</span>}
               </div>
               <div style={{fontSize:12,color:"#334155",lineHeight:1.5}}>
-                I agree to the{" "}
+                {"I agree to the "}
                 <span onClick={e=>{e.stopPropagation();setShowPolicy("terms");}}
                   style={{color:"#1D4ED8",fontWeight:600,cursor:"pointer",textDecoration:"underline"}}>
                   Terms of Service
                 </span>
-                {" "}and{" "}
+                {" and "}
                 <span onClick={e=>{e.stopPropagation();setShowPolicy("privacy");}}
                   style={{color:"#1D4ED8",fontWeight:600,cursor:"pointer",textDecoration:"underline"}}>
                   Privacy Policy
                 </span>
-                <span style={{color:"#DC2626"}}> *</span>
+                <span style={{color:"#DC2626"}}>{" *"}</span>
               </div>
             </div>
             <div onClick={()=>setConsentMarketing(v=>!v)}
-              style={{display:"flex",gap:10,alignItems:"flex-start",
-                padding:"10px 12px",border:`1.5px solid ${consentMarketing?"#1D4ED8":"#E2E8F0"}`,
+              style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 12px",
+                border:"1.5px solid "+(consentMarketing?"#1D4ED8":"#E2E8F0"),
                 borderRadius:10,cursor:"pointer",
                 background:consentMarketing?"#EFF6FF":"#fff"}}>
-              <div style={{width:18,height:18,borderRadius:4,
-                border:`2px solid ${consentMarketing?"#1D4ED8":"#CBD5E1"}`,
-                background:consentMarketing?"#1D4ED8":"#fff",flexShrink:0,marginTop:1,
+              <div style={{width:18,height:18,borderRadius:4,flexShrink:0,marginTop:1,
+                border:"2px solid "+(consentMarketing?"#1D4ED8":"#CBD5E1"),
+                background:consentMarketing?"#1D4ED8":"#fff",
                 display:"flex",alignItems:"center",justifyContent:"center"}}>
-                {consentMarketing&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+                {consentMarketing&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>{"✓"}</span>}
               </div>
               <div style={{fontSize:12,color:"#334155",lineHeight:1.5}}>
                 Send me tax tips and product updates by email (optional)
@@ -9177,41 +9121,33 @@ function AuthScreen({onAuth}){
           </div>
         )}
 
-        {/* Error / info */}
         {error&&(
-          <div role="alert" style={{background:"#FEF2F2",border:"1px solid rgba(220,38,38,.2)",
-            borderRadius:10,padding:"10px 12px",fontSize:12,color:"#DC2626",
-            marginBottom:14,lineHeight:1.5}}>
-            &#9888; {error}
+          <div style={{background:"#FEF2F2",border:"1px solid rgba(220,38,38,.2)",borderRadius:10,
+            padding:"10px 12px",fontSize:12,color:"#DC2626",marginBottom:12,lineHeight:1.5}}>
+            {"⚠ "}{error}
           </div>
         )}
         {info&&(
-          <div style={{background:"#F0FDF4",border:"1px solid rgba(5,150,105,.2)",
-            borderRadius:10,padding:"10px 12px",fontSize:12,color:"#059669",
-            marginBottom:14,lineHeight:1.5}}>
+          <div style={{background:"#F0FDF4",border:"1px solid rgba(5,150,105,.2)",borderRadius:10,
+            padding:"10px 12px",fontSize:12,color:"#059669",marginBottom:12,lineHeight:1.5}}>
             {info}
           </div>
         )}
 
-        {/* Primary CTA */}
         <button onClick={handleSubmit}
           disabled={loading||(mode==="signup"&&!consentTerms)}
-          aria-label={mode==="signup"?"Create account":mode==="reset"?"Send reset link":"Sign in"}
           style={{width:"100%",padding:"14px",
             background:(loading||(mode==="signup"&&!consentTerms))?"#94A3B8":mode==="signup"?"#059669":"#1D4ED8",
             border:"none",borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,
             cursor:(loading||(mode==="signup"&&!consentTerms))?"not-allowed":"pointer",
-            fontFamily:"inherit",marginBottom:16,
-            boxShadow:"0 4px 12px rgba(0,0,0,.15)"}}>
+            fontFamily:"inherit",marginBottom:14,boxShadow:"0 4px 12px rgba(0,0,0,.15)"}}>
           {loading?"Please wait...":
-           mode==="signup"?"Create Account  -  Start Free Trial":
-           mode==="reset"?"Send Reset Link":
-           "Sign In"}
+           mode==="signup"?"Create Account - Start Free Trial":
+           mode==="reset"?"Send Reset Link":"Sign In"}
         </button>
 
-        {/* Forgot password */}
         {mode==="login"&&(
-          <div style={{textAlign:"center",marginBottom:12}}>
+          <div style={{textAlign:"center",marginBottom:10}}>
             <button onClick={()=>{setMode("reset");setError("");}}
               style={{background:"none",border:"none",fontSize:12,color:"#94A3B8",
                 cursor:"pointer",fontFamily:"inherit",textDecoration:"underline"}}>
@@ -9220,40 +9156,32 @@ function AuthScreen({onAuth}){
           </div>
         )}
 
-        {/* Toggle signup/login */}
         <div style={{textAlign:"center",fontSize:12,color:"#94A3B8"}}>
           {mode==="signup"?(
-            <>Already have an account?{" "}
+            <span>{"Already have an account? "}
               <button onClick={()=>{setMode("login");setError("");setConsentTerms(false);}}
                 style={{background:"none",border:"none",color:"#1D4ED8",fontWeight:700,
-                  cursor:"pointer",fontFamily:"inherit",fontSize:12}}>
-                Sign In
-              </button>
-            </>
+                  cursor:"pointer",fontFamily:"inherit",fontSize:12}}>Sign In</button>
+            </span>
           ):(
-            <>New to TaxWise?{" "}
+            <span>{"New to TaxWise? "}
               <button onClick={()=>{setMode("signup");setError("");}}
                 style={{background:"none",border:"none",color:"#059669",fontWeight:700,
-                  cursor:"pointer",fontFamily:"inherit",fontSize:12}}>
-                Create Free Account
-              </button>
-            </>
+                  cursor:"pointer",fontFamily:"inherit",fontSize:12}}>Create Free Account</button>
+            </span>
           )}
         </div>
 
-        {/* Data security footer */}
-        <div style={{marginTop:16,paddingTop:14,borderTop:"1px solid #F1F5F9",
-          display:"flex",gap:6,alignItems:"center",justifyContent:"center",flexWrap:"wrap"}}>
+        <div style={{marginTop:14,paddingTop:12,borderTop:"1px solid #F1F5F9",
+          display:"flex",gap:8,alignItems:"center",justifyContent:"center"}}>
           {["🔒 Encrypted","🛡 RLS secured","🚫 Not FIRS"].map((t,i)=>(
             <div key={i} style={{fontSize:9,color:"#CBD5E1",fontWeight:600}}>{t}</div>
           ))}
         </div>
       </div>
 
-      {/* Policy footnote */}
-      <div style={{marginTop:16,fontSize:10,color:"rgba(255,255,255,.25)",
-        textAlign:"center",lineHeight:1.6,maxWidth:360}}>
-        Lexi Gravitas Forensic Services · TaxWise Nigeria ·{" "}
+      <div style={{marginTop:14,fontSize:10,color:"rgba(255,255,255,.25)",textAlign:"center",lineHeight:1.6}}>
+        {"Lexi Gravitas Forensic Services · TaxWise Nigeria · "}
         <span onClick={()=>setShowPolicy("privacy")}
           style={{cursor:"pointer",textDecoration:"underline",color:"rgba(255,255,255,.35)"}}>
           Privacy Policy
@@ -9265,7 +9193,6 @@ function AuthScreen({onAuth}){
         </span>
       </div>
 
-      {/* In-app policy viewer modal */}
       {showPolicy&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:999,
           display:"flex",flexDirection:"column"}}
@@ -9274,14 +9201,14 @@ function AuthScreen({onAuth}){
             overflow:"hidden",display:"flex",flexDirection:"column"}}
             onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-              padding:"14px 16px",borderBottom:"1px solid #E2E8F0",background:"#fff"}}>
+              padding:"14px 16px",borderBottom:"1px solid #E2E8F0"}}>
               <div style={{fontSize:15,fontWeight:700,color:"#0B1628"}}>
                 {showPolicy==="privacy"?"Privacy Policy":"Terms of Service"}
               </div>
               <button onClick={()=>setShowPolicy(null)}
-                aria-label="Close"
-                style={{background:"none",border:"none",fontSize:22,color:"#94A3B8",
-                  cursor:"pointer",padding:"0 4px"}}>✕</button>
+                style={{background:"none",border:"none",fontSize:22,color:"#94A3B8",cursor:"pointer"}}>
+                {"✕"}
+              </button>
             </div>
             <iframe
               src={showPolicy==="privacy"
@@ -9296,6 +9223,7 @@ function AuthScreen({onAuth}){
     </div>
   );
 }
+
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <><App/><InstallBanner/></>

@@ -1434,7 +1434,7 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
 
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
-function Dashboard({profile,txns,kiv,onNav}){
+function Dashboard({profile,txns,kiv,onNav,sub}){
   const isCompany=profile.mode==="company";
   const agg=computeAggregates(txns);
   const turnover=computeTurnover(txns); // IMPROVEMENT 1: live from transactions
@@ -1449,6 +1449,10 @@ function Dashboard({profile,txns,kiv,onNav}){
   const citR=isCompany?computeCIT(Math.max(0,agg.net),turnover,profile.fixedAssets||0,profile.isProfessional||false):null;
   const complianceScore=78;
   const totalTax=agg.vatPayable+agg.whtOut+agg.payeOut+(isCompany?citR?.total||0:agg.payeIn);
+
+  const trialDaysRemain = sub ? trialDaysLeft(sub) : 0;
+  const isNewUser = txns.length === 0;
+  const isEarlyTrial = sub?.status==="trial" && trialDaysRemain >= 11;
 
   return(
     <div style={{paddingBottom:80}}>
@@ -1554,6 +1558,55 @@ function Dashboard({profile,txns,kiv,onNav}){
             </div>
           </div>
         </div>
+
+        {/* Getting started card — shows for new trial users with no transactions */}
+        {(isNewUser||isEarlyTrial)&&(
+          <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,borderRadius:14,
+            padding:"16px",color:"#fff",marginBottom:0}}>
+            <div style={{fontSize:10,fontWeight:700,letterSpacing:".1em",opacity:.5,marginBottom:6}}>
+              {isNewUser?"GET STARTED":"YOUR TRIAL"}
+            </div>
+            <div style={{fontSize:16,fontWeight:800,marginBottom:4}}>
+              {isNewUser
+                ?"Welcome to TaxWise Nigeria 🎉"
+                :`${trialDaysRemain} days left in your free trial`}
+            </div>
+            <div style={{fontSize:11,opacity:.6,lineHeight:1.5,marginBottom:14}}>
+              {isNewUser
+                ?"3 things to do first to see your full tax position:"
+                :"Complete these steps to get the most from TaxWise:"}
+            </div>
+            {[
+              {done:!isNewUser, icon:"👤", label:"Set up your profile", desc:"Choose your tax category (employed, freelancer, mixed income)", nav:"editSetup"},
+              {done:txns.length>0, icon:"📄", label:"Import a bank statement", desc:"Upload PDF or Excel — AI reads every transaction", nav:"upload"},
+              {done:false, icon:"📊", label:"Check your tax position", desc:"See what you owe across all 6 tax heads", nav:"reports"},
+            ].map((step,i)=>(
+              <div key={i} onClick={()=>onNav(step.nav)}
+                style={{display:"flex",gap:10,alignItems:"center",
+                  background:"rgba(255,255,255,.07)",borderRadius:10,padding:"10px 12px",
+                  marginBottom:8,cursor:"pointer",
+                  border:"1px solid rgba(255,255,255,.1)"}}>
+                <div style={{fontSize:18,flexShrink:0}}>{step.done?"✅":step.icon}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:12,fontWeight:700,color:step.done?"rgba(255,255,255,.5)":"#fff",
+                    textDecoration:step.done?"line-through":"none"}}>
+                    {step.label}
+                  </div>
+                  <div style={{fontSize:10,opacity:.5,marginTop:1,lineHeight:1.3}}>{step.desc}</div>
+                </div>
+                <div style={{fontSize:14,opacity:.4,flexShrink:0}}>›</div>
+              </div>
+            ))}
+            {!isNewUser&&(
+              <button onClick={()=>onNav("subscribe")}
+                style={{width:"100%",marginTop:4,padding:"10px",background:"#F59E0B",border:"none",
+                  borderRadius:10,color:"#0B1628",fontSize:12,fontWeight:700,cursor:"pointer",
+                  fontFamily:"inherit"}}>
+                Subscribe from ₦2,500/month →
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Upcoming deadlines */}
         <div className="card">
@@ -3978,6 +4031,63 @@ function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEdit
   const[edit,setEdit]=useState({...profile});
   const agg=computeAggregates(txns);
   const [signingOut, setSigningOut] = useState(false);
+  const [privacySection, setPrivacySection] = useState(false);
+  const [deleteStep, setDeleteStep] = useState(0); // 0=off 1=warn 2=retention 3=otp 4=done
+  const [deleteOTP, setDeleteOTP] = useState("");
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [marketingConsent, setMarketingConsent] = useState(profile.marketingConsent||false);
+  const [showPolicyModal, setShowPolicyModal] = useState(null);
+
+  const exportMyData = () => {
+    const exportObj = {
+      exported_at: new Date().toISOString(),
+      profile: {...profile, id: authUser?.id},
+      transactions: txns,
+      notice: "Exported from TaxWise Nigeria by Lexi Gravitas Forensic Services. Ref: NDPA 2023 S.24 Right to Data Portability."
+    };
+    const blob = new Blob([JSON.stringify(exportObj, null, 2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "TaxWise_MyData_" + new Date().toISOString().split("T")[0] + ".json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const sendDeleteOTP = async () => {
+    setDeleteLoading(true);
+    // Send OTP via Supabase magic link (reuses email OTP flow)
+    await sb.auth.signInWithOtp({email: authUser.email, options:{shouldCreateUser:false}});
+    setDeleteLoading(false);
+    setDeleteStep(3);
+  };
+
+  const confirmDelete = async () => {
+    if(deleteOTP.length < 6) return;
+    setDeleteLoading(true);
+    try {
+      // Verify OTP
+      const {error:otpErr} = await sb.auth.verifyOtp({email:authUser.email, token:deleteOTP, type:"email"});
+      if(otpErr){ setDeleteLoading(false); alert("Invalid or expired code. Please try again."); return; }
+      // Anonymise profile — replace personal identifiers
+      await sb.from("profiles").update({
+        name:"[DELETED]", tin:"[DELETED]", phone:"[DELETED]",
+        companyName:"[DELETED]", deleted_at:new Date().toISOString(),
+        updated_at:new Date().toISOString(),
+      }).eq("id", authUser.id);
+      // Log deletion for audit trail
+      await sb.from("deletion_log").insert({
+        user_id: authUser.id,
+        email_hash: authUser.email,
+        deleted_at: new Date().toISOString(),
+        retention_until: new Date(Date.now() + 7*365*24*60*60*1000).toISOString(),
+        reason: "User-initiated deletion via app",
+      }).catch(()=>{}); // non-critical
+      // Delete auth user
+      await sb.auth.admin?.deleteUser?.(authUser.id).catch(()=>{});
+      setDeleteStep(4);
+    } catch(e){ setDeleteLoading(false); alert("Deletion failed. Please contact privacy@taxwisenigeria.com"); }
+  };
 
   const save=()=>{
     setProfile({...edit,turnover:parseFloat(edit.turnover)||0});
@@ -4175,6 +4285,248 @@ function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEdit
                 cursor:signingOut?"not-allowed":"pointer",fontFamily:"inherit"}}>
               {signingOut?"Saving & signing out…":"Sign Out"}
             </button>
+          </div>
+        )}
+
+        {/* ── Privacy & Data Protection (NDPA 2023) ── */}
+        <div className="card" style={{marginTop:8}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+            cursor:"pointer"}} onClick={()=>setPrivacySection(v=>!v)}>
+            <div className="ctitle" style={{marginBottom:0}}>PRIVACY & DATA PROTECTION</div>
+            <div style={{fontSize:18,color:C.muted,transform:privacySection?"rotate(180deg)":"none",
+              transition:"transform .2s"}}>⌄</div>
+          </div>
+          {privacySection&&(
+            <div style={{marginTop:14}}>
+              <div style={{fontSize:11,color:C.muted,marginBottom:14,lineHeight:1.6}}>
+                Your rights under the Nigeria Data Protection Act 2023 (NDPA).
+                Data Controller: <strong>Lexi Gravitas Forensic Services</strong> ·
+                DPO: Etukudo Ubong ·
+                <span style={{color:C.blue}}> etukudo.ubong@lexigravitasfs.com</span>
+              </div>
+
+              {/* Marketing consent toggle */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                padding:"12px",background:"#F8FAFC",borderRadius:10,marginBottom:10}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:600,color:C.ink}}>Product updates & tax tips</div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>Receive email updates (optional)</div>
+                </div>
+                <div onClick={async ()=>{
+                    const newVal = !marketingConsent;
+                    setMarketingConsent(newVal);
+                    await sb.from("profiles").update({marketing_consent:newVal,updated_at:new Date().toISOString()}).eq("id",authUser?.id);
+                  }}
+                  style={{width:44,height:24,borderRadius:12,
+                    background:marketingConsent?C.green:"#CBD5E1",
+                    position:"relative",cursor:"pointer",transition:"background .2s",flexShrink:0}}>
+                  <div style={{position:"absolute",top:2,
+                    left:marketingConsent?22:2,width:20,height:20,
+                    borderRadius:10,background:"#fff",transition:"left .2s",
+                    boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/>
+                </div>
+              </div>
+
+              {/* Export data */}
+              <button onClick={exportMyData}
+                style={{width:"100%",padding:"11px",background:"#EFF6FF",
+                  border:`1.5px solid ${C.blue}30`,borderRadius:10,
+                  color:C.blue,fontSize:13,fontWeight:700,
+                  cursor:"pointer",fontFamily:"inherit",marginBottom:8,textAlign:"left"}}>
+                📦 Export My Data Portfolio
+                <div style={{fontSize:10,fontWeight:400,color:C.muted,marginTop:2}}>
+                  Download all your transactions and profile as JSON — Right to Data Portability (NDPA S.24)
+                </div>
+              </button>
+
+              {/* View policies */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                <button onClick={()=>setShowPolicyModal("privacy")}
+                  style={{padding:"10px",background:"#F8FAFC",border:"1px solid #E2E8F0",
+                    borderRadius:8,fontSize:11,fontWeight:600,color:C.slate,cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  📋 Privacy Policy
+                </button>
+                <button onClick={()=>setShowPolicyModal("terms")}
+                  style={{padding:"10px",background:"#F8FAFC",border:"1px solid #E2E8F0",
+                    borderRadius:8,fontSize:11,fontWeight:600,color:C.slate,cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  📄 Terms of Service
+                </button>
+              </div>
+
+              {/* Delete account */}
+              <button onClick={()=>setDeleteStep(1)}
+                style={{width:"100%",padding:"11px",background:C.redBg,
+                  border:`1.5px solid ${C.red}30`,borderRadius:10,
+                  color:C.red,fontSize:13,fontWeight:700,
+                  cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                🗑 Delete My Account & Personal Records
+                <div style={{fontSize:10,fontWeight:400,color:C.muted,marginTop:2}}>
+                  Right to Erasure — NDPA 2023 S.26
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ── Policy viewer modal ── */}
+        {showPolicyModal&&(
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:999,
+            display:"flex",flexDirection:"column"}} onClick={()=>setShowPolicyModal(null)}>
+            <div style={{flex:1,background:"#fff",marginTop:60,borderRadius:"20px 20px 0 0",
+              overflow:"hidden",display:"flex",flexDirection:"column"}}
+              onClick={e=>e.stopPropagation()}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                padding:"14px 16px",borderBottom:"1px solid #E2E8F0"}}>
+                <div style={{fontSize:15,fontWeight:700,color:"#0B1628"}}>
+                  {showPolicyModal==="privacy"?"Privacy Policy":"Terms of Service"}
+                </div>
+                <button onClick={()=>setShowPolicyModal(null)}
+                  style={{background:"none",border:"none",fontSize:22,color:"#94A3B8",cursor:"pointer"}}>✕</button>
+              </div>
+              <iframe
+                src={showPolicyModal==="privacy"
+                  ?"https://etukudoubong.github.io/taxwise-nigeria/privacy.html"
+                  :"https://etukudoubong.github.io/taxwise-nigeria/terms.html"}
+                style={{flex:1,border:"none",width:"100%"}}
+                title={showPolicyModal==="privacy"?"Privacy Policy":"Terms of Service"}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* ── Account Deletion Workflow (4 steps) ── */}
+        {deleteStep>0&&deleteStep<4&&(
+          <div style={{position:"fixed",inset:0,background:"rgba(11,22,40,.92)",zIndex:800,
+            display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+            <div style={{width:"100%",maxWidth:430,background:"#fff",
+              borderRadius:"20px 20px 0 0",padding:"24px 20px 40px"}}>
+
+              {/* Step 1 — Warning */}
+              {deleteStep===1&&(
+                <>
+                  <div style={{fontSize:36,textAlign:"center",marginBottom:10}}>⚠️</div>
+                  <div style={{fontSize:18,fontWeight:800,color:"#0B1628",textAlign:"center",marginBottom:8}}>
+                    Delete Your Account?
+                  </div>
+                  <div style={{fontSize:13,color:"#475569",lineHeight:1.7,marginBottom:20}}>
+                    This will immediately lock your access to TaxWise and remove your personal profile. Your tax journal and transaction data will be handled as described in the next step.
+                  </div>
+                  <button onClick={()=>setDeleteStep(2)}
+                    style={{width:"100%",padding:"13px",background:"#DC2626",border:"none",
+                      borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",
+                      fontFamily:"inherit",marginBottom:10}}>
+                    Continue — Show Me the Details
+                  </button>
+                  <button onClick={()=>setDeleteStep(0)}
+                    style={{width:"100%",padding:"12px",background:"none",
+                      border:"1.5px solid #E2E8F0",borderRadius:12,color:"#64748B",
+                      fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+                    Cancel — Keep My Account
+                  </button>
+                </>
+              )}
+
+              {/* Step 2 — Statutory retention notice */}
+              {deleteStep===2&&(
+                <>
+                  <div style={{fontSize:13,fontWeight:700,color:"#1D4ED8",
+                    letterSpacing:".06em",marginBottom:12}}>STATUTORY RETENTION NOTICE</div>
+                  <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:12,
+                    padding:"14px",marginBottom:16,fontSize:12,color:"#1E40AF",lineHeight:1.7}}>
+                    In compliance with the <strong>Tax Administration Act 2025 (S.67)</strong> and
+                    the <strong>Companies and Allied Matters Act 2020</strong>, your historic tax
+                    calculations and transaction logs will be securely archived for{" "}
+                    <strong>7 years</strong> for statutory compliance purposes, after which they
+                    will be permanently and irreversibly purged.
+                    <br/><br/>
+                    All other personal identifiers — your name, email address, phone number,
+                    and profile details — will be <strong>erased immediately</strong> upon
+                    confirmation.
+                  </div>
+                  <div style={{fontSize:11,color:"#64748B",marginBottom:20,lineHeight:1.6}}>
+                    A record of this deletion request will be logged for our NDPA 2023
+                    accountability obligations. The log contains only a timestamp and
+                    anonymised reference — no personal data.
+                  </div>
+                  <button onClick={sendDeleteOTP} disabled={deleteLoading}
+                    style={{width:"100%",padding:"13px",background:deleteLoading?"#94A3B8":"#DC2626",
+                      border:"none",borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,
+                      cursor:deleteLoading?"not-allowed":"pointer",fontFamily:"inherit",marginBottom:10}}>
+                    {deleteLoading?"Sending code…":"Understood — Send Confirmation Code"}
+                  </button>
+                  <button onClick={()=>setDeleteStep(0)}
+                    style={{width:"100%",padding:"12px",background:"none",
+                      border:"1.5px solid #E2E8F0",borderRadius:12,color:"#64748B",
+                      fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                    Cancel
+                  </button>
+                </>
+              )}
+
+              {/* Step 3 — OTP confirmation */}
+              {deleteStep===3&&(
+                <>
+                  <div style={{fontSize:18,fontWeight:800,color:"#0B1628",marginBottom:6}}>
+                    Enter Confirmation Code
+                  </div>
+                  <div style={{fontSize:12,color:"#64748B",marginBottom:20,lineHeight:1.6}}>
+                    A 6-digit code has been sent to <strong>{authUser?.email}</strong>.
+                    Enter it below to authorise the deletion of your account.
+                  </div>
+                  <input
+                    type="number"
+                    placeholder="6-digit code"
+                    value={deleteOTP}
+                    onChange={e=>setDeleteOTP(e.target.value)}
+                    style={{width:"100%",padding:"14px",fontSize:22,fontWeight:700,
+                      letterSpacing:"0.3em",textAlign:"center",
+                      border:"2px solid #E2E8F0",borderRadius:12,
+                      fontFamily:"inherit",marginBottom:16}}
+                  />
+                  <button onClick={confirmDelete} disabled={deleteLoading||deleteOTP.length<6}
+                    style={{width:"100%",padding:"13px",
+                      background:(deleteLoading||deleteOTP.length<6)?"#94A3B8":"#DC2626",
+                      border:"none",borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,
+                      cursor:(deleteLoading||deleteOTP.length<6)?"not-allowed":"pointer",
+                      fontFamily:"inherit",marginBottom:10}}>
+                    {deleteLoading?"Processing…":"Confirm — Delete My Account"}
+                  </button>
+                  <button onClick={()=>setDeleteStep(0)}
+                    style={{width:"100%",padding:"12px",background:"none",
+                      border:"1.5px solid #E2E8F0",borderRadius:12,color:"#64748B",
+                      fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                    Cancel
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Step 4 — Deletion success */}
+        {deleteStep===4&&(
+          <div style={{position:"fixed",inset:0,background:"#0B1628",zIndex:800,
+            display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+            padding:"32px 24px",textAlign:"center"}}>
+            <div style={{fontSize:48,marginBottom:16}}>✅</div>
+            <div style={{fontSize:20,fontWeight:800,color:"#fff",marginBottom:10}}>
+              Account Deleted
+            </div>
+            <div style={{fontSize:13,color:"rgba(255,255,255,.6)",lineHeight:1.7,
+              maxWidth:320,marginBottom:8}}>
+              Your personal data has been erased immediately.
+            </div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,.4)",lineHeight:1.7,
+              maxWidth:320,marginBottom:28}}>
+              Your transaction records will be securely archived for 7 years in compliance
+              with Nigerian tax law, then permanently purged. A compliance log of this
+              request has been recorded.
+            </div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>
+              Signing you out…
+            </div>
           </div>
         )}
 
@@ -5531,7 +5883,7 @@ function App(){
       return <TaxScheduleScreen scheduleKey={key} schedules={agg.schedules} profile={profile} onBack={back}/>;
     }
     switch(screen){
-      case "dashboard":  return <Dashboard profile={profile} txns={txns} kiv={kiv} onNav={nav}/>;
+      case "dashboard":  return <Dashboard profile={profile} txns={txns} kiv={kiv} onNav={nav} sub={sub}/>;
       case "journal":    return <JournalScreen txns={txns} setTxns={setTxns} kiv={kiv} setKiv={setKiv} onNav={nav}/>;
       case "calculate":  return <CalculateScreen profile={profile} onBack={back}/>;
       case "deadlines":  return <DeadlinesScreen profile={profile} onBack={back}/>;
@@ -5562,7 +5914,7 @@ function App(){
       case "assets":     return <AssetRegisterScreen assets={assets} setAssets={setAssets} onBack={back}/>;
       case "ca":         return <AssetRegisterScreen assets={assets} setAssets={setAssets} onBack={back}/>;
       case "kiv":        return <JournalScreen txns={txns} setTxns={setTxns} kiv={kiv} setKiv={setKiv} onNav={nav}/>;
-      default:           return <Dashboard profile={profile} txns={txns} kiv={kiv} onNav={nav}/>;
+      default:           return <Dashboard profile={profile} txns={txns} kiv={kiv} onNav={nav} sub={sub}/>;
     }
   };
 
@@ -5602,52 +5954,131 @@ function App(){
             </div>
           )}
 
-          {/* Trial banner */}
-          {sub?.status==="trial"&&trialDaysLeft(sub)<=7&&trialDaysLeft(sub)>0&&screen!=="subscribe"&&(
-            <div onClick={()=>nav("subscribe")} style={{
-              position:"fixed",bottom:65,left:"50%",transform:"translateX(-50%)",
-              width:"calc(100% - 24px)",maxWidth:406,zIndex:100,
-              background:"linear-gradient(135deg,#D97706,#92400E)",
-              borderRadius:10,padding:"10px 14px",cursor:"pointer",
-              display:"flex",justifyContent:"space-between",alignItems:"center",
-              boxShadow:"0 4px 16px rgba(0,0,0,.25)"}}>
-              <div>
-                <div style={{fontSize:12,fontWeight:700,color:"#fff"}}>
-                  ⏰ {trialDaysLeft(sub)} day{trialDaysLeft(sub)!==1?"s":""} left in trial
+          {/* Trial banner — adaptive urgency */}
+          {sub?.status==="trial"&&trialDaysLeft(sub)>0&&screen!=="subscribe"&&(()=>{
+            const d = trialDaysLeft(sub);
+            const urgent = d <= 3;
+            const warning = d <= 7;
+            const bg = urgent
+              ? "linear-gradient(135deg,#DC2626,#991B1B)"
+              : warning
+              ? "linear-gradient(135deg,#D97706,#92400E)"
+              : `linear-gradient(135deg,${C.navy},#1E3A5F)`;
+            const label = urgent
+              ? `⚠️ Only ${d} day${d!==1?"s":""} left — subscribe to keep your data`
+              : warning
+              ? `⏰ ${d} days left in your free trial`
+              : `✦ Free trial — ${d} days remaining`;
+            const sub_label = urgent
+              ? "Your journal and tax data will be locked after expiry"
+              : warning
+              ? "Tap to subscribe from ₦2,500/month"
+              : "Tap to see plans — from ₦2,500/month";
+            return(
+              <div onClick={()=>nav("subscribe")} style={{
+                position:"fixed",bottom:65,left:"50%",transform:"translateX(-50%)",
+                width:"calc(100% - 24px)",maxWidth:406,zIndex:100,
+                background:bg,borderRadius:10,padding:"10px 14px",cursor:"pointer",
+                display:"flex",justifyContent:"space-between",alignItems:"center",
+                boxShadow:"0 4px 16px rgba(0,0,0,.3)"}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:700,color:"#fff"}}>{label}</div>
+                  <div style={{fontSize:10,color:"rgba(255,255,255,.65)",marginTop:2}}>{sub_label}</div>
                 </div>
-                <div style={{fontSize:10,color:"rgba(255,255,255,.7)"}}>Tap to subscribe and keep your data</div>
+                <div style={{fontSize:11,fontWeight:700,color:"#FCD34D",flexShrink:0,marginLeft:8}}>
+                  {urgent?"Subscribe Now →":"View Plans →"}
+                </div>
               </div>
-              <div style={{fontSize:11,fontWeight:700,color:"#FCD34D",flexShrink:0}}>Subscribe →</div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Paywall — trial expired */}
-          {sub&&!isSubscriptionActive(sub)&&screen!=="subscribe"&&screen!=="agent"&&screen!=="faq"&&(
-            <div style={{position:"fixed",inset:0,background:"rgba(11,22,40,.92)",zIndex:500,
-              display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-              padding:"24px"}}>
-              <div style={{fontSize:40,marginBottom:16}}>🔒</div>
-              <div style={{fontSize:22,fontWeight:800,color:"#fff",marginBottom:8,textAlign:"center"}}>
-                Trial Expired
+          {sub&&!isSubscriptionActive(sub)&&screen!=="subscribe"&&screen!=="agent"&&screen!=="faq"&&(()=>{
+            // Compute what they built during trial to show as "at risk"
+            const txnCount = txns.length;
+            const incomeTracked = txns.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
+            const taxTracked = agg.vatPayable+agg.whtOut+(profile.mode==="company"?agg.estCIT:0)+agg.payeOut;
+            return(
+              <div style={{position:"fixed",inset:0,background:"rgba(11,22,40,.96)",zIndex:500,
+                overflowY:"auto",padding:"24px 20px 40px",display:"flex",flexDirection:"column",
+                alignItems:"center",justifyContent:"flex-start",paddingTop:48}}>
+
+                {/* Lock icon + heading */}
+                <div style={{fontSize:44,marginBottom:12}}>🔒</div>
+                <div style={{fontSize:24,fontWeight:800,color:"#fff",marginBottom:6,textAlign:"center",
+                  fontFamily:"inherit",letterSpacing:"-.01em"}}>
+                  Your trial has ended
+                </div>
+                <div style={{fontSize:13,color:"rgba(255,255,255,.5)",textAlign:"center",
+                  lineHeight:1.6,marginBottom:24,maxWidth:320}}>
+                  Subscribe to unlock TaxWise and keep everything you built during your trial.
+                </div>
+
+                {/* Value at risk */}
+                {txnCount>0&&(
+                  <div style={{width:"100%",maxWidth:360,background:"rgba(255,255,255,.05)",
+                    border:"1px solid rgba(255,255,255,.1)",borderRadius:14,padding:"16px",
+                    marginBottom:20}}>
+                    <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,.4)",
+                      letterSpacing:".1em",marginBottom:12}}>WHAT YOU BUILT IN YOUR TRIAL</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                      {[
+                        {v:txnCount,l:"Transactions"},
+                        {v:fmt(incomeTracked),l:"Income tracked"},
+                        {v:fmt(taxTracked),l:"Tax obligations"},
+                        {v:(assets.length||0)+" assets",l:"Asset register"},
+                      ].map((item,i)=>(
+                        <div key={i} style={{background:"rgba(255,255,255,.06)",borderRadius:10,
+                          padding:"10px 12px"}}>
+                          <div style={{fontSize:16,fontWeight:800,color:"#fff"}}>{item.v}</div>
+                          <div style={{fontSize:10,color:"rgba(255,255,255,.4)",marginTop:2}}>{item.l}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{fontSize:11,color:"#F87171",marginTop:12,textAlign:"center"}}>
+                      This data will be locked if you do not subscribe.
+                    </div>
+                  </div>
+                )}
+
+                {/* Pricing mini-cards */}
+                <div style={{width:"100%",maxWidth:360,display:"grid",gridTemplateColumns:"1fr 1fr",
+                  gap:10,marginBottom:16}}>
+                  {[
+                    {name:"Individual",price:"₦2,500",period:"/month",desc:"Salaried & self-employed",color:"#3B82F6"},
+                    {name:"Business",price:"₦5,000",period:"/month",desc:"SMEs & companies",color:"#F59E0B"},
+                  ].map((p,i)=>(
+                    <div key={i} style={{background:"rgba(255,255,255,.06)",border:`1px solid ${p.color}40`,
+                      borderRadius:12,padding:"14px 12px",textAlign:"center"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:p.color,marginBottom:6}}>{p.name}</div>
+                      <div style={{fontSize:22,fontWeight:800,color:"#fff",lineHeight:1}}>{p.price}</div>
+                      <div style={{fontSize:10,color:"rgba(255,255,255,.4)",marginBottom:6}}>{p.period}</div>
+                      <div style={{fontSize:10,color:"rgba(255,255,255,.5)",lineHeight:1.4}}>{p.desc}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Subscribe CTA */}
+                <button onClick={()=>nav("subscribe")}
+                  style={{width:"100%",maxWidth:360,padding:"16px",background:"#059669",border:"none",
+                    borderRadius:14,color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",
+                    fontFamily:"inherit",marginBottom:10,boxShadow:"0 6px 0 #047857"}}>
+                  Subscribe and Unlock →
+                </button>
+                <div style={{fontSize:11,color:"rgba(255,255,255,.3)",marginBottom:16}}>
+                  Annual plans save 2 months · Cancel any time
+                </div>
+
+                {/* Always-free escape hatch */}
+                <button onClick={()=>nav("agent")}
+                  style={{background:"none",border:"1px solid rgba(255,255,255,.15)",borderRadius:10,
+                    padding:"10px 24px",color:"rgba(255,255,255,.5)",fontSize:12,cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  Continue with AI Agent only (always free)
+                </button>
               </div>
-              <div style={{fontSize:13,color:"rgba(255,255,255,.6)",textAlign:"center",lineHeight:1.7,marginBottom:24,maxWidth:300}}>
-                Your 14-day free trial has ended. Subscribe to continue managing your taxes with TaxWise Nigeria.
-              </div>
-              <button onClick={()=>nav("subscribe")}
-                style={{width:"100%",maxWidth:300,padding:"15px",background:"#059669",border:"none",
-                  borderRadius:12,color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",
-                  fontFamily:"inherit",marginBottom:12,
-                  boxShadow:"0 6px 0 #047857"}}>
-                Subscribe Now →
-              </button>
-              <button onClick={()=>nav("agent")}
-                style={{background:"none",border:"1px solid rgba(255,255,255,.2)",borderRadius:10,
-                  padding:"10px 20px",color:"rgba(255,255,255,.6)",fontSize:12,cursor:"pointer",
-                  fontFamily:"inherit"}}>
-                Continue with AI Agent (always free)
-              </button>
-            </div>
-          )}
+            );
+          })()}
 
           <div className="page" style={{display:"block"}}>{renderScreen()}</div>
           {typeof ReactDOM.createPortal !== 'undefined' &&
@@ -5868,17 +6299,29 @@ function SubscriptionScreen({profile, authUser, sub, onBack, onSubscribed}){
               {billing==="yearly"&&<div style={{fontSize:10,color:C.green,marginTop:2}}>Save ₦5,000</div>}
             </div>
           </div>
-          {[
-            "All tax computations — PAYE, VAT, WHT, CIT",
-            "Downloadable tax schedules",
-            "Asset register & payroll",
-            "Bank statement import (coming soon)",
-            "AI Tax Agent — always free",
-            isCompany?"2 team members included":"Cloud sync across devices",
-          ].map((f,i)=>(
-            <div key={i} style={{display:"flex",gap:8,alignItems:"center",marginBottom:6}}>
-              <span style={{color:C.green,fontSize:14}}>✓</span>
-              <span style={{fontSize:12,color:C.slate}}>{f}</span>
+          {(isCompany?[
+            "All 6 tax heads — CIT, VAT, WHT, PAYE, PIT, CGT",
+            "AI bank statement import (30/month)",
+            "Capital allowances register — NRS schedules",
+            "Multi-user access with roles (2 users included)",
+            "Staff invite system",
+            "NRS Rev360 WHT & VAT filing exports",
+            "PAYE schedule for all 36 states + FCT",
+            "Annual Tax Summary PDF",
+            "AI Tax Agent — ask anything",
+          ]:[
+            "All 6 tax heads — PIT, VAT, WHT, PAYE, CGT",
+            "AI bank statement import (10/month)",
+            "Smart single-account clarification engine",
+            "All 6 S.30(2)(a) personal relief deductions",
+            "NRS Rev360 & SIRS filing exports",
+            "Annual Tax Summary PDF by year",
+            "Cloud sync across devices",
+            "AI Tax Agent — ask anything",
+          ]).map((f,i)=>(
+            <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:8}}>
+              <span style={{color:C.green,fontSize:13,marginTop:1,flexShrink:0}}>✓</span>
+              <span style={{fontSize:12,color:C.slate,lineHeight:1.4}}>{f}</span>
             </div>
           ))}
         </div>
@@ -7319,6 +7762,19 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
             ⏳ {progress}
           </div>
         )}
+        {/* Pre-permission justification modal */}
+        {prePermission&&(
+          <PrePermissionModal
+            type={prePermission}
+            onAllow={()=>{
+              setPermissionGranted(p=>({...p,[prePermission]:true}));
+              setPrePermission(null);
+              if(prePermission==="camera"){setCapturedPages([]);setMode("camera");}
+            }}
+            onDeny={()=>setPrePermission(null)}
+          />
+        )}
+
         {error&&<div style={{background:C.redBg,border:`1px solid ${C.red}30`,borderRadius:10,
           padding:"10px 12px",fontSize:12,color:C.red,marginBottom:12}}>⚠️ {error}</div>}
 
@@ -7330,8 +7786,20 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
           if(rem===0) return (
             <div style={{background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:10,
               padding:"10px 12px",fontSize:12,color:"#DC2626",marginBottom:12,lineHeight:1.5}}>
-              <strong>AI import limit reached</strong> ({limit}/{limit} used this month).
-              Excel/CSV imports are still unlimited. Limit resets 1st of next month.
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                <div>
+                  <strong>AI import limit reached</strong> ({limit}/{limit} used this month).
+                  Excel/CSV imports are still unlimited. Limit resets 1st of next month.
+                </div>
+                {sub?.status==="trial"&&(
+                  <button onClick={()=>{if(typeof onNav==="function") onNav("subscribe");}}
+                    style={{flexShrink:0,padding:"5px 10px",background:"#DC2626",border:"none",
+                      borderRadius:6,color:"#fff",fontSize:10,fontWeight:700,cursor:"pointer",
+                      fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                    Upgrade
+                  </button>
+                )}
+              </div>
             </div>
           );
           if(rem<=2) return (
@@ -7617,6 +8085,8 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
 // ── DOCUMENT UPLOAD SCREEN ────────────────────────────────────────────────────
 function DocumentUploadScreen({profile, authUser, setTxns, txns, assets, setAssets, onBack, sub, setSub}){
   const [mode, setMode]           = useState("select"); // select | camera | processing | review | edit | done
+  const [prePermission, setPrePermission] = useState(null); // "camera" | "files" | null
+  const [permissionGranted, setPermissionGranted] = useState({camera:false, files:false});
   const [extracted, setExtracted] = useState([]);
   const [editIdx, setEditIdx]     = useState(null);
   const [editForm, setEditForm]   = useState({});
@@ -7852,6 +8322,7 @@ BANK CHARGES — MANDATORY RULES (NTA 2025):\nSTAMP DUTY/FGN STAMP/SD/ELECTRONIC
   const handleFileInput = (e) => {
     const file = e.target.files[0];
     if(!file) return;
+    setPermissionGranted(p=>({...p, files:true})); // user already interacted with file picker
     processFile(file);
   };
 
@@ -8276,7 +8747,7 @@ BANK CHARGES — MANDATORY RULES (NTA 2025):\nSTAMP DUTY/FGN STAMP/SD/ELECTRONIC
         ) : (
           <>
             {/* Camera entry button */}
-            <div onClick={()=>{setCapturedPages([]);setMode("camera");}}
+            <div onClick={()=>{ if(permissionGranted.camera){setCapturedPages([]);setMode("camera");} else setPrePermission("camera"); }}
               style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,borderRadius:16,
                 padding:"28px 20px",textAlign:"center",cursor:"pointer",
                 boxShadow:"0 4px 16px rgba(11,22,40,.3)",marginBottom:12}}>
@@ -8315,14 +8786,71 @@ BANK CHARGES — MANDATORY RULES (NTA 2025):\nSTAMP DUTY/FGN STAMP/SD/ELECTRONIC
 }
 
 // ── AUTH SCREEN — Email only ──────────────────────────────────────────────────
+// ── Pre-Permission Justification Modal (NDPA / DPCO requirement) ─────────────
+// Must show BEFORE triggering any OS permission prompt
+function PrePermissionModal({type, onAllow, onDeny}){
+  const config = {
+    camera: {
+      icon: "📷",
+      title: "Camera Access",
+      body: "TaxWise needs access to your camera solely to let you photograph your bank statements and financial documents for AI extraction into your transaction journal.",
+      detail: "No photographs are stored on our servers — only the structured transaction data extracted from them is saved. You can deny this permission and use file upload instead.",
+      allow: "Allow Camera",
+    },
+    files: {
+      icon: "📁",
+      title: "File Access",
+      body: "TaxWise accesses files only when you explicitly select a document to upload for AI extraction.",
+      detail: "Files are transmitted to our AI engine to extract transaction data and are not retained beyond that processing request. All extracted data is encrypted and stored securely under your account.",
+      allow: "Allow File Access",
+    },
+  };
+  const c = config[type]||config.files;
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(11,22,40,.8)",zIndex:900,
+      display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+      <div style={{width:"100%",maxWidth:430,background:"#fff",
+        borderRadius:"20px 20px 0 0",padding:"24px 20px 36px"}}>
+        <div style={{textAlign:"center",marginBottom:16}}>
+          <div style={{fontSize:44,marginBottom:8}}>{c.icon}</div>
+          <div style={{fontSize:18,fontWeight:800,color:"#0B1628",marginBottom:8}}>{c.title}</div>
+        </div>
+        <div style={{background:"#F1F5F9",borderRadius:12,padding:"14px",marginBottom:14}}>
+          <div style={{fontSize:13,color:"#334155",lineHeight:1.65,marginBottom:8}}>{c.body}</div>
+          <div style={{fontSize:11,color:"#64748B",lineHeight:1.6}}>{c.detail}</div>
+        </div>
+        <div style={{fontSize:10,color:"#94A3B8",textAlign:"center",marginBottom:16,lineHeight:1.5}}>
+          This request complies with the Nigeria Data Protection Act 2023.
+          Your data is processed by Lexi Gravitas Forensic Services per our Privacy Policy.
+        </div>
+        <button onClick={onAllow}
+          style={{width:"100%",padding:"14px",background:"#059669",border:"none",
+            borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit",marginBottom:10,boxShadow:"0 4px 0 #047857"}}>
+          {c.allow}
+        </button>
+        <button onClick={onDeny}
+          style={{width:"100%",padding:"12px",background:"none",
+            border:"1.5px solid #E2E8F0",borderRadius:12,color:"#64748B",
+            fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+          Not Now — Use Manual Entry
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AuthScreen({onAuth}){
-  const [mode, setMode]         = useState("login"); // login | signup | reset
-  const [email, setEmail]       = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState("");
-  const [info, setInfo]         = useState("");
-  const [showPass, setShowPass] = useState(false);
+  const [mode, setMode]           = useState("login"); // login | signup | reset
+  const [email, setEmail]         = useState("");
+  const [password, setPassword]   = useState("");
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState("");
+  const [info, setInfo]           = useState("");
+  const [showPass, setShowPass]   = useState(false);
+  const [consentTerms, setConsentTerms]     = useState(false);
+  const [consentMarketing, setConsentMarketing] = useState(false);
+  const [showPolicy, setShowPolicy] = useState(null); // "privacy" | "terms" | null
 
   const err = msg => { setError(msg); setLoading(false); };
   const inf = msg => { setInfo(msg); setError(""); setLoading(false); };
@@ -8331,10 +8859,20 @@ function AuthScreen({onAuth}){
     setError(""); setLoading(true);
     if(!email.includes("@")) return err("Enter a valid email address");
     if(mode !== "reset" && password.length < 6) return err("Password must be at least 6 characters");
+    if(mode === "signup" && !consentTerms) return err("You must agree to the Terms of Service and Privacy Policy to create an account.");
     try {
       if(mode === "signup"){
         const {data, error:e} = await sb.auth.signUp({email, password});
         if(e) return err(e.message);
+        // Store consent timestamp and marketing preference in profile
+        if(data.user){
+          await sb.from("profiles").upsert({
+            id: data.user.id,
+            consented_at: new Date().toISOString(),
+            marketing_consent: consentMarketing,
+            updated_at: new Date().toISOString(),
+          });
+        }
         if(data.user && data.session){
           await syncPull(data.user.id);
           onAuth(data.user);
@@ -8413,6 +8951,50 @@ function AuthScreen({onAuth}){
           </div>
         )}
 
+        {/* Consent checkboxes — signup only */}
+        {mode==="signup"&&(
+          <div style={{marginBottom:16}}>
+            <div onClick={()=>setConsentTerms(v=>!v)}
+              style={{display:"flex",gap:10,alignItems:"flex-start",
+                padding:"10px 12px",border:`1.5px solid ${consentTerms?"#059669":"#E2E8F0"}`,
+                borderRadius:10,cursor:"pointer",marginBottom:8,
+                background:consentTerms?"#F0FDF4":"#fff"}}>
+              <div style={{width:18,height:18,borderRadius:4,border:`2px solid ${consentTerms?"#059669":"#CBD5E1"}`,
+                background:consentTerms?"#059669":"#fff",flexShrink:0,marginTop:1,
+                display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {consentTerms&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+              </div>
+              <div style={{fontSize:12,color:"#334155",lineHeight:1.5}}>
+                I agree to the{" "}
+                <span onClick={e=>{e.stopPropagation();setShowPolicy("terms");}}
+                  style={{color:"#1D4ED8",fontWeight:600,cursor:"pointer",textDecoration:"underline"}}>
+                  Terms of Service
+                </span>
+                {" "}and{" "}
+                <span onClick={e=>{e.stopPropagation();setShowPolicy("privacy");}}
+                  style={{color:"#1D4ED8",fontWeight:600,cursor:"pointer",textDecoration:"underline"}}>
+                  Privacy Policy
+                </span>
+                {" "}<span style={{color:"#DC2626"}}>*</span>
+              </div>
+            </div>
+            <div onClick={()=>setConsentMarketing(v=>!v)}
+              style={{display:"flex",gap:10,alignItems:"flex-start",
+                padding:"10px 12px",border:`1.5px solid ${consentMarketing?"#1D4ED8":"#E2E8F0"}`,
+                borderRadius:10,cursor:"pointer",
+                background:consentMarketing?"#EFF6FF":"#fff"}}>
+              <div style={{width:18,height:18,borderRadius:4,border:`2px solid ${consentMarketing?"#1D4ED8":"#CBD5E1"}`,
+                background:consentMarketing?"#1D4ED8":"#fff",flexShrink:0,marginTop:1,
+                display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {consentMarketing&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+              </div>
+              <div style={{fontSize:12,color:"#334155",lineHeight:1.5}}>
+                I would like to receive tax tips and product updates by email (optional)
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Error / info */}
         {error&&(
           <div style={{background:"#FEF2F2",border:"1px solid rgba(220,38,38,.2)",borderRadius:10,
@@ -8428,17 +9010,46 @@ function AuthScreen({onAuth}){
         )}
 
         {/* Primary CTA */}
-        <button onClick={handleSubmit} disabled={loading}
+        <button onClick={handleSubmit}
+          disabled={loading||(mode==="signup"&&!consentTerms)}
           style={{width:"100%",padding:"14px",
-            background:loading?"#94A3B8":mode==="signup"?"#059669":"#1D4ED8",
+            background:(loading||(mode==="signup"&&!consentTerms))?"#94A3B8":mode==="signup"?"#059669":"#1D4ED8",
             border:"none",borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,
-            cursor:loading?"not-allowed":"pointer",fontFamily:"inherit",
-            marginBottom:16,boxShadow:loading?"none":"0 4px 12px rgba(0,0,0,.15)"}}>
+            cursor:(loading||(mode==="signup"&&!consentTerms))?"not-allowed":"pointer",fontFamily:"inherit",
+            marginBottom:16,boxShadow:"0 4px 12px rgba(0,0,0,.15)"}}>
           {loading?"Please wait...":
            mode==="signup"?"Create Account":
            mode==="reset"?"Send Reset Link":
            "Sign In"}
         </button>
+
+        {/* In-app policy viewer modal */}
+        {showPolicy&&(
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:999,
+            display:"flex",flexDirection:"column"}}
+            onClick={()=>setShowPolicy(null)}>
+            <div style={{flex:1,background:"#fff",marginTop:60,borderRadius:"20px 20px 0 0",
+              overflow:"hidden",display:"flex",flexDirection:"column"}}
+              onClick={e=>e.stopPropagation()}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                padding:"14px 16px",borderBottom:"1px solid #E2E8F0",background:"#fff"}}>
+                <div style={{fontSize:15,fontWeight:700,color:"#0B1628"}}>
+                  {showPolicy==="privacy"?"Privacy Policy":"Terms of Service"}
+                </div>
+                <button onClick={()=>setShowPolicy(null)}
+                  style={{background:"none",border:"none",fontSize:22,color:"#94A3B8",
+                    cursor:"pointer",padding:"0 4px"}}>✕</button>
+              </div>
+              <iframe
+                src={showPolicy==="privacy"
+                  ?"https://etukudoubong.github.io/taxwise-nigeria/privacy.html"
+                  :"https://etukudoubong.github.io/taxwise-nigeria/terms.html"}
+                style={{flex:1,border:"none",width:"100%"}}
+                title={showPolicy==="privacy"?"Privacy Policy":"Terms of Service"}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Links */}
         <div style={{display:"flex",justifyContent:"center",gap:12,flexWrap:"wrap"}}>

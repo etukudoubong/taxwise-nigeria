@@ -453,7 +453,7 @@ const DEFAULT_STORE={
     name:"",tin:"",email:"",phone:"",
     mode:"individual",
     empCategory:"A",
-    employerDeductions:{paye:true,pension:true,nhf:false,nhis:false},
+    employerDeductions:{paye:false,pension:false,nhf:false,nhis:false},
     companyName:"",fixedAssets:0,isProfessional:false,
     sector:"",yearEnd:"December",
     dataSources:["manual"],
@@ -1182,7 +1182,7 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
     name:"",email:"",phone:"",tin:"",
     mode:"individual",
     empCategory:"A",
-    employerDeductions:{paye:true,pension:true,nhf:false,nhis:false},
+    employerDeductions:{paye:false,pension:false,nhf:false,nhis:false},
     companyName:"",sector:"Trading",isProfessional:false,
     dataSources:["manual"],
     onboarded:true,
@@ -1266,8 +1266,9 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
           {/* Category-specific follow-up questions */}
           {data.empCategory==="A"&&(
             <div className="fg">
-              <label className="lbl">WHICH DEDUCTIONS DOES YOUR EMPLOYER MAKE? (select all that apply)</label>
-              <div style={{fontSize:12,color:C.muted,marginBottom:10}}>This ensures the right computation — deductions already made by your employer will not be double-counted.</div>
+              <label className="lbl">WHICH DEDUCTIONS DOES YOUR EMPLOYER MAKE?</label>
+              <div style={{background:"#FEF3C7",border:"1px solid #FDE68A",borderRadius:8,padding:"10px 12px",marginBottom:10,fontSize:12,color:"#92400E",lineHeight:1.6}}>Only tick deductions your employer <strong>actually makes</strong> from your salary. Check your payslip. Do not tick anything you are unsure about — incorrect selections will produce wrong tax figures.</div>
+              <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Deductions your employer makes are credited — not double-counted against you.</div>
               {[
                 {k:"paye",    label:"PAYE (Income Tax)",          note:"Deducted from salary before you receive it"},
                 {k:"pension", label:"Pension (8% employee)",      note:"Pension Reform Act — employer deducts employee share"},

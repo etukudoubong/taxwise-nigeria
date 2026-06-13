@@ -291,7 +291,28 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden;background:#0B1628;}
   }
 })();
 </script>
+<script>
+// Catch unhandled errors
+window.onerror = function(msg, src, line, col, err){
+  document.getElementById("root").innerHTML =
+    "<div style='padding:20px;font-family:monospace;font-size:12px;color:red;background:#fff;'>" +
+    "<b>Runtime Error:</b><br>" + msg + "<br><br>" +
+    "Source: " + src + "<br>" +
+    "Line: " + line + ", Col: " + col + "<br><br>" +
+    (err && err.stack ? "<pre>" + err.stack.slice(0,500) + "</pre>" : "") +
+    "</div>";
+  return true;
+};
+window.addEventListener("unhandledrejection", function(e){
+  document.getElementById("root").innerHTML =
+    "<div style='padding:20px;font-family:monospace;font-size:12px;color:red;background:#fff;'>" +
+    "<b>Unhandled Promise:</b><br>" + (e.reason?.message||e.reason||"unknown") +
+    "<br><pre>" + (e.reason?.stack||"").slice(0,400) + "</pre></div>";
+});
+</script>
 <script type="text/babel">
+
+
 const {useState,useEffect,useRef,useCallback,useMemo}=React;
 
 // ── Live clock ────────────────────────────────────────────────────────────────
@@ -4729,6 +4750,8 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
   }
 
   // VAT Sales schedule for NRS Rev360 upload
+
+
   function buildVATExport(){
     const lines=agg.schedules.vatOut||[];
     const purchases=agg.schedules.vatIn||[];
@@ -5576,6 +5599,8 @@ function BankScreen({connectedBanks,setConnectedBanks,onBack}){
 }
 
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
+</script>
+<script type="text/babel">
 function App(){
   // ── Auth state ──────────────────────────────────────────────────────────────
   const [authUser, setAuthUser] = useState(null);
@@ -9225,27 +9250,11 @@ function AuthScreen({onAuth}){
 }
 
 
-// Catch unhandled errors
-window.onerror = function(msg, src, line, col, err){
-  document.getElementById("root").innerHTML =
-    "<div style='padding:20px;font-family:monospace;font-size:12px;color:red;background:#fff;'>" +
-    "<b>Runtime Error:</b><br>" + msg + "<br><br>" +
-    "Source: " + src + "<br>" +
-    "Line: " + line + ", Col: " + col + "<br><br>" +
-    (err && err.stack ? "<pre>" + err.stack.slice(0,500) + "</pre>" : "") +
-    "</div>";
-  return true;
-};
-window.addEventListener("unhandledrejection", function(e){
-  document.getElementById("root").innerHTML =
-    "<div style='padding:20px;font-family:monospace;font-size:12px;color:red;background:#fff;'>" +
-    "<b>Unhandled Promise:</b><br>" + (e.reason?.message||e.reason||"unknown") +
-    "<br><pre>" + (e.reason?.stack||"").slice(0,400) + "</pre></div>";
-});
-
 ReactDOM.createRoot(document.getElementById("root")).render(
   <><App/><InstallBanner/></>
 );
+
+
 </script>
 </body>
 </html>

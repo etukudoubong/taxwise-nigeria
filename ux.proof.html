@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UX Proof Engine — MEGA-CONTRAFUN NIG LTD</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0A0A0F; font-family: 'DM Mono', 'Fira Code', 'Courier New', monospace; }
+    select option { background: #111; color: #F0F0F5; }
+    ::-webkit-scrollbar { width: 6px; } 
+    ::-webkit-scrollbar-track { background: #111; }
+    ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState } = React;
+
+    const APPS = {
+      recharge: {
+        id: "recharge",
+        name: "Recharge Card App",
+        color: "#00C853",
+        accent: "#69F0AE",
+        icon: "⚡",
+        screens: [
+          "Dashboard / Overview",
+          "Customer Registration",
+          "Card Sales Flow",
+          "Reconciliation Report",
+          "Offline Mode / PWA",
+          "Receipt Generation",
+        ],
+        userTypes: ["Salesperson", "Business Owner (Admin)", "Customer"],
+        flows: [
+          { id: "sale", label: "Sell a Card", steps: ["Login", "Select Customer", "Choose Card Type", "Confirm Sale", "Print/Share Receipt"] },
+          { id: "reconcile", label: "Daily Reconciliation", steps: ["End of Day", "View Variance Report", "Approve / Flag Issues", "Submit to Admin"] },
+          { id: "register", label: "Register Customer", steps: ["New Customer Form", "Validate Phone/ID", "Save & Confirm", "Assign to Salesperson"] },
+        ],
+      },
+      tax: {
+        id: "tax",
+        name: "TaxWise Nigeria",
+        color: "#2979FF",
+        accent: "#82B1FF",
+        icon: "🧾",
+        screens: [
+          "Sign Up / Email Auth (Supabase)",
+          "Sign In / Forgot Password",
+          "Edit Profile Setup Wizard",
+          "Dashboard / Home",
+          "Transaction Journal",
+          "Import Transactions (CSV / Excel / PDF / Image)",
+          "Camera Scan (Multi-Page Bank Statement)",
+          "CGT Calculator & Detection Popup",
+          "PIT Computation (6 Section 30 Deductions)",
+          "CIT Computation Screen (Company)",
+          "Asset Register & Depreciation Schedule",
+          "Tax Reports Hub (WHT / VAT / PAYE / CGT)",
+          "AI Tax Agent Chat",
+          "Document Upload Screen",
+          "Smart Import Settings (Own Accounts / Rules Engine)",
+          "Bank-by-Bank Import Guide (29 Banks)",
+          "Subscription & Billing Screen (Paystack)",
+          "14-Day Trial Paywall",
+          "Multi-User Invite Screen (Company)",
+          "Team Members & RBAC Screen",
+          "FAQ Screen (19 Questions / 5 Categories)",
+          "PWA Install Landing Page",
+        ],
+        userTypes: [
+          "Individual Taxpayer",
+          "Freelancer / Self-Employed",
+          "SMB Owner",
+          "Company Admin",
+          "Company Accountant",
+          "Company Data Entry",
+          "Company View-Only Member",
+          "First-Time User (No Tax Knowledge)",
+        ],
+        flows: [
+          { id: "onboard", label: "First-Time Setup", steps: ["Install PWA", "Sign Up (Email)", "Verify Email", "Edit Profile Wizard", "Select Plan / Start Trial", "Dashboard"] },
+          { id: "import", label: "Import Bank Statement", steps: ["Choose Bank", "Export PDF from Bank App", "Upload / Camera Scan", "AI Extraction", "Review & Edit Transactions", "Apply Import Rules", "Post to Journal"] },
+          { id: "cgt", label: "Declare CGT Asset Sale", steps: ["Post Transaction", "CGT Detection Popup", "Answer 5 Questions", "System Calculates CGT (NTA 2025)", "Add to CGT Schedule", "View in Tax Reports Hub"] },
+          { id: "pit", label: "Compute Personal Income Tax", steps: ["Confirm Income Transactions", "Apply 6 PIT Deductions", "VAT Exemption Check", "Run PIT Computation", "Download Tax Summary"] },
+          { id: "cit", label: "Compute Company Income Tax", steps: ["Switch to Company Mode", "Enter Adjusted Profit", "Apply Capital Allowances (TWDV)", "Auto / Manual CIT Mode", "Download CIT Schedule"] },
+          { id: "invite", label: "Invite Team Member", steps: ["Go to Team Screen", "Enter Email + Assign Role", "System Sends Invite Email", "Member Accepts", "RBAC Applied Automatically"] },
+          { id: "subscribe", label: "Subscribe / Upgrade Plan", steps: ["Trial Expires / Paywall Hit", "View Plan Options", "Select Individual (2,500/mo) or Company (5,000/mo)", "Paystack Checkout", "Subscription Activated"] },
+          { id: "aiagent", label: "Ask AI Tax Agent", steps: ["Open AI Tax Agent", "Type Tax Question", "Agent Responds (NTA 2025 Context)", "Follow-Up Questions", "Save / Act on Advice"] },
+        ],
+      },
+    };
+
+    const AUDIT_PROMPTS = {
+      recharge: `You are a senior UX auditor specializing in mobile fintech apps for emerging markets (Nigeria/West Africa).
+
+Audit this screen/flow for the Recharge Card Sales Management App used by small business owners and street-level salespersons in Nigeria. The app handles card sales, customer registration, offline-first PWA, receipts, and variance/reconciliation reporting.
+
+Screen/Flow to audit: {SCREEN}
+
+Provide a structured UX audit in JSON only (no markdown, no preamble). Be concise - max 20 words per field value:
+{
+  "score": 0,
+  "grade": "A",
+  "summary": "two sentence summary here",
+  "strengths": ["strength one", "strength two", "strength three"],
+  "issues": [
+    {"severity": "critical", "title": "short title", "description": "max 15 words", "fix": "max 15 words"},
+    {"severity": "high", "title": "short title", "description": "max 15 words", "fix": "max 15 words"},
+    {"severity": "medium", "title": "short title", "description": "max 15 words", "fix": "max 15 words"}
+  ],
+  "quickWins": ["win one", "win two", "win three"],
+  "flowRedesign": "two sentence redesign suggestion",
+  "nigeriaContext": "one sentence nigeria specific note",
+  "accessibilityNote": "one sentence accessibility note"
+}`,
+
+      tax: `You are a senior UX auditor specializing in Nigerian fintech, govtech, and AI-powered tax apps.
+
+You are auditing TaxWise Nigeria - a React single-file PWA. It is fully compliant with the Nigeria Tax Act 2025 (No. 3), Tax Administration Act 2025 (No. 5), NRS Establishment Act 2025 (No. 4), and Joint Revenue Board Act 2025 (No. 6).
+
+FULL APP CONTEXT:
+- Auth: Supabase email auth with Row Level Security
+- AI: Claude via Supabase Edge Function - handles AI Tax Agent chat AND document extraction
+- Billing: Paystack - 14-day free trial, then 2500/month individual or 5000/month company
+- Multi-user: Company accounts with RBAC - Admin, Accountant, Data Entry, View Only
+- Document Import: CSV, Excel, PDF, images, ZIP with AI extraction and editable review
+- Camera Scan: Multi-page bank statement scan
+- CGT: Full Capital Gains Tax calculator per NTA 2025 with purple popup on asset-sale detection
+- PIT: All 6 Section 30(2)(a) deductions. VAT exemption for individuals
+- CIT: Hybrid auto/manual mode for companies with TWDV capital allowances
+- Bank Import Guide: 29 Nigerian banks covered
+- Smart Import Settings: Own accounts registration, user-defined import rules engine
+
+TARGET USERS: Individual taxpayers, freelancers, SMB owners - many filing taxes for the first time. Nigerian market: low-bandwidth, entry-level Android, BVN anxiety, high distrust of financial apps.
+
+Screen/Flow to audit: {SCREEN}
+
+Provide a structured UX audit in JSON only (no markdown, no preamble). Be concise - max 20 words per field value:
+{
+  "score": 0,
+  "grade": "A",
+  "summary": "two sentence summary here",
+  "strengths": ["strength one", "strength two", "strength three"],
+  "issues": [
+    {"severity": "critical", "title": "short title", "description": "max 15 words", "fix": "max 15 words"},
+    {"severity": "high", "title": "short title", "description": "max 15 words", "fix": "max 15 words"},
+    {"severity": "high", "title": "short title", "description": "max 15 words", "fix": "max 15 words"},
+    {"severity": "medium", "title": "short title", "description": "max 15 words", "fix": "max 15 words"}
+  ],
+  "quickWins": ["win one", "win two", "win three"],
+  "flowRedesign": "two sentence redesign suggestion",
+  "nigeriaContext": "one sentence nigeria specific note",
+  "nta2025Note": "one sentence NTA 2025 compliance note",
+  "accessibilityNote": "one sentence accessibility note"
+}`,
+    };
+
+    const PROTOTYPE_PROMPT = `You are a world-class mobile UI designer specializing in Nigerian fintech PWAs.
+
+Generate an ASCII wireframe prototype for a mobile screen.
+
+App: {APP_NAME}
+Screen: {SCREEN}
+User Type: {USER}
+
+Output JSON only (no markdown). Be concise:
+{
+  "screenTitle": "title",
+  "layout": "ASCII wireframe 20 lines max using box-drawing chars showing mobile UI layout",
+  "components": [
+    {"name": "component name", "type": "type", "purpose": "max 10 words"},
+    {"name": "component name", "type": "type", "purpose": "max 10 words"},
+    {"name": "component name", "type": "type", "purpose": "max 10 words"}
+  ],
+  "interactions": [
+    {"trigger": "action", "response": "result"},
+    {"trigger": "action", "response": "result"}
+  ],
+  "copywriting": [
+    {"element": "element", "text": "exact UI copy", "reason": "max 10 words"},
+    {"element": "element", "text": "exact UI copy", "reason": "max 10 words"},
+    {"element": "element", "text": "exact UI copy", "reason": "max 10 words"}
+  ],
+  "trustSignals": ["signal one", "signal two"],
+  "loadingState": "one sentence slow network handling"
+}`;
+
+    const FLOW_PROMPT = `You are a UX systems designer. Redesign a user flow for a Nigerian mobile app.
+
+App: {APP_NAME}
+Flow: {FLOW_NAME}
+Current Steps: {STEPS}
+User Type: {USER}
+
+Provide a redesigned flow in JSON only (no markdown, no preamble):
+{
+  "flowName": "name",
+  "redesignRationale": "two sentences why this redesign is better",
+  "steps": [
+    {"stepNumber": 1, "name": "step name", "screen": "what user sees", "action": "what user does", "microcopy": "key UI text", "errorState": "error handling"},
+    {"stepNumber": 2, "name": "step name", "screen": "what user sees", "action": "what user does", "microcopy": "key UI text", "errorState": "error handling"},
+    {"stepNumber": 3, "name": "step name", "screen": "what user sees", "action": "what user does", "microcopy": "key UI text", "errorState": "error handling"}
+  ],
+  "dropOffRisks": ["risk one", "risk two"],
+  "completionTime": "estimated time",
+  "offlineConsideration": "one sentence offline/poor network handling"
+}`;
+
+    const severityColor = { critical: "#FF1744", high: "#FF6D00", medium: "#FFD600", low: "#69F0AE" };
+    const severityBg = { critical: "#FF174422", high: "#FF6D0022", medium: "#FFD60022", low: "#69F0AE22" };
+
+    function App() {
+      const [activeApp, setActiveApp] = useState("recharge");
+      const [activeTab, setActiveTab] = useState("audit");
+      const [selectedScreen, setSelectedScreen] = useState("");
+      const [selectedFlow, setSelectedFlow] = useState("");
+      const [selectedUser, setSelectedUser] = useState("");
+      const [result, setResult] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState("");
+      const app = APPS[activeApp];
+
+      async function callClaude(prompt) {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-6",
+            max_tokens: 4000,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message);
+        const text = data.content.map(b => b.text || "").join("");
+        const start = text.indexOf("{");
+        const end = text.lastIndexOf("}");
+        if (start === -1 || end === -1) throw new Error("No JSON in response. Try again.");
+        return JSON.parse(text.slice(start, end + 1));
+      }
+
+      async function runAudit() {
+        if (!selectedScreen) { setError("Select a screen first."); return; }
+        setError(""); setLoading(true); setResult(null);
+        try {
+          const data = await callClaude(AUDIT_PROMPTS[activeApp].replace("{SCREEN}", selectedScreen));
+          setResult({ type: "audit", data });
+        } catch (e) { setError("Error: " + e.message); }
+        setLoading(false);
+      }
+
+      async function runPrototype() {
+        if (!selectedScreen || !selectedUser) { setError("Select a screen and user type."); return; }
+        setError(""); setLoading(true); setResult(null);
+        try {
+          const data = await callClaude(PROTOTYPE_PROMPT.replace("{APP_NAME}", app.name).replace("{SCREEN}", selectedScreen).replace("{USER}", selectedUser));
+          setResult({ type: "prototype", data });
+        } catch (e) { setError("Error: " + e.message); }
+        setLoading(false);
+      }
+
+      async function runFlow() {
+        if (!selectedFlow || !selectedUser) { setError("Select a flow and user type."); return; }
+        setError(""); setLoading(true); setResult(null);
+        const flow = app.flows.find(f => f.id === selectedFlow);
+        try {
+          const data = await callClaude(FLOW_PROMPT.replace("{APP_NAME}", app.name).replace("{FLOW_NAME}", flow.label).replace("{STEPS}", flow.steps.join(" > ")).replace("{USER}", selectedUser));
+          setResult({ type: "flow", data });
+        } catch (e) { setError("Error: " + e.message); }
+        setLoading(false);
+      }
+
+      async function runAll() {
+        if (!selectedScreen || !selectedUser) { setError("Select a screen and user type."); return; }
+        setError(""); setLoading(true); setResult(null);
+        try {
+          const audit = await callClaude(AUDIT_PROMPTS[activeApp].replace("{SCREEN}", selectedScreen));
+          const proto = await callClaude(PROTOTYPE_PROMPT.replace("{APP_NAME}", app.name).replace("{SCREEN}", selectedScreen).replace("{USER}", selectedUser));
+          setResult({ type: "all", data: { audit, proto } });
+        } catch (e) { setError("Error: " + e.message); }
+        setLoading(false);
+      }
+
+      const handleRun = activeTab === "audit" ? runAudit : activeTab === "prototype" ? runPrototype : activeTab === "flow" ? runFlow : runAll;
+      const runLabel = loading ? "⟳ Analyzing with AI..." : activeTab === "audit" ? "🔍 Run UX Audit" : activeTab === "prototype" ? "📐 Generate Prototype" : activeTab === "flow" ? "🔄 Redesign Flow" : "✨ Run Full UX Proof";
+
+      const s = { color: "#F0F0F5", minHeight: "100vh", background: "#0A0A0F", padding: "24px 16px" };
+      const wrap = { maxWidth: 720, margin: "0 auto" };
+
+      function AuditResult({ d }) {
+        return (
+          <div style={{ marginBottom: 32 }}>
+            <div style={{ fontSize: 11, letterSpacing: 3, color: "#555", textTransform: "uppercase", marginBottom: 16 }}>UX Audit Result</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 20, padding: "20px", background: "#111", borderRadius: 12, marginBottom: 20, border: "1px solid #1e1e1e" }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 48, fontWeight: 900, color: d.score >= 80 ? "#69F0AE" : d.score >= 60 ? "#FFD600" : "#FF6D00", lineHeight: 1 }}>{d.score}</div>
+                <div style={{ fontSize: 11, color: "#444", marginTop: 4 }}>SCORE</div>
+              </div>
+              <div style={{ width: 1, height: 60, background: "#1e1e1e" }} />
+              <div style={{ fontSize: 48, fontWeight: 900, color: app.color }}>{d.grade}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, color: "#aaa", lineHeight: 1.6 }}>{d.summary}</div>
+              </div>
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: "#69F0AE", letterSpacing: 2, marginBottom: 8 }}>STRENGTHS</div>
+              {(d.strengths || []).map((s, i) => (
+                <div key={i} style={{ padding: "8px 12px", background: "#69F0AE11", borderLeft: "2px solid #69F0AE", marginBottom: 6, borderRadius: "0 6px 6px 0", fontSize: 13, color: "#ccc" }}>✓ {s}</div>
+              ))}
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: "#FF6D00", letterSpacing: 2, marginBottom: 8 }}>ISSUES</div>
+              {(d.issues || []).map((issue, i) => (
+                <div key={i} style={{ padding: "12px 14px", background: severityBg[issue.severity] || "#11111150", border: "1px solid " + (severityColor[issue.severity] || "#333") + "33", borderRadius: 8, marginBottom: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: severityColor[issue.severity] || "#333", color: "#000", fontWeight: 700, letterSpacing: 1 }}>{(issue.severity || "").toUpperCase()}</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#eee" }}>{issue.title}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>{issue.description}</div>
+                  <div style={{ fontSize: 12, color: "#69F0AE" }}>→ {issue.fix}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: "16px", background: "#111", borderRadius: 10, marginBottom: 12, border: "1px solid #1e1e1e" }}>
+              <div style={{ fontSize: 11, color: app.color, letterSpacing: 2, marginBottom: 10 }}>⚡ QUICK WINS</div>
+              {(d.quickWins || []).map((w, i) => (
+                <div key={i} style={{ fontSize: 13, color: "#bbb", padding: "5px 0", borderBottom: i < (d.quickWins.length - 1) ? "1px solid #1a1a1a" : "none" }}>{i + 1}. {w}</div>
+              ))}
+            </div>
+            {d.flowRedesign && (
+              <div style={{ padding: "14px", background: "#111", borderRadius: 10, marginBottom: 8, border: "1px solid #1e1e1e" }}>
+                <div style={{ fontSize: 11, color: "#82B1FF", letterSpacing: 2, marginBottom: 6 }}>🔄 FLOW REDESIGN</div>
+                <div style={{ fontSize: 13, color: "#aaa" }}>{d.flowRedesign}</div>
+              </div>
+            )}
+            <div style={{ padding: "14px", background: "#0D1F17", borderRadius: 10, marginBottom: 8, border: "1px solid #1a3a28" }}>
+              <div style={{ fontSize: 11, color: "#69F0AE", letterSpacing: 2, marginBottom: 6 }}>🇳🇬 NIGERIA CONTEXT</div>
+              <div style={{ fontSize: 13, color: "#aaa" }}>{d.nigeriaContext}</div>
+            </div>
+            {d.nta2025Note && (
+              <div style={{ padding: "14px", background: "#1A0D25", borderRadius: 10, marginBottom: 8, border: "1px solid #3a1a50" }}>
+                <div style={{ fontSize: 11, color: "#CE93D8", letterSpacing: 2, marginBottom: 6 }}>⚖️ NTA 2025 NOTE</div>
+                <div style={{ fontSize: 13, color: "#aaa" }}>{d.nta2025Note}</div>
+              </div>
+            )}
+            <div style={{ padding: "14px", background: "#0D1525", borderRadius: 10, border: "1px solid #1a2a40" }}>
+              <div style={{ fontSize: 11, color: "#82B1FF", letterSpacing: 2, marginBottom: 6 }}>♿ ACCESSIBILITY</div>
+              <div style={{ fontSize: 13, color: "#aaa" }}>{d.accessibilityNote}</div>
+            </div>
+          </div>
+        );
+      }
+
+      function ProtoResult({ d }) {
+        return (
+          <div style={{ marginBottom: 32 }}>
+            <div style={{ fontSize: 11, letterSpacing: 3, color: "#555", textTransform: "uppercase", marginBottom: 16 }}>Wireframe Prototype</div>
+            <div style={{ padding: "20px", background: "#0A0A12", borderRadius: 12, border: "1px solid " + app.color + "33", marginBottom: 16 }}>
+              <div style={{ fontSize: 13, color: app.color, marginBottom: 12, fontWeight: 700 }}>{d.screenTitle}</div>
+              <pre style={{ fontSize: 11, color: "#aaa", lineHeight: 1.5, whiteSpace: "pre-wrap", margin: 0, background: "#050508", padding: 16, borderRadius: 8, border: "1px solid #111" }}>{d.layout}</pre>
+            </div>
+            {(d.copywriting || []).length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: "#555", letterSpacing: 2, marginBottom: 10 }}>UI COPY GUIDE</div>
+                {d.copywriting.map((c, i) => (
+                  <div key={i} style={{ display: "flex", gap: 12, padding: "10px 14px", background: "#111", borderRadius: 8, marginBottom: 6 }}>
+                    <div style={{ fontSize: 11, color: "#444", minWidth: 90 }}>{c.element}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, color: app.accent, fontWeight: 600 }}>{c.text}</div>
+                      <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{c.reason}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(d.interactions || []).length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: "#555", letterSpacing: 2, marginBottom: 10 }}>INTERACTIONS</div>
+                {d.interactions.map((ix, i) => (
+                  <div key={i} style={{ padding: "10px 14px", background: "#111", borderRadius: 8, marginBottom: 6, fontSize: 13 }}>
+                    <span style={{ color: "#666" }}>{ix.trigger}</span>
+                    <span style={{ color: "#333", margin: "0 8px" }}>→</span>
+                    <span style={{ color: "#ccc" }}>{ix.response}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(d.trustSignals || []).length > 0 && (
+              <div style={{ padding: "14px", background: "#0D1F17", borderRadius: 10, marginBottom: 8, border: "1px solid #1a3a28" }}>
+                <div style={{ fontSize: 11, color: "#69F0AE", letterSpacing: 2, marginBottom: 8 }}>🔒 TRUST SIGNALS</div>
+                {d.trustSignals.map((t, i) => <div key={i} style={{ fontSize: 13, color: "#aaa", padding: "3px 0" }}>• {t}</div>)}
+              </div>
+            )}
+            {d.loadingState && (
+              <div style={{ padding: "14px", background: "#1A1500", borderRadius: 10, border: "1px solid #3a3000" }}>
+                <div style={{ fontSize: 11, color: "#FFD600", letterSpacing: 2, marginBottom: 6 }}>📶 SLOW NETWORK</div>
+                <div style={{ fontSize: 13, color: "#aaa" }}>{d.loadingState}</div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      function FlowResult({ d }) {
+        return (
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: 3, color: "#555", textTransform: "uppercase", marginBottom: 16 }}>Redesigned Flow</div>
+            <div style={{ padding: "16px", background: "#111", borderRadius: 10, marginBottom: 16, border: "1px solid #1e1e1e" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: app.color, marginBottom: 8 }}>{d.flowName}</div>
+              <div style={{ fontSize: 13, color: "#888", marginBottom: 8 }}>{d.redesignRationale}</div>
+              <span style={{ fontSize: 12, color: "#555" }}>⏱ {d.completionTime}</span>
+            </div>
+            {(d.steps || []).map((step, i) => (
+              <div key={i} style={{ padding: "14px 16px", background: "#0d0d15", borderRadius: 10, marginBottom: 8, borderLeft: "3px solid " + app.color }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <div style={{ width: 24, height: 24, borderRadius: "50%", background: app.color, color: "#000", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 900 }}>{step.stepNumber}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#eee" }}>{step.name}</div>
+                </div>
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}><span style={{ color: "#444" }}>SEES: </span>{step.screen}</div>
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}><span style={{ color: "#444" }}>DOES: </span>{step.action}</div>
+                <div style={{ fontSize: 12, color: app.accent, marginBottom: 4 }}><span style={{ color: "#444" }}>COPY: </span>"{step.microcopy}"</div>
+                {step.errorState && <div style={{ fontSize: 12, color: "#FF6D00" }}><span style={{ color: "#444" }}>ERROR: </span>{step.errorState}</div>}
+              </div>
+            ))}
+            {(d.dropOffRisks || []).length > 0 && (
+              <div style={{ padding: "14px", background: "#1A0800", borderRadius: 10, marginBottom: 8, border: "1px solid #3a1500" }}>
+                <div style={{ fontSize: 11, color: "#FF6D00", letterSpacing: 2, marginBottom: 8 }}>⚠️ DROP-OFF RISKS</div>
+                {d.dropOffRisks.map((r, i) => <div key={i} style={{ fontSize: 13, color: "#aaa", padding: "3px 0" }}>• {r}</div>)}
+              </div>
+            )}
+            <div style={{ padding: "14px", background: "#0D1525", borderRadius: 10, border: "1px solid #1a2a40" }}>
+              <div style={{ fontSize: 11, color: "#82B1FF", letterSpacing: 2, marginBottom: 8 }}>📶 OFFLINE HANDLING</div>
+              <div style={{ fontSize: 13, color: "#aaa" }}>{d.offlineConsideration}</div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div style={s}>
+          <div style={wrap}>
+            {/* Header */}
+            <div style={{ marginBottom: 32 }}>
+              <div style={{ fontSize: 11, letterSpacing: 4, color: "#555", textTransform: "uppercase", marginBottom: 8 }}>MEGA-CONTRAFUN NIG LTD</div>
+              <h1 style={{ fontSize: 28, fontWeight: 700, background: "linear-gradient(135deg, " + app.color + ", " + app.accent + ")", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+                UX Proof Engine
+              </h1>
+              <p style={{ color: "#666", fontSize: 13, marginTop: 6 }}>Audit · Prototype · Redesign · AI Suggestions</p>
+            </div>
+
+            {/* App Toggle */}
+            <div style={{ display: "flex", gap: 12, marginBottom: 28 }}>
+              {Object.values(APPS).map(a => (
+                <button key={a.id} onClick={() => { setActiveApp(a.id); setResult(null); setSelectedScreen(""); setSelectedFlow(""); setError(""); }}
+                  style={{ flex: 1, padding: "14px 12px", borderRadius: 10, border: "1.5px solid " + (activeApp === a.id ? a.color : "#222"), background: activeApp === a.id ? a.color + "18" : "#111", color: activeApp === a.id ? a.color : "#666", cursor: "pointer", fontSize: 13, fontFamily: "inherit", fontWeight: 600, transition: "all 0.2s" }}>
+                  {a.icon} {a.name}
+                </button>
+              ))}
+            </div>
+
+            {/* Tab Bar */}
+            <div style={{ display: "flex", gap: 4, marginBottom: 24, background: "#111", borderRadius: 10, padding: 4 }}>
+              {[["audit", "🔍 Audit"], ["prototype", "📐 Prototype"], ["flow", "🔄 Flow"], ["all", "✨ All-in-One"]].map(([id, label]) => (
+                <button key={id} onClick={() => { setActiveTab(id); setResult(null); setError(""); }}
+                  style={{ flex: 1, padding: "9px 4px", borderRadius: 7, border: "none", background: activeTab === id ? app.color : "transparent", color: activeTab === id ? "#000" : "#555", cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: 600, transition: "all 0.2s" }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* Controls */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 }}>
+              {activeTab !== "flow" && (
+                <div>
+                  <label style={{ fontSize: 11, color: "#555", letterSpacing: 2, textTransform: "uppercase", display: "block", marginBottom: 6 }}>Screen</label>
+                  <select value={selectedScreen} onChange={e => setSelectedScreen(e.target.value)}
+                    style={{ width: "100%", padding: "11px 14px", borderRadius: 8, border: "1px solid #222", background: "#111", color: selectedScreen ? "#F0F0F5" : "#444", fontFamily: "inherit", fontSize: 13, outline: "none" }}>
+                    <option value="">— Select a screen —</option>
+                    {app.screens.map(sc => <option key={sc} value={sc}>{sc}</option>)}
+                  </select>
+                </div>
+              )}
+              {activeTab === "flow" && (
+                <div>
+                  <label style={{ fontSize: 11, color: "#555", letterSpacing: 2, textTransform: "uppercase", display: "block", marginBottom: 6 }}>User Flow</label>
+                  <select value={selectedFlow} onChange={e => setSelectedFlow(e.target.value)}
+                    style={{ width: "100%", padding: "11px 14px", borderRadius: 8, border: "1px solid #222", background: "#111", color: selectedFlow ? "#F0F0F5" : "#444", fontFamily: "inherit", fontSize: 13, outline: "none" }}>
+                    <option value="">— Select a flow —</option>
+                    {app.flows.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+                  </select>
+                </div>
+              )}
+              {activeTab !== "audit" && (
+                <div>
+                  <label style={{ fontSize: 11, color: "#555", letterSpacing: 2, textTransform: "uppercase", display: "block", marginBottom: 6 }}>User Type</label>
+                  <select value={selectedUser} onChange={e => setSelectedUser(e.target.value)}
+                    style={{ width: "100%", padding: "11px 14px", borderRadius: 8, border: "1px solid #222", background: "#111", color: selectedUser ? "#F0F0F5" : "#444", fontFamily: "inherit", fontSize: 13, outline: "none" }}>
+                    <option value="">— Select user type —</option>
+                    {app.userTypes.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {error && (
+              <div style={{ color: "#FF1744", fontSize: 13, marginBottom: 12, padding: "10px 14px", background: "#FF174415", borderRadius: 8, border: "1px solid #FF174433" }}>{error}</div>
+            )}
+
+            <button onClick={handleRun} disabled={loading}
+              style={{ width: "100%", padding: "15px", borderRadius: 10, border: "none", background: loading ? "#222" : "linear-gradient(135deg, " + app.color + ", " + app.accent + ")", color: loading ? "#555" : "#000", fontFamily: "inherit", fontSize: 14, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", letterSpacing: 1, transition: "all 0.3s", marginBottom: 32 }}>
+              {runLabel}
+            </button>
+
+            {result && (
+              <div>
+                {(result.type === "audit") && <AuditResult d={result.data} />}
+                {(result.type === "prototype") && <ProtoResult d={result.data} />}
+                {(result.type === "flow") && <FlowResult d={result.data} />}
+                {(result.type === "all") && (
+                  <div>
+                    <AuditResult d={result.data.audit} />
+                    <ProtoResult d={result.data.proto} />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

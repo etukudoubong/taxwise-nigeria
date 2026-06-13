@@ -9225,6 +9225,24 @@ function AuthScreen({onAuth}){
 }
 
 
+// Catch unhandled errors
+window.onerror = function(msg, src, line, col, err){
+  document.getElementById("root").innerHTML =
+    "<div style='padding:20px;font-family:monospace;font-size:12px;color:red;background:#fff;'>" +
+    "<b>Runtime Error:</b><br>" + msg + "<br><br>" +
+    "Source: " + src + "<br>" +
+    "Line: " + line + ", Col: " + col + "<br><br>" +
+    (err && err.stack ? "<pre>" + err.stack.slice(0,500) + "</pre>" : "") +
+    "</div>";
+  return true;
+};
+window.addEventListener("unhandledrejection", function(e){
+  document.getElementById("root").innerHTML =
+    "<div style='padding:20px;font-family:monospace;font-size:12px;color:red;background:#fff;'>" +
+    "<b>Unhandled Promise:</b><br>" + (e.reason?.message||e.reason||"unknown") +
+    "<br><pre>" + (e.reason?.stack||"").slice(0,400) + "</pre></div>";
+});
+
 ReactDOM.createRoot(document.getElementById("root")).render(
   <><App/><InstallBanner/></>
 );

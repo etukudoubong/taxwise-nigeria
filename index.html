@@ -4501,12 +4501,22 @@ function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,
 }
 
 function TaxSummaryScreen({txns,profile,onNav,onBack}){
-  const agg=computeAggregates(txns,profile);
   const isCompany=profile.mode==="company";
   const flags=txns.filter(t=>{const r=classifyTxn(t.desc,t.type);return r.compliance_required&&t.compliance_status!=="done"&&t.compliance_status!=="waived";});
   const today=new Date().toISOString().split("T")[0];
-  const period=new Date().toLocaleDateString("en-NG",{month:"long",year:"numeric"});
   const entity=profile.companyName||profile.name||"Taxpayer";
+
+  // ── Year picker ────────────────────────────────────────────────────────────
+  const allYears=[...new Set(txns.map(t=>(t.date||"").slice(0,4)).filter(y=>y>="2020"))].sort().reverse();
+  const currentYear=new Date().getFullYear().toString();
+  const [selYear, setSelYear]=useState(allYears[0]||currentYear);
+  const yearTxns=selYear==="all"?txns:txns.filter(t=>(t.date||"").startsWith(selYear));
+  const agg=computeAggregates(yearTxns,profile);
+  const period=selYear==="all"?"All Years":selYear;
+
+  // Category context — needed throughout including in downloadAnnualPDF
+  const cat=profile.empCategory||"A";
+  const isCatCD=cat==="C"||cat==="D";
 
   function buildCSV(key, lines){
     const META={
@@ -4582,6 +4592,91 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
     URL.revokeObjectURL(url);
   }
 
+  function downloadAnnualPDF(){
+    const yearLabel = selYear==="all"?"All Years":selYear;
+    const isCatCD = ["C","D"].includes(profile.empCategory||"A");
+    const catName = isCompany?"Company":{"A":"Category A","B":"Category B","C":"Category C","D":"Category D"}[profile.empCategory||"A"];
+    const html=`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<title>TaxWise Annual Tax Report ${yearLabel}<\/title>
+<style>
+  body{font-family:Arial,sans-serif;font-size:12px;color:#1a1a1a;margin:0;padding:20px}
+  h1{color:#0B1628;font-size:18px;margin-bottom:4px}
+  h2{color:#1E3A5F;font-size:13px;margin:16px 0 6px;border-bottom:1px solid #e2e8f0;padding-bottom:4px}
+  .meta{font-size:11px;color:#64748B;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse;margin-bottom:12px}
+  th{background:#0B1628;color:#fff;padding:6px 8px;text-align:left;font-size:11px}
+  td{padding:5px 8px;border-bottom:1px solid #f1f5f9;font-size:11px}
+  tr:nth-child(even) td{background:#f8fafc}
+  .total td{font-weight:700;background:#EFF6FF;border-top:2px solid #0B1628}
+  .amt{text-align:right;font-family:monospace}
+  .green{color:#059669}.red{color:#DC2626}.blue{color:#1D4ED8}
+  .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700}
+  .footer{margin-top:24px;font-size:10px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:8px}
+<\/style><\/head><body>
+<h1>TaxWise Nigeria — Annual Tax Report<\/h1>
+<div class="meta">
+  <strong>Entity:<\/strong> ${entity} &nbsp;|&nbsp;
+  <strong>Tax Year:<\/strong> ${yearLabel} &nbsp;|&nbsp;
+  <strong>Type:<\/strong> ${catName} &nbsp;|&nbsp;
+  <strong>TIN:<\/strong> ${profile.tin||"Not set"} &nbsp;|&nbsp;
+  <strong>Generated:<\/strong> ${today}
+<\/div>
+
+<h2>INCOME SUMMARY<\/h2>
+<table><tr><th>Description<\/th><th class="amt">Amount (₦)<\/th><\/tr>
+<tr><td>Total Income<\/td><td class="amt green">${fmt(agg.income)}<\/td><\/tr>
+<tr><td>${isCatCD||isCompany?"Allowable Business Expenses":"Total Expenses"}<\/td><td class="amt red">-${fmt(isCatCD||isCompany?agg.allowableExpenses:agg.expenses)}<\/td><\/tr>
+<tr class="total"><td>${isCompany?"Taxable Profit (before CA)":"Net Income"}<\/td><td class="amt blue">${fmt(agg.income-(isCatCD||isCompany?agg.allowableExpenses:agg.expenses))}<\/td><\/tr>
+<\/table>
+
+<h2>WITHHOLDING TAX — NTA 2025 Ch.Two Pt.IV<\/h2>
+<table><tr><th>Head<\/th><th class="amt">Amount (₦)<\/th><\/tr>
+${(isCatCD||isCompany)?`<tr><td>WHT Deducted & Remittable<\/td><td class="amt red">${fmt(agg.whtOut)}<\/td><\/tr>`:""}
+<tr><td>WHT Credits (deducted from your income)<\/td><td class="amt green">${fmt(agg.whtIn)}<\/td><\/tr>
+<\/table>
+
+<h2>PAYE — TAA 2025 Sec 13<\/h2>
+<table><tr><th>Head<\/th><th class="amt">Amount (₦)<\/th><\/tr>
+${isCompany?`<tr><td>PAYE to Remit (staff salaries)<\/td><td class="amt red">${fmt(agg.payeOut)}<\/td><\/tr>`:
+  (profile.empCategory==="A"||profile.empCategory==="D")?`<tr><td>PAYE Credit (employer deducted)<\/td><td class="amt green">${fmt(agg.payeIn)}<\/td><\/tr>`:
+  `<tr><td>PAYE not applicable (${catName})<\/td><td class="amt">N/A<\/td><\/tr>`}
+<\/table>
+
+<h2>VALUE ADDED TAX — NTA 2025 Ch.Four<\/h2>
+<table><tr><th>Head<\/th><th class="amt">Amount (₦)<\/th><\/tr>
+<tr><td>Output VAT<\/td><td class="amt red">${fmt(agg.vatOut)}<\/td><\/tr>
+<tr><td>Input VAT (deductible)<\/td><td class="amt green">-${fmt(agg.vatIn)}<\/td><\/tr>
+<tr class="total"><td>NET VAT PAYABLE<\/td><td class="amt ${agg.vatPayable>0?"red":"green"}">${fmt(agg.vatPayable)}<\/td><\/tr>
+<\/table>
+
+${isCompany?`<h2>COMPANY INCOME TAX — NTA 2025 Ch.Two Pt.I<\/h2>
+<table><tr><th>Head<\/th><th class="amt">Amount (₦)<\/th><\/tr>
+<tr><td>Estimated CIT (30% of taxable profit)<\/td><td class="amt red">${fmt(agg.estCIT)}<\/td><\/tr>
+<\/table>`:`<h2>PERSONAL INCOME TAX — NTA 2025 Ch.Two Pt.II<\/h2>
+<table><tr><th>Head<\/th><th class="amt">Amount (₦)<\/th><\/tr>
+<tr><td>Estimated PIT Liability (after credits)<\/td><td class="amt red">${fmt(agg.estPIT)}<\/td><\/tr>
+<\/table>`}
+
+<h2>TRANSACTION SUMMARY (${yearTxns.length} transactions)<\/h2>
+<table><tr><th>Date<\/th><th>Description<\/th><th>Type<\/th><th class="amt">Amount (₦)<\/th><\/tr>
+${yearTxns.slice(0,50).map(t=>`<tr>
+  <td>${t.date||""}<\/td>
+  <td>${(t.desc||"").slice(0,50)}<\/td>
+  <td>${t.type||""}<\/td>
+  <td class="amt ${t.type==="income"?"green":"red"}">${fmt(t.amount)}<\/td>
+<\/tr>`).join("")}
+${yearTxns.length>50?`<tr><td colspan="4" style="text-align:center;color:#94a3b8;font-style:italic">... and ${yearTxns.length-50} more transactions<\/td><\/tr>`:""}
+<\/table>
+
+<div class="footer">
+  Generated by TaxWise Nigeria · Nigeria Tax Act 2025 (No.3) · Tax Administration Act 2025 (No.5)<br>
+  This report is for informational purposes. Consult a registered tax consultant for official filings.
+<\/div>
+<\/body><\/html>`;
+    const w=window.open("","_blank");
+    if(w){w.document.write(html);w.document.close();w.print();}
+  }
+
   const TaxRow=({label,taxAmount,grossAmount,schedKey,color,note,total})=>(
     <div style={{
       display:"flex",justifyContent:"space-between",alignItems:"flex-start",
@@ -4646,8 +4741,6 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
   };
 
   // Category-aware totals and labels
-  const cat = profile.empCategory||"A";
-  const isCatCD = cat==="C"||cat==="D";
 
   // Total obligations depend on category
   const totalDue = isCompany
@@ -4723,6 +4816,41 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
             border:"1px solid rgba(255,255,255,.3)",borderRadius:9,color:"#fff",
             fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
           ⬇ Download All Schedules (Combined CSV)
+        </button>
+      </div>
+
+      {/* ── Year picker + Filing actions ── */}
+      <div style={{background:"#F8FAFC",borderBottom:"1px solid #E2E8F0",padding:"10px 12px",
+        display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.slate,flexShrink:0}}>TAX YEAR:</div>
+        <select value={selYear} onChange={e=>setSelYear(e.target.value)}
+          style={{flex:1,minWidth:80,padding:"6px 8px",borderRadius:8,border:`1px solid ${C.border}`,
+            fontSize:12,fontWeight:700,color:C.ink,background:"#fff",fontFamily:"inherit"}}>
+          {allYears.length===0&&<option value={currentYear}>{currentYear}</option>}
+          {allYears.map(y=><option key={y} value={y}>{y}</option>)}
+          <option value="all">All Years</option>
+        </select>
+        <button onClick={downloadAnnualPDF}
+          style={{padding:"6px 10px",background:"#F5F3FF",border:"1px solid #DDD6FE",
+            borderRadius:8,color:"#7C3AED",fontSize:11,fontWeight:700,
+            cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+          📄 Annual PDF
+        </button>
+        <button onClick={downloadAll}
+          style={{padding:"6px 10px",background:"#F0FDF4",border:"1px solid #BBF7D0",
+            borderRadius:8,color:"#059669",fontSize:11,fontWeight:700,
+            cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+          ⬇ CSV All
+        </button>
+        <button onClick={()=>{
+            const url=isCompany
+              ?"https://taxpro.firs.gov.ng":"https://etax.ogun.gov.ng";
+            window.open(url,"_blank");
+          }}
+          style={{padding:"6px 10px",background:C.blueLight,border:`1px solid ${C.blueBorder}`,
+            borderRadius:8,color:C.blue,fontSize:11,fontWeight:700,
+            cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+          🏛 File Return
         </button>
       </div>
 

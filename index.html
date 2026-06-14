@@ -7306,7 +7306,135 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     let txnList = []; // hoisted — populated by PDF or image path below
 
     if(isPDF && window.pdfjsLib){
-      setProgress("Reading PDF…");
+      setProgress("Reading PDF — trying direct text extraction…");
+
+      // ── STEP 1: Try direct text extraction (no AI cost, no limit) ──────────
+      // Works for digitally-generated PDFs (Moniepoint, GTBank, Access, Zenith etc.)
+      // Falls back to AI vision for scanned/image PDFs
+      let directTxns = [];
+      try {
+        const ab = await file.arrayBuffer();
+        const pdfDoc = await window.pdfjsLib.getDocument({data: ab, disableFontFace:true}).promise;
+        let fullText = "";
+        for(let p = 1; p <= pdfDoc.numPages; p++){
+          const page = await pdfDoc.getPage(p);
+          const tc = await page.getTextContent();
+          // Collect text items with their y-position for row grouping
+          const items = tc.items.map(item => ({
+            str: item.str,
+            x: Math.round(item.transform[4]),
+            y: Math.round(item.transform[5]),
+          }));
+          // Group items by y-position (same row = same y within 3px)
+          const rows = {};
+          items.forEach(item => {
+            const yk = Math.round(item.y / 4) * 4;
+            if(!rows[yk]) rows[yk] = [];
+            rows[yk].push(item);
+          });
+          // Sort rows top-to-bottom (descending y in PDF coords), items left-to-right
+          const sortedRows = Object.entries(rows)
+            .sort((a,b) => b[0]-a[0])
+            .map(([y, items]) => items.sort((a,b)=>a.x-b.x).map(i=>i.str).join(" ").trim())
+            .filter(r=>r.length>0);
+          fullText += sortedRows.join("
+") + "
+";
+        }
+
+        // Parse Moniepoint / standard Nigerian bank statement text
+        // Pattern: date | narration | reference | debit | credit | balance
+        // Moniepoint date format: 2025-11-12T08:48:27 or similar
+        const lines = fullText.split("
+").map(l=>l.trim()).filter(l=>l);
+        const dateRe = /^(\d{4}-\d{2}-\d{2})[T\s]/;
+        const amountRe = /^[\d,]+\.\d{2}$/;
+
+        let i = 0;
+        while(i < lines.length){
+          const line = lines[i];
+          const dm = line.match(dateRe);
+          if(dm){
+            const date = dm[1];
+            // Collect narration lines until we find debit/credit amounts
+            let narrationParts = [];
+            let debit = 0, credit = 0;
+            let j = i + 1;
+            while(j < lines.length && j < i + 8){
+              const l2 = lines[j];
+              // Check for amount pattern
+              const nums = l2.split(/\s+/).filter(s=>amountRe.test(s.replace(/,/g,"")));
+              if(nums.length >= 2){
+                // Found debit credit balance line
+                const vals = nums.map(n=>parseFloat(n.replace(/,/g,"")));
+                if(vals.length >= 3){
+                  debit = vals[0]; credit = vals[1];
+                } else if(vals.length === 2){
+                  debit = vals[0]; credit = vals[1];
+                }
+                break;
+              }
+              // Skip date-only lines and reference-only lines
+              if(!dateRe.test(l2) && !l2.match(/^[A-Z]{3}\|/)){
+                narrationParts.push(l2);
+              }
+              j++;
+            }
+            i = j + 1;
+            const amount = debit > 0 ? debit : credit;
+            const desc = narrationParts.join(" ").replace(/\s+/g," ").trim().slice(0,100);
+            if(amount > 0 && desc.length > 2){
+              directTxns.push({
+                date,
+                desc,
+                amount,
+                type: credit > 0 ? "income" : "expense",
+                category: "other",
+                taxAllowable: true,
+                confidence: "high",
+                vatFlag: /vat/i.test(desc),
+                whtFlag: /wht|withholding/i.test(desc),
+              });
+            }
+          } else {
+            i++;
+          }
+        }
+
+        if(directTxns.length > 0){
+          setProgress("Found " + directTxns.length + " transactions via text extraction ✓");
+          txnList = directTxns;
+          // Apply date range filter
+          if(dateFrom||dateTo){
+            const fromDT=dateFrom?new Date(dateFrom):null, toDT=dateTo?new Date(dateTo):null;
+            txnList=txnList.filter(t=>{ const d=new Date(t.date||""); if(isNaN(d.getTime())) return true; if(fromDT&&d<fromDT) return false; if(toDT&&d>toDT) return false; return true; });
+          }
+          // Skip AI path
+          const formatted2 = txnList.map((t,i)=>({
+            id:`pdf_txt_${Date.now()}_${i}`,
+            date:t.date, desc:t.desc||"Transaction",
+            amount:Math.abs(parseFloat(t.amount)||0),
+            type:t.type==="income"?"income":"expense",
+            source:"import", compliance_status:"pending",
+            taxAllowable:t.taxAllowable!==false,
+            included:Math.abs(parseFloat(t.amount)||0)>0,
+            confidence:t.confidence||"high",
+            vatFlag:!!t.vatFlag, whtFlag:!!t.whtFlag,
+          })).filter(t=>t.amount>0);
+          if(formatted2.length>0){
+            const rulesApplied3 = applyImportRules(formatted2, ownAccounts, importRules);
+            setPreview(rulesApplied3);
+            setMode("map");
+            setProcessing(false);
+            return;
+          }
+        }
+      } catch(textErr){
+        console.log("Text extraction failed, falling back to AI:", textErr.message);
+      }
+
+      // ── STEP 2: Fall back to AI vision for scanned/image PDFs ──────────────
+      setProgress("Text extraction found no transactions — using AI vision…");
       let images;
       try {
         images = await pdfToImages(file, (pageNum, total) => {

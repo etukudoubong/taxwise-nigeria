@@ -1460,7 +1460,13 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
 
   if(editTxn) return <TxnEditScreen txn={editTxn} onSave={onSaveEdit} onDelete={onDeleteTxn} onBack={()=>setEditTxn(null)}/>;
 
-  const filtered=filter==="all"?txns:filter==="kiv"?[]:filter==="cgt"?txns.filter(t=>classifyTxn(t.desc,t.type).head==="CGT-EVENT"):txns.filter(t=>t.type===filter||classifyTxn(t.desc,t.type).head.toLowerCase().includes(filter));
+  const excludedTxns = txns.filter(t=>t.compliance_status==="excluded");
+  const activeTxns = txns.filter(t=>t.compliance_status!=="excluded");
+  const filtered = filter==="excluded" ? [] :
+    filter==="all" ? activeTxns :
+    filter==="kiv" ? [] :
+    filter==="cgt" ? activeTxns.filter(t=>classifyTxn(t.desc,t.type).head==="CGT-EVENT") :
+    activeTxns.filter(t=>t.type===filter||classifyTxn(t.desc,t.type).head.toLowerCase().includes(filter));
 
   return(
     <div style={{paddingBottom:80}}>
@@ -1534,18 +1540,142 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
       )}
 
       <div className="tabs" style={{padding:"10px 12px 0"}}>
-        {["all","income","expense","vat","wht","paye","cgt","kiv"].map(f=>(
-          <button key={f} className="tab" onClick={()=>setFilter(f)} style={{
-            background:filter===f?C.blue:"#fff",color:filter===f?"#fff":C.slate,
-            borderColor:filter===f?C.blue:C.border,
-          }}>
-            {f==="kiv"?`⏸ KIV${kivTxns&&kivTxns.length>0?` (${kivTxns.length})`:""}`:f==="cgt"?"📊 CGT":f.toUpperCase()}
-          </button>
-        ))}
+        {["all","income","expense","vat","wht","paye","cgt","kiv","excluded"].map(f=>{
+          const excCount = txns.filter(t=>t.compliance_status==="excluded").length;
+          return(
+            <button key={f} className="tab" onClick={()=>setFilter(f)} style={{
+              background:filter===f?(f==="excluded"?"#DC2626":C.blue):"#fff",
+              color:filter===f?"#fff":f==="excluded"?"#DC2626":C.slate,
+              borderColor:filter===f?(f==="excluded"?"#DC2626":C.blue):f==="excluded"?"#FCA5A5":C.border,
+            }}>
+              {f==="kiv"?`⏸ KIV${kivTxns&&kivTxns.length>0?` (${kivTxns.length})`:""}`
+               :f==="cgt"?"📊 CGT"
+               :f==="excluded"?`✗ Excluded${excCount>0?` (${excCount})`:""}`
+               :f.toUpperCase()}
+            </button>
+          );
+        })}
       </div>
 
       <div className="pad" style={{paddingTop:10}}>
-        {filter==="kiv"?(
+        {filter==="excluded"?(
+          excludedTxns.length===0?(
+            <div style={{textAlign:"center",padding:"48px 20px",color:C.muted}}>
+              <div style={{fontSize:40,marginBottom:12}}>✓</div>
+              <div style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:6}}>No excluded transactions</div>
+              <div style={{fontSize:13}}>All imported transactions are included in your journal.</div>
+            </div>
+          ):(
+            <>
+              <div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:12,
+                padding:"12px 14px",marginBottom:12}}>
+                <div style={{fontSize:13,fontWeight:700,color:"#DC2626",marginBottom:4}}>
+                  ✗ {excludedTxns.length} Excluded Transaction{excludedTxns.length!==1?"s":""}
+                </div>
+                <div style={{fontSize:12,color:"#7F1D1D",lineHeight:1.6}}>
+                  These transactions were excluded from your tax computation during import
+                  based on NTA 2025 classification rules. They are retained here for
+                  reference and audit purposes. You can reinstate any transaction if you
+                  believe the classification is incorrect.
+                </div>
+              </div>
+
+              {(()=>{
+                // Group by reason/taxStream
+                const groups = {};
+                excludedTxns.forEach(t=>{
+                  const key = t.taxStream||t.autoRule||"other";
+                  if(!groups[key]) groups[key]=[];
+                  groups[key].push(t);
+                });
+
+                const groupMeta = {
+                  drawings:    {label:"Owner Drawings / Personal Withdrawals", icon:"💸", color:"#DC2626", bg:"#FEF2F2", border:"#FECACA",
+                    reason:"Drawings are a withdrawal of capital by the owner, not a business expense. Not deductible under NTA 2025 S.20 (wholly-and-exclusively test)."},
+                  personal:    {label:"Personal Expenditure", icon:"🏠", color:"#92400E", bg:"#FFFBEB", border:"#FDE68A",
+                    reason:"Personal expenses fail the wholly-and-exclusively-for-business test under NTA 2025 S.20(2). Only expenses incurred for the purpose of the trade are deductible."},
+                  stamp_duty:  {label:"Stamp Duty / Government Levies", icon:"🏛", color:"#1E40AF", bg:"#EFF6FF", border:"#BFDBFE",
+                    reason:"Stamp Duty is a statutory government levy, not a business expense. Non-deductible for all taxpayers under the Stamp Duties Act and Finance Act 2020."},
+                  loan:        {label:"Loan Receipts / Capital Transfers", icon:"🏦", color:"#166534", bg:"#F0FDF4", border:"#BBF7D0",
+                    reason:"Loan receipts are a liability, not income. They do not form part of taxable revenue under NTA 2025. Loan principal repayments are balance sheet movements, not deductible expenses."},
+                  employment:  {label:"Employment Income (PAYE)", icon:"💼", color:"#5B21B6", bg:"#F5F3FF", border:"#DDD6FE",
+                    reason:"Salary income is taxed via PAYE at source by your employer (Cat A). It is not re-taxed as part of your self-assessment return to avoid double taxation."},
+                  bank_charge: {label:"Non-Deductible Bank Charges", icon:"🏧", color:"#374151", bg:"#F9FAFB", border:"#E5E7EB",
+                    reason:"Bank charges on personal accounts fail the wholly-and-exclusively test. For individuals, account maintenance fees, SMS charges, and transfer fees are personal overhead costs, not deductible business expenses."},
+                };
+
+                return Object.entries(groups).map(([key, txnGroup])=>{
+                  const meta = groupMeta[key]||{
+                    label: key.replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase()),
+                    icon:"📋", color:C.slate, bg:C.slate+"10", border:C.border,
+                    reason: txnGroup[0]?.autoRule||"Excluded during import based on tax classification rules.",
+                  };
+                  const groupTotal = txnGroup.reduce((s,t)=>s+t.amount,0);
+                  return(
+                    <div key={key} style={{marginBottom:16}}>
+                      <div style={{background:meta.bg,border:`1px solid ${meta.border}`,
+                        borderRadius:12,padding:"12px 14px",marginBottom:8}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                            <span style={{fontSize:18}}>{meta.icon}</span>
+                            <div style={{fontSize:13,fontWeight:700,color:meta.color}}>{meta.label}</div>
+                          </div>
+                          <div style={{fontSize:12,fontWeight:700,color:meta.color,flexShrink:0}}>
+                            {txnGroup.length} item{txnGroup.length!==1?"s":""} · {fmt(groupTotal)}
+                          </div>
+                        </div>
+                        <div style={{fontSize:11,color:meta.color,opacity:.8,lineHeight:1.6,
+                          padding:"8px 10px",background:"rgba(0,0,0,.04)",borderRadius:8}}>
+                          <strong>Why excluded:</strong> {meta.reason}
+                        </div>
+                      </div>
+
+                      {txnGroup.map(t=>(
+                        <div key={t.id} style={{background:"#fff",border:`1px solid ${C.border}`,
+                          borderRadius:10,padding:"10px 12px",marginBottom:6,
+                          display:"flex",gap:10,alignItems:"flex-start",opacity:.8}}>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:12,fontWeight:600,color:C.ink,marginBottom:3,lineHeight:1.3}}>{t.desc}</div>
+                            <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                              <span style={{fontSize:10,color:C.muted}}>{t.date}</span>
+                              <span style={{fontSize:12,fontWeight:700,
+                                color:t.type==="income"?C.green:C.red}}>
+                                {t.type==="income"?"+":"-"}{fmt(t.amount)}
+                              </span>
+                              {t.autoRule&&(
+                                <span style={{fontSize:9,background:"#F1F5F9",color:C.slate,
+                                  padding:"2px 7px",borderRadius:100,fontWeight:600}}>
+                                  {t.autoRule.slice(0,50)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            onClick={()=>{
+                              setTxns(prev=>prev.map(x=>x.id===t.id
+                                ?{...x,compliance_status:"pending",included:true,taxAllowable:true}
+                                :x
+                              ));
+                            }}
+                            style={{flexShrink:0,padding:"6px 10px",background:C.greenBg,
+                              border:`1px solid ${C.green}40`,borderRadius:8,
+                              color:C.green,fontSize:10,fontWeight:700,cursor:"pointer",
+                              fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                            Reinstate
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                });
+              })()}
+
+              <div style={{textAlign:"center",padding:"12px 0",fontSize:11,color:C.muted}}>
+                Reinstated transactions move to your active journal and are included in tax computations.
+              </div>
+            </>
+          )
+        ):filter==="kiv"?(
           kivTxns&&kivTxns.length>0?(
             <>
               <div className="ibox amber">
@@ -5686,8 +5816,15 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
   };
 
   const postSelected = () => {
-    const toPost = preview.filter(t=>t.included).map(({taxAllowable,...t})=>t);
-    setTxns([...txns,...toPost]);
+    // Post included transactions normally
+    const toPost = preview.filter(t=>t.included).map(t=>({...t}));
+    // Also post excluded/non-allowable transactions as "excluded" for reference
+    const excluded = preview.filter(t=>!t.included&&t.amount>0).map(t=>({
+      ...t,
+      compliance_status:"excluded",
+      included:false,
+    }));
+    setTxns([...txns,...toPost,...excluded]);
     setMode("done");
   };
 
@@ -6428,8 +6565,13 @@ Return ONLY the JSON array, no other text or markdown.`;
       imported: false,
       eligibility: "passed",
     }));
+    // Also post excluded transactions for reference/review
+    const excluded = extracted.filter(t=>!t.included&&t.amount>0&&t.type!=="asset").map(t=>({
+      ...t, compliance_status:"excluded", included:false,
+    }));
 
     if(toJournal.length>0) setTxns([...txns,...toJournal]);
+    if(excluded.length>0) setTxns(prev=>[...prev,...excluded]);
     if(toAssets.length>0 && setAssets) setAssets([...(assets||[]),...toAssets]);
     setMode("done");
   };

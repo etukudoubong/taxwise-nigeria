@@ -498,6 +498,9 @@ function computePIT(p){
   const _erip = p.employerRentInPAYE||"";
   const _applyRent = rentPaid>0 && _erip!=="yes" && _erip!=="unsure";
   const rentRelief = _applyRent ? Math.min(rentPaid*.2, 500000) : 0;
+  // Enforce: Cat B/C/D cannot claim employer pension — only self-contributed pension counts
+  // pensionAnnual in calculator is the user-entered value so it's already explicit
+  // No additional override needed here — calculator uses explicit user input
   const pensionDeduction  = pensionAnnual>0 ? pensionAnnual : annual*.08;
   const nhfDeduction      = nhfAnnual;
   const nhisDeduction     = nhisAnnual;
@@ -917,10 +920,15 @@ function computeAggregates(txns, profile){
     const gross = income;
     const businessDeductions = isCatCD ? allowableExpenses : 0;
     const netIncome = Math.max(0, gross - businessDeductions);
-    // Pension relief: allowed only if employer deducts OR employee self-contributed
-    // NTA 2025 S.30(2)(a)(iii); PRA 2014 S.11 — contribution must actually be made
-    const empDed   = profile?.employerDeductions || {};
-    const selfCont = profile?.selfContributions  || {};
+    // Pension relief: allowed only if contribution actually made
+    // NTA 2025 S.30(2)(a)(iii); PRA 2014 S.11
+    // IMPORTANT: Cat B employer NEVER deducts anything — override stale stored values
+    const empDed_raw = profile?.employerDeductions || {};
+    const selfCont   = profile?.selfContributions  || {};
+    // For Cat B/C/D: employer deductions are always zero regardless of what is stored
+    const empDed = (cat==="B"||cat==="C"||cat==="D")
+      ? {paye:false, pension:false, nhf:false, nhis:false}
+      : empDed_raw;
     const pensionAllowed = empDed.pension || selfCont.pension;
     const nhfAllowed     = empDed.nhf     || selfCont.nhf;
     const nhisAllowed    = empDed.nhis    || selfCont.nhis;
@@ -1684,8 +1692,12 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   const _allowExp  = (isCatCD||isCompany) ? (agg.allowableExpenses||0) : 0;
   const _netIncome = Math.max(0, _gross - _allowExp);
   // Statutory relief deductions — only if actually contributed (NTA 2025 S.30(2)(a))
-  const _empDed   = profile.employerDeductions || {};
-  const _selfCont = profile.selfContributions  || {};
+  // Cat B/C/D: employer never deducts — override stale stored values
+  const _empDed_raw = profile.employerDeductions || {};
+  const _selfCont   = profile.selfContributions  || {};
+  const _empDed = (cat==="B"||cat==="C"||cat==="D")
+    ? {paye:false, pension:false, nhf:false, nhis:false}
+    : _empDed_raw;
   const _pensionOK = _empDed.pension || _selfCont.pension;
   const _nhfOK     = _empDed.nhf     || _selfCont.nhf;
   const _pension   = _pensionOK ? Math.round(_gross * 0.08)  : 0; // S.30(2)(a)(iii)
@@ -1715,9 +1727,10 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
     {label:"Less: Pension Contribution (8%)",
      value:-_pension,
      note:_pensionOK
-       ?(_empDed.pension?"Deducted by employer (PRA 2014 S.11) — NTA 2025 S.30(2)(a)(iii)"
-        :"Self-contributed to PFA — NTA 2025 S.30(2)(a)(iii). Keep PFA statement as evidence.")
-       :"NOT DEDUCTED — neither employer nor employee contributed. No deduction allowed (NTA 2025 S.30(2)(a)(iii); contributions must actually be made)."},
+       ?(_empDed.pension
+          ?"Employer deducts 8% employee pension (PRA 2014 S.11) — NTA 2025 S.30(2)(a)(iii)"
+          :"Self-contributed to licensed PFA — NTA 2025 S.30(2)(a)(iii). Evidence: PFA annual contribution statement.")
+       :"No pension contribution made (employer or employee). No deduction allowed — NTA 2025 S.30(2)(a)(iii) requires actual contribution. Consider contributing directly to a PFA to claim this relief."},
     {label:"Less: NHF Contribution (2.5%)",
      value:-_nhf,
      note:_nhfOK

@@ -2468,18 +2468,48 @@ function CITScreen({profile, txns, assets, onBack}){
   const turnover = computeTurnover(txns);
   const totalCA = assets.reduce((s,a)=>s+computeAssetCA(a).annual,0);
 
+  // Category-aware expense computation
+  // For Cat C/D: only allowable expenses reduce taxable income
+  // For companies: all business expenses deductible
+  const isCatCD = profile.empCategory==="C"||profile.empCategory==="D";
+  const isCompanyMode = profile.mode==="company";
+  const allowableExpenses = (isCatCD||isCompanyMode)
+    ? txns.filter(t=>t.type==="expense"&&t.taxAllowable!==false&&t.compliance_status!=="kiv").reduce((s,t)=>s+t.amount,0)
+    : agg.expenses;
+
   const [override, setOverride] = useState(false);
   const [f, setF] = useState({
     turnover:      Math.round(turnover),
     cogs:          0,
-    opex:          Math.round(agg.expenses),
+    opex:          Math.round(allowableExpenses),
     otherIncome:   0,
-    depreciation:  0,          // accounting depreciation to add back
+    depreciation:  0,
     ca:            Math.round(totalCA),
     whtCredit:     Math.round(agg.whtIn),
     prevLoss:      0,
     taxYear:       new Date().getFullYear(),
   });
+
+  // Recompute when profile category or transactions change
+  useEffect(()=>{
+    if(!override){
+      const newTurnover = computeTurnover(txns);
+      const newAgg = computeAggregates(txns);
+      const newCA = assets.reduce((s,a)=>s+computeAssetCA(a).annual,0);
+      const newCatCD = profile.empCategory==="C"||profile.empCategory==="D";
+      const newIsCompany = profile.mode==="company";
+      const newAllowable = (newCatCD||newIsCompany)
+        ? txns.filter(t=>t.type==="expense"&&t.taxAllowable!==false&&t.compliance_status!=="kiv").reduce((s,t)=>s+t.amount,0)
+        : newAgg.expenses;
+      setF(prev=>({
+        ...prev,
+        turnover: Math.round(newTurnover),
+        opex:     Math.round(newAllowable),
+        ca:       Math.round(newCA),
+        whtCredit:Math.round(newAgg.whtIn),
+      }));
+    }
+  },[profile.empCategory, profile.mode, txns, assets, override]);
   const set = (k,v) => setF(p=>({...p,[k]:v}));
 
   const grossProfit   = f.turnover - f.cogs;
@@ -3142,6 +3172,9 @@ function CGTPanel({cgtData,setCgtData}){
 function CalculateScreen({profile,onBack}){
   const[tab,setTab]=useState("pit");
   const[pitData,setPitData]=useState({monthlyIncome:0,payeDeducted:0,otherIncome:0,rentPaid:0,nhfAnnual:0,nhisAnnual:0,pensionAnnual:0,lifeInsAnnual:0,housingLoanInterest:0,category:profile.empCategory||"A"});
+  useEffect(()=>{
+    setPitData(p=>({...p, category:profile.empCategory||"A"}));
+  },[profile.empCategory]);
   const[whtData,setWhtData]=useState({amount:200000,type:"professional"});
   const[vatData,setVatData]=useState({amount:500000,tier:"standard"});
   const[penData,setPenData]=useState({tax:500000,days:30});
@@ -4590,7 +4623,33 @@ function App(){
           editMode={true}
           initialData={{...profile}}
           onComplete={p=>{
-            if(p){ setProfile({...profile,...p,onboarded:true}); }
+            if(p){
+              const newProfile = {...profile,...p,onboarded:true};
+              setProfile(newProfile);
+              // Reclassify existing transactions if taxpayer category changed
+              if(p.empCategory && p.empCategory !== profile.empCategory){
+                const newCat = p.empCategory;
+                const isCompany = newProfile.mode === "company";
+                setTxns(prev => prev.map(t => {
+                  // Reset taxAllowable based on new category
+                  // Drawings/personal are always non-deductible
+                  if(t.taxStream === "drawings" || t.taxStream === "personal") return t;
+                  // For Cat A/B (employees) — expenses are not deductible
+                  if((newCat === "A" || newCat === "B") && t.type === "expense" && !isCompany){
+                    return {...t, taxAllowable: false};
+                  }
+                  // For Cat C/D (self-employed/mixed) — expenses may be deductible
+                  // Re-run smart flags on transactions that were auto-classified
+                  if((newCat === "C" || newCat === "D") && t.type === "expense"){
+                    // If it was non-deductible only because of old category, make it pending review
+                    if(t.autoRule && t.autoRule.includes("not deductible for employed")){
+                      return {...t, taxAllowable: true, autoRule: "Re-classified: check deductibility for "+newCat};
+                    }
+                  }
+                  return t;
+                }));
+              }
+            }
             setScreen("profile");
           }}
         />;

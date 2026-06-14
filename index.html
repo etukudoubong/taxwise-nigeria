@@ -3967,19 +3967,31 @@ function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
         <div className="card">
           <div className="ctitle">ADD AN ACCOUNT</div>
           <div className="fg">
-            <label className="lbl">BANK NAME</label>
+            <label className="lbl">BANK NAME — for display only</label>
             <select className="sel" value={form.bankName} onChange={e=>set("bankName",e.target.value)}>
               <option value="">— Select bank —</option>
               {NIGERIAN_BANKS.map(b=><option key={b} value={b}>{b}</option>)}
             </select>
+            <div style={{fontSize:10,color:C.muted,marginTop:3}}>
+              Bank name is stored for reference — it is NOT used to match transactions
+              (would incorrectly exclude unrelated transactions at the same bank).
+            </div>
           </div>
           <div className="fg">
-            <label className="lbl">ACCOUNT NAME (as it appears in narrations)</label>
+            <label className="lbl">ACCOUNT NAME — used for matching ✓</label>
             <input className="inp" placeholder="e.g. ADAEZE OKONKWO or SUNSHINE VENTURES LTD" value={form.accountName} onChange={e=>set("accountName",e.target.value)}/>
+            <div style={{fontSize:10,color:C.muted,marginTop:3}}>
+              Enter the name exactly as it appears in transfer narrations. Minimum 5 characters.
+              Transactions referencing this name will be treated as own-account transfers.
+            </div>
           </div>
           <div className="fg">
-            <label className="lbl">ACCOUNT NUMBER (last 4-10 digits is fine)</label>
-            <input className="inp" placeholder="e.g. 0123456789 or last 4 digits 6789" value={form.accountNumber} onChange={e=>set("accountNumber",e.target.value)} type="text" inputMode="numeric"/>
+            <label className="lbl">ACCOUNT NUMBER — used for matching ✓</label>
+            <input className="inp" placeholder="e.g. 0123456789" value={form.accountNumber} onChange={e=>set("accountNumber",e.target.value)} type="text" inputMode="numeric"/>
+            <div style={{fontSize:10,color:C.muted,marginTop:3}}>
+              10-digit NUBAN number. Most bank statement narrations include the account number
+              in transfers — this is the most reliable matcher.
+            </div>
           </div>
           {error&&<div style={{color:C.red,fontSize:11,marginBottom:8}}>⚠ {error}</div>}
           <button onClick={add}
@@ -3992,12 +4004,17 @@ function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
         {ownAccounts.length>0&&(
           <div className="card">
             <div className="ctitle">YOUR REGISTERED ACCOUNTS ({ownAccounts.length})</div>
-            {ownAccounts.map(a=>(
-              <div key={a.id} style={{display:"flex",gap:10,alignItems:"center",
-                padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{a.bankName||"Bank"}</div>
-                  <div style={{fontSize:11,color:C.slate}}>{a.accountName}</div>
+            {ownAccounts.map(a=>{
+              const hasNumber = !!a.accountNumber;
+              const hasName   = a.accountName && a.accountName.length >= 5;
+              const canMatch  = hasNumber || hasName;
+              return(
+              <div key={a.id} style={{borderRadius:10,border:`1px solid ${canMatch?C.border:"#FECACA"}`,
+                marginBottom:6,background:canMatch?"#F8FAFC":"#FEF2F2",overflow:"hidden"}}>
+                <div style={{display:"flex",gap:10,alignItems:"center",padding:"10px 12px"}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{a.bankName||"Bank"} {a.accountNumber&&<span style={{fontFamily:"monospace",fontSize:12,color:C.muted}}>···{a.accountNumber.slice(-4)}</span>}</div>
+                    <div style={{fontSize:11,color:C.slate}}>{a.accountName}</div>
                   {a.accountNumber&&<div style={{fontSize:11,color:C.muted}}>Acct: {a.accountNumber}</div>}
                 </div>
                 <button onClick={()=>setOwnAccounts(p=>p.filter(x=>x.id!==a.id))}
@@ -4005,10 +4022,20 @@ function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
                     borderRadius:7,color:C.red,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
                   Remove
                 </button>
+                </div>
+                <div style={{padding:"5px 12px 8px",borderTop:"1px solid #F1F5F9",
+                  display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  <span style={{fontSize:9,color:C.muted}}>Matches by:</span>
+                  {hasNumber&&<span style={{fontSize:9,fontWeight:700,background:"#EFF6FF",color:C.blue,padding:"2px 7px",borderRadius:100}}>✓ Account No. {a.accountNumber}</span>}
+                  {hasName&&<span style={{fontSize:9,fontWeight:700,background:"#EFF6FF",color:C.blue,padding:"2px 7px",borderRadius:100}}>✓ Name</span>}
+                  {!canMatch&&<span style={{fontSize:9,color:"#DC2626",fontWeight:700}}>⚠ Add account number or name for matching to work</span>}
+                </div>
               </div>
-            ))}
+              );
+            })}
             <div style={{fontSize:11,color:C.muted,marginTop:8,lineHeight:1.6}}>
-              TaxWise will scan transaction narrations for these names/numbers and automatically flag matches as non-taxable own-account transfers.
+              TaxWise scans transaction narrations for registered account numbers and names.
+              Bank name alone is not used — it would incorrectly catch unrelated transactions.
             </div>
           </div>
         )}
@@ -6959,11 +6986,16 @@ function TeamScreen({profile, authUser, sub, onBack}){
 }
 
 function applyImportRules(transactions, ownAccounts=[], importRules=[], retroactive=false){
-  const ownMatchers = ownAccounts.flatMap(a=>[
-    a.accountNumber?.replace(/\s/g,"").toLowerCase(),
-    a.accountName?.toLowerCase(),
-    a.bankName?.toLowerCase(),
-  ].filter(Boolean));
+  // Build matchers from own accounts
+  // IMPORTANT: bankName alone is NOT used as a matcher — too broad, would catch
+  // all transactions involving that bank (salary, vendor payments etc.)
+  // Only accountNumber and accountName are specific enough to identify the account
+  const ownAccountMatchers = ownAccounts.map(a=>({
+    accountNumber: a.accountNumber?.replace(/\s/g,"").toLowerCase()||"",
+    accountName:   a.accountName?.toLowerCase()||"",
+    bankName:      a.bankName?.toLowerCase()||"",  // stored for display only
+    label:         a.accountName||(a.bankName+" "+a.accountNumber)||"Own account",
+  })).filter(a=>a.accountNumber||a.accountName);
 
   return transactions.map(t=>{
     // When retroactively reapplying, reset rule-based classifications first
@@ -6973,15 +7005,27 @@ function applyImportRules(transactions, ownAccounts=[], importRules=[], retroact
       : {...t};
     const desc = (base.desc||"").toLowerCase();
 
-    if(ownMatchers.length > 0){
-      const isOwnTransfer = ownMatchers.some(m=>m && desc.includes(m));
-      if(isOwnTransfer){
+    if(ownAccountMatchers.length > 0){
+      // Match by account NUMBER (very specific — 10-digit NUBAN)
+      // or account NAME (moderately specific — full name match)
+      // bankName alone is never used as a standalone matcher
+      let matchedAccount = null;
+      for(const acc of ownAccountMatchers){
+        const numMatch  = acc.accountNumber && desc.includes(acc.accountNumber);
+        const nameMatch = acc.accountName   && acc.accountName.length >= 5 && desc.includes(acc.accountName);
+        if(numMatch||nameMatch){
+          matchedAccount = acc;
+          break;
+        }
+      }
+      if(matchedAccount){
         return{...base,
           type:"transfer",
           category:"own_account_transfer",
           taxAllowable:false,
           included:false,
-          autoRule:"Own account transfer — excluded from taxable income",
+          autoRule:`Own account transfer — matched "${matchedAccount.label}" — excluded from taxable income/expenses`,
+          taxStream:"own_account_transfer",
           confidence:"high",
         };
       }

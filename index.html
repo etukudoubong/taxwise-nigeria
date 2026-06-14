@@ -2896,6 +2896,7 @@ const NIGERIAN_BANKS = [
 ].sort();
 
 function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
+  const[saved,setSaved]=useState(false);
   const[form,setForm]=useState({bankName:"",accountName:"",accountNumber:""});
   const[error,setError]=useState("");
   const set=(k,v)=>setForm(p=>({...p,[k]:v}));
@@ -2905,10 +2906,20 @@ function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
     setOwnAccounts(p=>[...p,{id:Date.now(),...form}]);
     setForm({bankName:"",accountName:"",accountNumber:""});
     setError("");
+    setSaved(true);
+    setTimeout(()=>setSaved(false), 3000);
   };
   return(
     <div style={{paddingBottom:100}}>
       <Hdr title="My Own Accounts" subtitle="Transfers between these are excluded from taxable income" onBack={onBack}/>
+      {saved&&(
+        <div style={{position:"fixed",top:70,left:"50%",transform:"translateX(-50%)",
+          background:"#059669",color:"#fff",padding:"10px 20px",borderRadius:10,
+          fontSize:12,fontWeight:700,zIndex:999,boxShadow:"0 4px 12px rgba(0,0,0,.2)",
+          whiteSpace:"nowrap"}}>
+          ✓ Account saved — existing transactions reclassified
+        </div>
+      )}
       <div className="pad">
         <div className="ibox blue" style={{marginBottom:12}}>
           <div className="ititle" style={{color:C.blue}}>Why add your own accounts?</div>
@@ -3141,6 +3152,7 @@ function ResetDataModal({txns, setTxns, assets, setAssets, importRules, setImpor
 }
 
 function ImportRulesScreen({importRules, setImportRules, onBack}){
+  const[ruleSaved,setRuleSaved]=useState(false);
   const blank={id:null,name:"",
     matchField:"description", // "description" | "account_number" | "name" | "phone" | "any"
     pattern:"",matchType:"contains",
@@ -3175,6 +3187,8 @@ function ImportRulesScreen({importRules, setImportRules, onBack}){
     setForm({...blank});
     setEditing(false);
     setError("");
+    setRuleSaved(true);
+    setTimeout(()=>setRuleSaved(false), 3000);
   };
   const edit=(r)=>{setForm({...r,matchField:r.matchField||"description"});setEditing(true);};
   const remove=(id)=>setImportRules(p=>p.filter(r=>r.id!==id));
@@ -3192,6 +3206,14 @@ function ImportRulesScreen({importRules, setImportRules, onBack}){
   return(
     <div style={{paddingBottom:100}}>
       <Hdr title="Import Rules" subtitle="Auto-classify transactions on every import" onBack={onBack}/>
+      {ruleSaved&&(
+        <div style={{position:"fixed",top:70,left:"50%",transform:"translateX(-50%)",
+          background:"#059669",color:"#fff",padding:"10px 20px",borderRadius:10,
+          fontSize:12,fontWeight:700,zIndex:999,boxShadow:"0 4px 12px rgba(0,0,0,.2)",
+          whiteSpace:"nowrap"}}>
+          ✓ Rule saved — existing transactions reclassified
+        </div>
+      )}
       <div className="pad">
         <div className="ibox blue" style={{marginBottom:12}}>
           <div className="ititle" style={{color:C.blue}}>What are Import Rules?</div>
@@ -4839,7 +4861,13 @@ function App(){
     setOwnAccountsRaw(prev=>{
       const next=typeof fn==="function"?fn(prev):fn;
       saveStore({profile,transactions:txns,kiv,employees,assets,connectedBanks,ownAccounts:next,importRules});
-      saveSettings({ownAccounts:next,importRules}); // persist separately — survives data reset
+      saveSettings({ownAccounts:next,importRules});
+      // Retroactively reclassify existing transactions with updated own accounts
+      setTxnsRaw(prevTxns=>{
+        const reclassified = applyImportRules(prevTxns, next, importRules, true);
+        saveStore({profile,transactions:reclassified,kiv,employees,assets,connectedBanks,ownAccounts:next,importRules});
+        return reclassified;
+      });
       return next;
     });
   },[profile,txns,kiv,employees,assets,connectedBanks,importRules]);
@@ -4848,7 +4876,13 @@ function App(){
     setImportRulesRaw(prev=>{
       const next=typeof fn==="function"?fn(prev):fn;
       saveStore({profile,transactions:txns,kiv,employees,assets,connectedBanks,ownAccounts,importRules:next});
-      saveSettings({ownAccounts,importRules:next}); // persist separately — survives data reset
+      saveSettings({ownAccounts,importRules:next});
+      // Retroactively reclassify existing transactions with updated rules
+      setTxnsRaw(prevTxns=>{
+        const reclassified = applyImportRules(prevTxns, ownAccounts, next, true);
+        saveStore({profile,transactions:reclassified,kiv,employees,assets,connectedBanks,ownAccounts,importRules:next});
+        return reclassified;
+      });
       return next;
     });
   },[profile,txns,kiv,employees,assets,connectedBanks,ownAccounts]);
@@ -5560,7 +5594,7 @@ function TeamScreen({profile, authUser, sub, onBack}){
   );
 }
 
-function applyImportRules(transactions, ownAccounts=[], importRules=[]){
+function applyImportRules(transactions, ownAccounts=[], importRules=[], retroactive=false){
   const ownMatchers = ownAccounts.flatMap(a=>[
     a.accountNumber?.replace(/\s/g,"").toLowerCase(),
     a.accountName?.toLowerCase(),
@@ -5568,12 +5602,17 @@ function applyImportRules(transactions, ownAccounts=[], importRules=[]){
   ].filter(Boolean));
 
   return transactions.map(t=>{
-    const desc = (t.desc||"").toLowerCase();
+    // When retroactively reapplying, reset rule-based classifications first
+    // so deleted rules don't leave stale tags. Keep manual user edits.
+    const base = retroactive && t.autoRule && t.autoRule.startsWith("Rule:")
+      ? {...t, autoRule:null, taxAllowable:true, included:true, type:t.type}
+      : {...t};
+    const desc = (base.desc||"").toLowerCase();
 
     if(ownMatchers.length > 0){
       const isOwnTransfer = ownMatchers.some(m=>m && desc.includes(m));
       if(isOwnTransfer){
-        return{...t,
+        return{...base,
           type:"transfer",
           category:"own_account_transfer",
           taxAllowable:false,

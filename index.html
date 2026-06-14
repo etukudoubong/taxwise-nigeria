@@ -3634,12 +3634,13 @@ function CGTPanel({cgtData,setCgtData}){
   );
 }
 
-function CalculateScreen({profile,onBack}){
+function CalculateScreen({profile,txns,onBack}){
   const[tab,setTab]=useState("pit");
   const[pitData,setPitData]=useState({monthlyIncome:0,payeDeducted:0,otherIncome:0,rentPaid:0,nhfAnnual:0,nhisAnnual:0,pensionAnnual:0,lifeInsAnnual:0,housingLoanInterest:0,category:profile.empCategory||"A"});
   useEffect(()=>{
     setPitData(p=>({...p, category:profile.empCategory||"A"}));
-  },[profile.empCategory]);
+    setCgtData(p=>({...p, isCompany:profile.mode==="company"}));
+  },[profile.empCategory, profile.mode]);
   const[whtData,setWhtData]=useState({amount:200000,type:"professional"});
   const[vatData,setVatData]=useState({amount:500000,tier:"standard"});
   const[penData,setPenData]=useState({tax:500000,days:30});
@@ -5130,24 +5131,27 @@ function App(){
   const canManageTeam = !isCompanyMember || memberRole==="admin";
   const canViewBilling = !isCompanyMember || memberRole==="admin";
 
+  // Reactive key — forces remount of all screens when taxpayer category, mode or VAT status changes
+  const profileKey = (profile.empCategory||"A")+"_"+(profile.mode||"individual")+"_"+(profile.vatRegistered||"no");
+
   const renderScreen=()=>{
     if(screen.startsWith("schedule_")){
       const key=screen.replace("schedule_","");
       const agg=computeAggregates(txns);
-      return <TaxScheduleScreen scheduleKey={key} schedules={agg.schedules} profile={profile} onBack={back}/>;
+      return <TaxScheduleScreen key={profileKey} scheduleKey={key} schedules={agg.schedules} profile={profile} onBack={back}/>;
     }
     switch(screen){
-      case "dashboard":  return <Dashboard profile={profile} txns={txns} kiv={kiv} onNav={nav} setProfile={setProfile}/>;
-      case "journal":    return <JournalScreen txns={txns} setTxns={setTxns} kiv={kiv} setKiv={setKiv} onNav={nav}/>;
-      case "calculate":  return <CalculateScreen profile={profile} onBack={back}/>;
-      case "deadlines":  return <DeadlinesScreen profile={profile} onBack={back}/>;
-      case "vat":        return <VATScreen txns={txns} onBack={back}/>;
+      case "dashboard":  return <Dashboard key={profileKey} profile={profile} txns={txns} kiv={kiv} onNav={nav} setProfile={setProfile}/>;
+      case "journal":    return <JournalScreen key={profileKey} txns={txns} setTxns={setTxns} kiv={kiv} setKiv={setKiv} onNav={nav}/>;
+      case "calculate":  return <CalculateScreen key={profile.empCategory+profile.mode} profile={profile} txns={txns} onBack={back}/>;
+      case "deadlines":  return <DeadlinesScreen key={profileKey} profile={profile} txns={txns} onBack={back}/>;
+      case "vat":        return <VATScreen key={profileKey} profile={profile} txns={txns} onBack={back}/>;
       case "faq":        return <FAQScreen onBack={back}/>;
       case "subscribe":  return <SubscriptionScreen profile={profile} authUser={authUser} sub={sub} onBack={back} onSubscribed={()=>{getSubscription(authUser.id).then(setSub);back();}}/>;
       case "team":       return canManageTeam ? <TeamScreen profile={profile} authUser={authUser} sub={sub} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Admin only</div>;
       case "upload":     return canEdit ? <CSVUploadScreen setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} profile={profile} authUser={authUser} onBack={back} ownAccounts={ownAccounts} importRules={importRules} sub={sub} setSub={setSub}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted</div>;
       case "import":     return canEdit ? <DocumentUploadScreen profile={profile} authUser={authUser} setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} onBack={back} sub={sub} setSub={setSub}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Data Entry or above</div>;
-      case "agent":      return <AgentScreen profile={profile} txns={txns} onBack={back}/>;
+      case "agent":      return <AgentScreen key={profile.name+profile.empCategory} profile={profile} txns={txns} onBack={back}/>;
       case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} setTxns={setTxns} assets={assets} setAssets={setAssets} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")} onEditSetup={()=>setScreen("editSetup")} onNav={nav} ownAccountsCount={ownAccounts.length} importRulesCount={importRules.length} sub={sub} importRules={importRules} setImportRules={setImportRules} setOwnAccounts={setOwnAccounts}/>;
       case "ownAccounts": return <OwnAccountsScreen ownAccounts={ownAccounts} setOwnAccounts={setOwnAccounts} onBack={back}/>;
       case "importRules": return <ImportRulesScreen importRules={importRules} setImportRules={setImportRules} onBack={back}/>;
@@ -5185,11 +5189,11 @@ function App(){
             setScreen("profile");
           }}
         />;
-      case "taxsummary": return canViewReports ? <TaxSummaryScreen txns={txns} profile={profile} onNav={nav} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Accountant or above</div>;
-      case "reports":    return canViewReports ? <TaxSummaryScreen txns={txns} profile={profile} onNav={nav} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Accountant or above</div>;
+      case "taxsummary": return canViewReports ? <TaxSummaryScreen key={profile.empCategory+profile.mode+txns.length} txns={txns} profile={profile} onNav={nav} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Accountant or above</div>;
+      case "reports":    return canViewReports ? <TaxSummaryScreen key={profile.empCategory+profile.mode+txns.length} txns={txns} profile={profile} onNav={nav} onBack={back}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Accountant or above</div>;
       case "bank":       return <BankScreen connectedBanks={connectedBanks} setConnectedBanks={setConnectedBanks} onBack={back}/>;
-      case "penalties":  return <CalculateScreen profile={profile} onBack={back}/>;
-      case "cit":        return <CITScreen profile={profile} txns={txns} assets={assets} onBack={back}/>;
+      case "penalties":  return <CalculateScreen key={profile.empCategory+profile.mode} profile={profile} txns={txns} onBack={back}/>;
+      case "cit":        return <CITScreen key={profile.mode} profile={profile} txns={txns} assets={assets} onBack={back}/>;
       case "payroll":    return <PayrollScreen employees={employees} setEmployees={setEmployees} onBack={back}/>;
       case "assets":     return <AssetRegisterScreen assets={assets} setAssets={setAssets} onBack={back}/>;
       case "ca":         return <AssetRegisterScreen assets={assets} setAssets={setAssets} onBack={back}/>;

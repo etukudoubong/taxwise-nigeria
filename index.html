@@ -5616,18 +5616,30 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
 
     const mapped = rows.map((row,i)=>{
       const date = parseDate(dI>=0?row[dI]:"");
-      const desc = nI>=0?(row[nI]||"").trim()||`Row ${i+1}`:`Row ${i+1}`;
-      if(!desc||desc===`Row ${i+1}`&&!row[nI]) return null; // skip empty rows
+      // Try primary desc column, then fall back to Reference column if empty
+      const refI = headers.indexOf("Reference");
+      let desc = nI>=0?(row[nI]||"").toString().trim():"";
+      if(!desc && refI>=0) desc = (row[refI]||"").toString().trim();
+      if(!desc) desc = `Row ${i+1}`;
+      if(desc===`Row ${i+1}`) return null; // skip truly empty rows
       let amount=0, type="expense";
 
       if(cI>=0&&drI>=0){
-        const cr = parseAmt(row[cI]);
-        const dr = parseAmt(row[drI]);
-        if(dr>0&&cr<=0){amount=dr;type="expense";}
-        else if(cr>0&&dr<=0){amount=cr;type="income";}
-        else if(cr>0&&dr>0){
+        const crRaw = row[cI];
+        const drRaw = row[drI];
+        const cr = parseAmt(crRaw);
+        const dr = parseAmt(drRaw);
+        // Moniepoint and many Nigerian banks put 0 (not blank) in unused column
+        // Treat 0 same as empty — only the non-zero column counts
+        const crBlank = cr===0;
+        const drBlank = dr===0;
+        if(!drBlank&&crBlank){amount=dr;type="expense";}
+        else if(!crBlank&&drBlank){amount=cr;type="income";}
+        else if(!crBlank&&!drBlank){
+          // Both non-zero: use the larger, flag as ambiguous
           amount=Math.max(cr,dr); type=cr>dr?"income":"expense";
         }
+        // If both zero: amount stays 0, row filtered out below
       } else if(aI>=0){
         const raw=String(row[aI]||"").replace(/[₦$£€,\s]/g,"").trim();
         const n=parseFloat(raw)||0;

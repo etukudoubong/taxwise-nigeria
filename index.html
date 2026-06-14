@@ -1589,8 +1589,15 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav,profile}){
   const[filter,setFilter]=useState("all");
   const[showAdd,setShowAdd]=useState(false);
   const[newTxn,setNewTxn]=useState({desc:"",amount:"",type:"income",date:today()});
-  const[pendingTxn,setPendingTxn]=useState(null);  // awaiting compliance popup
-  const[editTxn,setEditTxn]=useState(null);         // for edit screen
+  const[pendingTxn,setPendingTxn]=useState(null);
+  const[editTxn,setEditTxn]=useState(null);
+  const[search,setSearch]=useState("");
+  const[showFilters,setShowFilters]=useState(false);
+  const[dateFrom,setDateFrom]=useState("");
+  const[dateTo,setDateTo]=useState("");
+  const[amtMin,setAmtMin]=useState("");
+  const[amtMax,setAmtMax]=useState("");
+  const[sortBy,setSortBy]=useState("date_desc"); // date_desc | date_asc | amount_desc | amount_asc
   const agg=computeAggregates(txns,profile);
   const kivTxns=kiv||[];
 
@@ -1649,11 +1656,51 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav,profile}){
 
   const excludedTxns = txns.filter(t=>t.compliance_status==="excluded");
   const activeTxns = txns.filter(t=>t.compliance_status!=="excluded");
-  const filtered = filter==="excluded" ? [] :
+
+  // Step 1: tab filter
+  const tabFiltered = filter==="excluded" ? [] :
     filter==="all" ? activeTxns :
     filter==="kiv" ? [] :
     filter==="cgt" ? activeTxns.filter(t=>classifyTxn(t.desc,t.type).head==="CGT-EVENT") :
     activeTxns.filter(t=>t.type===filter||classifyTxn(t.desc,t.type).head.toLowerCase().includes(filter));
+
+  // Step 2: search (desc, amount, date, category, autoRule)
+  const sq = search.trim().toLowerCase();
+  const searchFiltered = !sq ? tabFiltered : tabFiltered.filter(t=>{
+    const amt = t.amount?.toString()||"";
+    return (t.desc||"").toLowerCase().includes(sq)
+      || amt.includes(sq)
+      || (t.date||"").includes(sq)
+      || (t.category||"").toLowerCase().includes(sq)
+      || (t.autoRule||"").toLowerCase().includes(sq)
+      || (t.type||"").toLowerCase().includes(sq)
+      || fmt(t.amount).replace(/[₦,]/g,"").includes(sq);
+  });
+
+  // Step 3: date range filter
+  const dateFiltered = searchFiltered.filter(t=>{
+    if(dateFrom && t.date && t.date < dateFrom) return false;
+    if(dateTo   && t.date && t.date > dateTo)   return false;
+    return true;
+  });
+
+  // Step 4: amount range filter
+  const amtFiltered = dateFiltered.filter(t=>{
+    if(amtMin && t.amount < parseFloat(amtMin)) return false;
+    if(amtMax && t.amount > parseFloat(amtMax)) return false;
+    return true;
+  });
+
+  // Step 5: sort
+  const filtered = [...amtFiltered].sort((a,b)=>{
+    if(sortBy==="date_desc") return (b.date||"") > (a.date||"") ? 1 : -1;
+    if(sortBy==="date_asc")  return (a.date||"") > (b.date||"") ? 1 : -1;
+    if(sortBy==="amount_desc") return b.amount - a.amount;
+    if(sortBy==="amount_asc")  return a.amount - b.amount;
+    return 0;
+  });
+
+  const hasActiveFilters = sq||dateFrom||dateTo||amtMin||amtMax||sortBy!=="date_desc";
 
   return(
     <div style={{paddingBottom:80}}>
@@ -1726,7 +1773,107 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav,profile}){
         </div>
       )}
 
-      <div className="tabs" style={{padding:"10px 12px 0"}}>
+      {/* ── Search bar ─────────────────────────────────────── */}
+      <div style={{padding:"10px 12px 4px",display:"flex",gap:6}}>
+        <div style={{flex:1,position:"relative"}}>
+          <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",
+            fontSize:14,color:C.muted,pointerEvents:"none"}}>🔍</span>
+          <input
+            value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search description, amount, date, category…"
+            style={{width:"100%",padding:"9px 10px 9px 32px",
+              border:`1.5px solid ${search?C.blue:C.border}`,borderRadius:10,
+              fontSize:12,fontFamily:"inherit",outline:"none",boxSizing:"border-box",
+              background:search?"#EFF6FF":"#fff",color:C.ink}}
+          />
+          {search&&(
+            <button onClick={()=>setSearch("")}
+              style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",
+                background:"none",border:"none",fontSize:16,color:C.muted,
+                cursor:"pointer",lineHeight:1}}>✕</button>
+          )}
+        </div>
+        <button onClick={()=>setShowFilters(f=>!f)}
+          style={{padding:"9px 12px",borderRadius:10,fontSize:11,fontWeight:700,
+            border:`1.5px solid ${hasActiveFilters?C.blue:C.border}`,
+            background:hasActiveFilters?C.blueLight:"#fff",
+            color:hasActiveFilters?C.blue:C.slate,cursor:"pointer",
+            fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0}}>
+          ⚙ {hasActiveFilters?"Filters ●":"Filters"}
+        </button>
+      </div>
+
+      {/* ── Advanced filter panel ────────────────────────────── */}
+      {showFilters&&(
+        <div style={{margin:"0 12px 8px",padding:"12px",background:"#F8FAFC",
+          border:`1px solid ${C.border}`,borderRadius:12}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div>
+              <div style={{fontSize:10,fontWeight:700,color:C.muted,marginBottom:4,letterSpacing:".06em"}}>FROM DATE</div>
+              <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)}
+                style={{width:"100%",padding:"7px 8px",border:`1px solid ${C.border}`,
+                  borderRadius:8,fontSize:11,fontFamily:"inherit",boxSizing:"border-box"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:10,fontWeight:700,color:C.muted,marginBottom:4,letterSpacing:".06em"}}>TO DATE</div>
+              <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)}
+                style={{width:"100%",padding:"7px 8px",border:`1px solid ${C.border}`,
+                  borderRadius:8,fontSize:11,fontFamily:"inherit",boxSizing:"border-box"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:10,fontWeight:700,color:C.muted,marginBottom:4,letterSpacing:".06em"}}>MIN AMOUNT (₦)</div>
+              <input type="number" value={amtMin} onChange={e=>setAmtMin(e.target.value)}
+                placeholder="0" min="0"
+                style={{width:"100%",padding:"7px 8px",border:`1px solid ${C.border}`,
+                  borderRadius:8,fontSize:11,fontFamily:"inherit",boxSizing:"border-box"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:10,fontWeight:700,color:C.muted,marginBottom:4,letterSpacing:".06em"}}>MAX AMOUNT (₦)</div>
+              <input type="number" value={amtMax} onChange={e=>setAmtMax(e.target.value)}
+                placeholder="No limit" min="0"
+                style={{width:"100%",padding:"7px 8px",border:`1px solid ${C.border}`,
+                  borderRadius:8,fontSize:11,fontFamily:"inherit",boxSizing:"border-box"}}/>
+            </div>
+          </div>
+          <div style={{marginBottom:8}}>
+            <div style={{fontSize:10,fontWeight:700,color:C.muted,marginBottom:4,letterSpacing:".06em"}}>SORT BY</div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {[
+                {v:"date_desc",l:"Newest first"},
+                {v:"date_asc", l:"Oldest first"},
+                {v:"amount_desc",l:"Largest first"},
+                {v:"amount_asc", l:"Smallest first"},
+              ].map(s=>(
+                <button key={s.v} onClick={()=>setSortBy(s.v)}
+                  style={{padding:"5px 10px",fontSize:10,fontWeight:700,borderRadius:8,
+                    border:`1.5px solid ${sortBy===s.v?C.blue:C.border}`,
+                    background:sortBy===s.v?C.blueLight:"#fff",
+                    color:sortBy===s.v?C.blue:C.slate,
+                    cursor:"pointer",fontFamily:"inherit"}}>
+                  {s.l}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>{setDateFrom("");setDateTo("");setAmtMin("");setAmtMax("");setSortBy("date_desc");setSearch("");}}
+              style={{flex:1,padding:"7px",fontSize:11,fontWeight:700,borderRadius:8,
+                border:`1px solid ${C.border}`,background:"#fff",color:C.muted,
+                cursor:"pointer",fontFamily:"inherit"}}>
+              Clear All Filters
+            </button>
+            <button onClick={()=>setShowFilters(false)}
+              style={{flex:1,padding:"7px",fontSize:11,fontWeight:700,borderRadius:8,
+                border:`1px solid ${C.blue}`,background:C.blueLight,color:C.blue,
+                cursor:"pointer",fontFamily:"inherit"}}>
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Tab pills ─────────────────────────────────────────── */}
+      <div className="tabs" style={{padding:"4px 12px 0"}}>
         {["all","income","expense","vat","wht","paye","cgt","kiv","excluded"].map(f=>{
           const excCount = txns.filter(t=>t.compliance_status==="excluded").length;
           return(
@@ -1745,6 +1892,29 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav,profile}){
       </div>
 
       <div className="pad" style={{paddingTop:10}}>
+        {/* Results summary */}
+        {filter!=="excluded"&&filter!=="kiv"&&(
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+            marginBottom:8,padding:"6px 2px"}}>
+            <div style={{fontSize:11,color:C.muted}}>
+              {hasActiveFilters?(
+                <span>
+                  <strong style={{color:C.ink}}>{filtered.length}</strong> of {activeTxns.length} transactions
+                  {sq&&<span style={{color:C.blue}}> matching "<strong>{sq}</strong>"</span>}
+                </span>
+              ):(
+                <span><strong style={{color:C.ink}}>{filtered.length}</strong> transaction{filtered.length!==1?"s":""}</span>
+              )}
+            </div>
+            {filtered.length>0&&(
+              <div style={{fontSize:11,color:C.muted,textAlign:"right"}}>
+                <span style={{color:C.green,fontWeight:700}}>{fmt(filtered.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0))}</span>
+                <span style={{margin:"0 4px",opacity:.4}}>|</span>
+                <span style={{color:C.red,fontWeight:700}}>{fmt(filtered.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0))}</span>
+              </div>
+            )}
+          </div>
+        )}
         {filter==="excluded"?(
           excludedTxns.length===0?(
             <div style={{textAlign:"center",padding:"48px 20px",color:C.muted}}>
@@ -1895,15 +2065,33 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav,profile}){
           )
         ):(
           <>
-            {[...filtered].reverse().map(t=>(
+            {filtered.map(t=>(
               <TxnRow key={t.id} txn={t} onTap={()=>onEditTxn(t)}/>
             ))}
             {filtered.length===0&&(
-              <div style={{textAlign:"center",padding:"40px 20px",color:C.muted}}>
-                <div style={{fontSize:32,marginBottom:10}}>📭</div>
-                <div style={{fontSize:14,fontWeight:600}}>No transactions yet</div>
-                <div style={{fontSize:12,marginTop:4}}>Tap "+ Add Entry" to get started</div>
-              </div>
+              hasActiveFilters?(
+                <div style={{textAlign:"center",padding:"40px 20px",color:C.muted}}>
+                  <div style={{fontSize:36,marginBottom:10}}>🔍</div>
+                  <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:6}}>No transactions match</div>
+                  <div style={{fontSize:12,lineHeight:1.6}}>
+                    {sq&&<div>No results for "<strong>{sq}</strong>"</div>}
+                    {(dateFrom||dateTo)&&<div>Date range: {dateFrom||"any"} → {dateTo||"any"}</div>}
+                    {(amtMin||amtMax)&&<div>Amount: ₦{amtMin||"0"} → ₦{amtMax||"∞"}</div>}
+                  </div>
+                  <button onClick={()=>{setSearch("");setDateFrom("");setDateTo("");setAmtMin("");setAmtMax("");setSortBy("date_desc");}}
+                    style={{marginTop:12,padding:"8px 16px",background:C.blueLight,border:`1px solid ${C.blue}`,
+                      borderRadius:8,color:C.blue,fontSize:12,fontWeight:700,
+                      cursor:"pointer",fontFamily:"inherit"}}>
+                    Clear Filters
+                  </button>
+                </div>
+              ):(
+                <div style={{textAlign:"center",padding:"40px 20px",color:C.muted}}>
+                  <div style={{fontSize:32,marginBottom:10}}>📭</div>
+                  <div style={{fontSize:14,fontWeight:600}}>No transactions yet</div>
+                  <div style={{fontSize:12,marginTop:4}}>Tap "+ Add Entry" to get started</div>
+                </div>
+              )
             )}
           </>
         )}

@@ -806,19 +806,34 @@ function computeAggregates(txns, profile){
     if(t.type==="income"){
       income+=t.amount;
 
-      // WHT credits: apply for Cat C/D (self-employed, professional fees)
-      // and for companies receiving payments with WHT deducted
+      // WHT credits: ONLY include if taxpayer has explicitly confirmed WHT was deducted
+      // (t.whtFlag===true set by AI/taxpayer) OR narration explicitly contains "WHT"/"withholding"
+      const descLower = (t.desc||"").toLowerCase();
+      const whtExplicit = t.whtFlag===true
+        || t.whtConfirmed===true
+        || descLower.includes("wht")
+        || descLower.includes("withholding")
+        || descLower.includes("tax deducted")
+        || descLower.includes("net of tax");
       const isWHTHead = ["WHT","WHT+VAT","Zero-VAT"].some(h=>r.head.startsWith(h.split("+")[0]))||r.head==="WHT";
-      if(isWHTHead && (isCatCD||isCompany)){
+      if(isWHTHead && whtExplicit && (isCatCD||isCompany)){
         const wht=r.wht_amount_fn?r.wht_amount_fn(t.amount):t.amount*.10;
         if(wht>0){
           whtIn+=wht;
-          schedules.whtIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:wht,rate:"10%",type:"WHT Credit",law:"NTA 2025 Ch.Two Pt.IV"});
+          schedules.whtIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:wht,rate:"10%",type:"WHT Credit",status:"confirmed",law:"NTA 2025 Ch.Two Pt.IV"});
         }
       }
 
-      // VAT output: only if VAT-registered
-      if((r.head==="VAT+CIT"||r.head==="WHT+VAT") && isVatReg){
+      // VAT output: ONLY if VAT-registered AND taxpayer/AI has confirmed VAT was charged
+      // (t.vatFlag===true) OR narration explicitly states "VAT"/"value added tax"
+      const vatExplicit = t.vatFlag===true
+        || t.vatConfirmed===true
+        || descLower.includes("vat")
+        || descLower.includes("value added tax")
+        || descLower.includes("plus vat")
+        || descLower.includes("incl. vat")
+        || descLower.includes("incl vat");
+      if(vatExplicit && (r.head==="VAT+CIT"||r.head==="WHT+VAT") && isVatReg){
         const vat=t.amount*.075;
         vatOut+=vat;
         schedules.vatOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:vat,rate:"7.5%",type:"Output VAT",law:"NTA 2025 Ch.Four Sec 52"});
@@ -845,12 +860,22 @@ function computeAggregates(txns, profile){
         allowableExpenses+=t.amount;
       }
 
-      // WHT on outgoing payments: only companies and Cat C/D (making business payments)
+      // WHT on outgoing payments: only if taxpayer has confirmed WHT obligation
+      // compliance_status="done" means taxpayer confirmed; "pending" means flagged but unconfirmed
+      // We include in schedule when compliance is flagged (pending) so taxpayer can act
+      // but mark as "pending confirmation" rather than treating as already deducted
       if(r.compliance_required && r.head.startsWith("WHT-out") && r.wht_rate && (isCatCD||isCompany)){
         const wht=t.amount*(r.wht_rate/100);
         const net=t.amount-wht;
-        whtOut+=wht;
-        schedules.whtOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:wht,net,rate:r.wht_rate+"%",type:r.head,status:t.compliance_status||"pending",law:r.law});
+        const confirmed = t.compliance_status==="done"||t.compliance_status==="waived";
+        whtOut+=confirmed?wht:0; // only count in totals if confirmed
+        schedules.whtOut.push({
+          id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:wht,net,
+          rate:r.wht_rate+"%",type:r.head,
+          status:t.compliance_status||"pending",
+          confirmed,
+          law:r.law
+        });
       }
 
       // PAYE out: only companies (must remit staff PAYE)
@@ -860,13 +885,20 @@ function computeAggregates(txns, profile){
         schedules.payeOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE",status:t.compliance_status||"pending",law:"TAA 2025 Sec 13"});
       }
 
-      // Input VAT: only if VAT-registered
-      if(isVatReg && (r.head==="Overhead"||r.head==="Expense")){
-        if(t.vatFlag||t.desc.toLowerCase().match(/purchase|supplies|stock|inventory|material/)){
-          const vat=t.amount*.075;
-          vatIn+=vat;
-          schedules.vatIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:vat,rate:"7.5%",type:"Input VAT",law:"NTA 2025 Ch.Four Sec 59"});
-        }
+      // Input VAT: only if VAT-registered AND explicitly flagged
+      // t.vatFlag===true (confirmed by AI or taxpayer) OR narration explicitly states VAT
+      const expDescLower = (t.desc||"").toLowerCase();
+      const inputVatExplicit = t.vatFlag===true
+        || t.vatConfirmed===true
+        || expDescLower.includes("vat")
+        || expDescLower.includes("value added tax")
+        || expDescLower.includes("plus vat")
+        || expDescLower.includes("incl. vat")
+        || expDescLower.includes("incl vat");
+      if(isVatReg && inputVatExplicit && (r.head==="Overhead"||r.head==="Expense")){
+        const vat=t.amount*.075;
+        vatIn+=vat;
+        schedules.vatIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:vat,rate:"7.5%",type:"Input VAT",law:"NTA 2025 Ch.Four Sec 59"});
       }
     }
   }
@@ -6417,17 +6449,28 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
 
     const formatted = txnList.map((t,i)=>{
       const nonAllowable = t.taxAllowable===false||getNonAllowable(t.desc||"");
+      const isAsset = t.type==="asset";
+      const amount = Math.abs(parseFloat(t.amount)||0);
       return {
         id:`import_${Date.now()}_${i}`,
         date:parseDate(t.date), desc:t.desc||"Transaction",
-        amount:Math.abs(parseFloat(t.amount)||0),
-        type:t.type==="asset"?"asset":t.type==="income"?"income":"expense",
-        source:"import", compliance_status:"pending",
-        taxAllowable:!nonAllowable, included:!nonAllowable&&Math.abs(parseFloat(t.amount)||0)>0,
+        amount,
+        type:isAsset?"asset":t.type==="income"?"income":"expense",
+        source:"import",
+        // Capital expenditure: hold in KIV pending taxpayer confirmation
+        // WHT/VAT: preserve AI flag but do NOT force-include in schedules without confirmation
+        compliance_status: isAsset ? "kiv" : "pending",
+        taxAllowable:!nonAllowable,
+        // Assets default to excluded from regular journal pending confirmation
+        included: isAsset ? false : (!nonAllowable && amount>0),
         confidence:t.confidence||"medium",
-        vatFlag: (profile?.mode==="company") ? !!t.vatFlag : false,
-        whtFlag:!!t.whtFlag,
-        assetClass:t.assetClass||"other", category:t.category||"other",
+        // Preserve AI flags — but computeAggregates will only use them if confirmed
+        vatFlag: !!t.vatFlag,
+        whtFlag: !!t.whtFlag,
+        // Mark assets as needing confirmation
+        needsCapexConfirm: isAsset,
+        assetClass:t.assetClass||"other",
+        category:t.category||"other",
       };
     }).filter(t=>t.amount>0);
     const rulesApplied2 = applyImportRules(formatted, ownAccounts, importRules);
@@ -6490,9 +6533,20 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
       }
 
       const nonAllowable = getNonAllowable(desc);
-      return {id:`csv_${Date.now()}_${i}`,date,desc,amount,type,
+      const dl = desc.toLowerCase();
+      // Detect WHT explicitly mentioned in narration
+      const whtExplicit = dl.includes("wht")||dl.includes("withholding")||dl.includes("tax deducted")||dl.includes("net of tax");
+      // Detect VAT explicitly mentioned in narration  
+      const vatExplicit = dl.includes("vat")||dl.includes("value added tax")||dl.includes("plus vat")||dl.includes("incl vat");
+      return {
+        id:`csv_${Date.now()}_${i}`,date,desc,amount,type,
         source:"import",compliance_status:"pending",
-        taxAllowable:!nonAllowable, included:amount>0&&!nonAllowable};
+        taxAllowable:!nonAllowable,
+        included:amount>0&&!nonAllowable,
+        // Only flag if explicitly in narration — computeAggregates checks these before scheduling
+        whtFlag: whtExplicit,
+        vatFlag: vatExplicit,
+      };
     }).filter(t=>t&&t.amount>0);
 
     if(!mapped.length) return setError(
@@ -6518,15 +6572,24 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
   };
 
   const postSelected = () => {
-    // Post included transactions normally
-    const toPost = preview.filter(t=>t.included).map(t=>({...t}));
-    // Also post excluded/non-allowable transactions as "excluded" for reference
-    const excluded = preview.filter(t=>!t.included&&t.amount>0).map(t=>({
+    // Post included transactions — carry confirmed WHT/VAT flags
+    const toPost = preview.filter(t=>t.included).map(t=>({
       ...t,
-      compliance_status:"excluded",
-      included:false,
+      // Transfer confirmed flags into the permanent whtFlag/vatFlag fields
+      whtFlag: t.whtConfirmed||t.whtFlag||false,
+      vatFlag: t.vatConfirmed||t.vatFlag||false,
+      // Asset transactions go to KIV pending register entry
+      compliance_status: t.type==="asset" ? "kiv" : (t.compliance_status||"pending"),
     }));
-    setTxns([...txns,...toPost,...excluded]);
+    // Unincluded assets stay in KIV too (already have compliance_status:"kiv")
+    const kivAssets = preview.filter(t=>!t.included&&t.type==="asset"&&t.amount>0).map(t=>({
+      ...t, compliance_status:"kiv", included:false,
+    }));
+    // Other excluded transactions go to excluded tab for reference
+    const excluded = preview.filter(t=>!t.included&&t.type!=="asset"&&t.amount>0).map(t=>({
+      ...t, compliance_status:"excluded", included:false,
+    }));
+    setTxns([...txns,...toPost,...kivAssets,...excluded]);
     setMode("done");
   };
 
@@ -6575,11 +6638,36 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
             ⚠ <strong>{preview.filter(t=>!t.taxAllowable).length} non-deductible items</strong> unchecked automatically. Check manually only if needed for accounting records.
           </div>
         )}
-        {preview.map((t,i)=>(
-          <div key={t.id} style={{background:"#fff",
-            border:`1.5px solid ${t.included?(t.type==="income"?C.green:C.border):C.border}`,
+        {/* Asset confirmation banner */}
+        {preview.some(t=>t.needsCapexConfirm||t.type==="asset")&&(
+          <div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:10,
+            padding:"10px 12px",marginBottom:10,fontSize:11,color:"#92400E",lineHeight:1.6}}>
+            <strong>🏗 Capital Expenditure detected</strong> — {preview.filter(t=>t.type==="asset").length} transaction(s)
+            flagged as capital assets. These have been <strong>excluded</strong> and held in KIV pending your confirmation.
+            Review each one below and tick to include after confirming it is a genuine capital asset
+            (useful life &gt; 1 year). Incorrectly expensing a capital item violates NTA 2025 S.27.
+          </div>
+        )}
+        {/* WHT/VAT flag banner */}
+        {preview.some(t=>t.whtFlag||t.vatFlag)&&(
+          <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,
+            padding:"10px 12px",marginBottom:10,fontSize:11,color:"#1E40AF",lineHeight:1.6}}>
+            <strong>ℹ WHT / VAT flagged</strong> — some transactions have WHT or VAT indicators.
+            These will only appear in your tax schedules if WHT/VAT is explicitly confirmed in the
+            description or you tick the flag below. Unconfirmed flags are informational only.
+          </div>
+        )}
+
+        {preview.map((t,i)=>{
+          const isAsset = t.type==="asset";
+          const rowBorder = isAsset
+            ? "1.5px solid #F59E0B"
+            : t.included?(t.type==="income"?C.green:C.border):C.border;
+          return(
+          <div key={t.id} style={{background:isAsset?"#FFFBEB":"#fff",
+            border:rowBorder,
             borderRadius:10,padding:"10px 12px",marginBottom:6,
-            display:"flex",gap:10,alignItems:"flex-start",opacity:t.included?1:0.5}}>
+            display:"flex",gap:10,alignItems:"flex-start",opacity:t.included?1:0.6}}>
             <input type="checkbox" checked={!!t.included}
               onChange={()=>setPreview(p=>p.map((x,j)=>j===i?{...x,included:!x.included}:x))}
               style={{marginTop:3,accentColor:C.blue,width:16,height:16,flexShrink:0}}/>
@@ -6591,21 +6679,51 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
                   {t.type==="income"?"+":"-"}{fmt(t.amount)}
                 </div>
               </div>
-              <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:isAsset||t.whtFlag||t.vatFlag?6:0}}>
                 <span style={{fontSize:10,color:C.muted}}>{t.date}</span>
                 <span style={{fontSize:9,padding:"1px 6px",borderRadius:100,fontWeight:700,
-                  background:t.type==="income"?C.greenBg:C.redBg,
-                  color:t.type==="income"?C.green:C.red}}>{t.type.toUpperCase()}</span>
-                {!t.taxAllowable&&<span style={{fontSize:9,background:"#FEF2F2",color:"#DC2626",
+                  background:isAsset?"#FEF3C7":t.type==="income"?C.greenBg:C.redBg,
+                  color:isAsset?"#92400E":t.type==="income"?C.green:C.red}}>
+                  {isAsset?"🏗 CAPEX":t.type.toUpperCase()}
+                </span>
+                {!t.taxAllowable&&!isAsset&&<span style={{fontSize:9,background:"#FEF2F2",color:"#DC2626",
                   padding:"1px 6px",borderRadius:100,fontWeight:700}}>⚠ NOT DEDUCTIBLE</span>}
                 {t.autoRule&&<span style={{fontSize:9,background:"#EDE9FE",color:"#7C3AED",
                   padding:"1px 6px",borderRadius:100,fontWeight:700}}>⚙ {t.autoRule}</span>}
                 {t.type==="transfer"&&<span style={{fontSize:9,background:"#F1F5F9",color:C.muted,
                   padding:"1px 6px",borderRadius:100,fontWeight:700}}>↔ TRANSFER</span>}
+                {t.whtFlag&&(
+                  <span onClick={e=>{e.stopPropagation();
+                    setPreview(p=>p.map((x,j)=>j===i?{...x,whtConfirmed:!x.whtConfirmed}:x));}}
+                    style={{fontSize:9,padding:"2px 7px",borderRadius:100,fontWeight:700,cursor:"pointer",
+                      background:t.whtConfirmed?"#F0FDF4":"#F1F5F9",
+                      color:t.whtConfirmed?C.green:C.muted,
+                      border:`1px solid ${t.whtConfirmed?C.green:C.border}`}}>
+                    {t.whtConfirmed?"✓ WHT confirmed":"○ Confirm WHT?"}
+                  </span>
+                )}
+                {t.vatFlag&&(
+                  <span onClick={e=>{e.stopPropagation();
+                    setPreview(p=>p.map((x,j)=>j===i?{...x,vatConfirmed:!x.vatConfirmed}:x));}}
+                    style={{fontSize:9,padding:"2px 7px",borderRadius:100,fontWeight:700,cursor:"pointer",
+                      background:t.vatConfirmed?"#EFF6FF":"#F1F5F9",
+                      color:t.vatConfirmed?C.blue:C.muted,
+                      border:`1px solid ${t.vatConfirmed?C.blue:C.border}`}}>
+                    {t.vatConfirmed?"✓ VAT confirmed":"○ Confirm VAT?"}
+                  </span>
+                )}
               </div>
+              {isAsset&&(
+                <div style={{background:"#FEF3C7",borderRadius:6,padding:"6px 8px",fontSize:10,color:"#92400E",lineHeight:1.5}}>
+                  AI classified as <strong>capital asset ({t.assetClass})</strong>. Tick the checkbox to confirm
+                  and include in your Asset Register. Leave unticked to keep in KIV for review.
+                  Capital assets are not expensed — they qualify for Capital Allowance (NTA 2025 S.27).
+                </div>
+              )}
             </div>
           </div>
-        ))}
+          );
+        })}
         <button onClick={postSelected} disabled={!preview.filter(t=>t.included).length}
           style={{width:"100%",padding:"14px",
             background:!preview.filter(t=>t.included).length?"#94A3B8":C.green,

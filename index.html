@@ -422,6 +422,19 @@ const fmtD=d=>{try{return new Date(d).toLocaleDateString("en-NG",{day:"numeric",
 const today=()=>new Date().toISOString().split('T')[0];
 
 const STORE_KEY="taxwise_v1";
+const SETTINGS_KEY="taxwise_settings_v1"; // never cleared by reset — own accounts + rules
+
+function loadSettings(){
+  try{
+    const raw=localStorage.getItem(SETTINGS_KEY);
+    return raw?JSON.parse(raw):{ownAccounts:[],importRules:[]};
+  }catch{return {ownAccounts:[],importRules:[]};}
+}
+
+function saveSettings(data){
+  try{localStorage.setItem(SETTINGS_KEY,JSON.stringify(data));}
+  catch(e){console.warn("Settings storage error",e);}
+}
 
 function loadStore(){
   try{
@@ -2915,7 +2928,7 @@ function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
           </div>
           <div className="fg">
             <label className="lbl">ACCOUNT NAME (as it appears in narrations)</label>
-            <input className="inp" placeholder="e.g. ETUKUDO UBONG or MEGA-CONTRAFUN NIG LTD" value={form.accountName} onChange={e=>set("accountName",e.target.value)}/>
+            <input className="inp" placeholder="e.g. ADAEZE OKONKWO or SUNSHINE VENTURES LTD" value={form.accountName} onChange={e=>set("accountName",e.target.value)}/>
           </div>
           <div className="fg">
             <label className="lbl">ACCOUNT NUMBER (last 4-10 digits is fine)</label>
@@ -2958,7 +2971,7 @@ function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
 }
 
 // ── ResetDataModal ───────────────────────────────────────────────────────────
-function ResetDataModal({txns, setTxns, assets, setAssets, importRules, setImportRules, profile, setProfile}){
+function ResetDataModal({txns, setTxns, assets, setAssets, importRules, setImportRules, setOwnAccounts, profile, setProfile}){
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(1); // 1=confirm financial, 2=ask optional
   const [delOwnAccounts, setDelOwnAccounts] = useState(false);
@@ -2973,13 +2986,15 @@ function ResetDataModal({txns, setTxns, assets, setAssets, importRules, setImpor
     // Always delete: transactions and assets (financial data)
     setTxns([]);
     if(setAssets) setAssets([]);
-    // Optional: own accounts
-    if(delOwnAccounts && setProfile){
-      setProfile(p=>({...p, ownAccounts:[]}));
+    // Optional: own accounts — also clears from persistent settings store
+    if(delOwnAccounts && setOwnAccounts){
+      setOwnAccounts([]);
+      saveSettings({ownAccounts:[], importRules: delRules?[]:(loadSettings()?.importRules||[])});
     }
-    // Optional: import rules
+    // Optional: import rules — also clears from persistent settings store
     if(delRules && setImportRules){
       setImportRules([]);
+      saveSettings({importRules:[], ownAccounts: delOwnAccounts?[]:(loadSettings()?.ownAccounts||[])});
     }
     // Optional: profile (reset to defaults but keep auth)
     if(delProfile && setProfile){
@@ -3167,10 +3182,10 @@ function ImportRulesScreen({importRules, setImportRules, onBack}){
   const matchFieldLabel = MATCH_FIELDS.find(([v])=>v===form.matchField)?.[1]||"description";
 
   const placeholders = {
-    description:"e.g. GRACE ETUKUDO or PENSION or TRF FROM SAVINGS",
-    account_number:"e.g. 0123456789 or 6394464782",
-    name:"e.g. JENNIFER ADOGA or UBONG ETUKUDO",
-    phone:"e.g. 08012345678 or +2348012345678",
+    description:"e.g. CHIDI OKAFOR or PENSION or TRF FROM SAVINGS",
+    account_number:"e.g. 0123456789 or 2045678901",
+    name:"e.g. AMARA NWOSU or KEMI ADEYEMI",
+    phone:"e.g. 08023456789 or +2348034567890",
     any:"e.g. GRACE or 0123456789 — matches any field",
   };
 
@@ -4059,7 +4074,7 @@ Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocale
   );
 }
 
-function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,authUser,onSignOut,onEditSetup,onNav,ownAccountsCount,importRulesCount,sub,importRules,setImportRules}){
+function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,authUser,onSignOut,onEditSetup,onNav,ownAccountsCount,importRulesCount,sub,importRules,setImportRules,setOwnAccounts}){
   const[edit,setEdit]=useState({...profile});
   const agg=computeAggregates(txns);
   const [signingOut, setSigningOut] = useState(false);
@@ -4212,9 +4227,9 @@ function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,
           <ResetDataModal
             txns={txns} setTxns={setTxns}
             assets={assets} setAssets={setAssets}
-            ownAccounts={profile._ownAccounts}
             importRules={importRules}
             setImportRules={setImportRules}
+            setOwnAccounts={setOwnAccounts}
             profile={profile} setProfile={setProfile}
           />
         </div>
@@ -4764,8 +4779,9 @@ function App(){
   const[employees,setEmployeesRaw]=useState(saved?.employees||[]);
   const[assets,setAssetsRaw]=useState(saved?.assets||[]);
   const[connectedBanks,setConnectedBanksRaw]=useState(saved?.connectedBanks||[]);
-  const[ownAccounts,setOwnAccountsRaw]=useState(saved?.ownAccounts||[]);
-  const[importRules,setImportRulesRaw]=useState(saved?.importRules||[]);
+  const savedSettings = loadSettings();
+  const[ownAccounts,setOwnAccountsRaw]=useState(savedSettings?.ownAccounts||saved?.ownAccounts||[]);
+  const[importRules,setImportRulesRaw]=useState(savedSettings?.importRules||saved?.importRules||[]);
   const[screen,setScreen]=useState("dashboard");
   const[prevScreen,setPrevScreen]=useState(null);
 
@@ -4823,6 +4839,7 @@ function App(){
     setOwnAccountsRaw(prev=>{
       const next=typeof fn==="function"?fn(prev):fn;
       saveStore({profile,transactions:txns,kiv,employees,assets,connectedBanks,ownAccounts:next,importRules});
+      saveSettings({ownAccounts:next,importRules}); // persist separately — survives data reset
       return next;
     });
   },[profile,txns,kiv,employees,assets,connectedBanks,importRules]);
@@ -4831,6 +4848,7 @@ function App(){
     setImportRulesRaw(prev=>{
       const next=typeof fn==="function"?fn(prev):fn;
       saveStore({profile,transactions:txns,kiv,employees,assets,connectedBanks,ownAccounts,importRules:next});
+      saveSettings({ownAccounts,importRules:next}); // persist separately — survives data reset
       return next;
     });
   },[profile,txns,kiv,employees,assets,connectedBanks,ownAccounts]);
@@ -4975,7 +4993,7 @@ function App(){
       case "upload":     return canEdit ? <CSVUploadScreen setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} profile={profile} authUser={authUser} onBack={back} ownAccounts={ownAccounts} importRules={importRules} sub={sub} setSub={setSub}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted</div>;
       case "import":     return canEdit ? <DocumentUploadScreen profile={profile} authUser={authUser} setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} onBack={back} sub={sub} setSub={setSub}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Data Entry or above</div>;
       case "agent":      return <AgentScreen profile={profile} txns={txns} onBack={back}/>;
-      case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} setTxns={setTxns} assets={assets} setAssets={setAssets} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")} onEditSetup={()=>setScreen("editSetup")} onNav={nav} ownAccountsCount={ownAccounts.length} importRulesCount={importRules.length} sub={sub} importRules={importRules} setImportRules={setImportRules}/>;
+      case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} setTxns={setTxns} assets={assets} setAssets={setAssets} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")} onEditSetup={()=>setScreen("editSetup")} onNav={nav} ownAccountsCount={ownAccounts.length} importRulesCount={importRules.length} sub={sub} importRules={importRules} setImportRules={setImportRules} setOwnAccounts={setOwnAccounts}/>;
       case "ownAccounts": return <OwnAccountsScreen ownAccounts={ownAccounts} setOwnAccounts={setOwnAccounts} onBack={back}/>;
       case "importRules": return <ImportRulesScreen importRules={importRules} setImportRules={setImportRules} onBack={back}/>;
       case "editSetup":  return <OnboardingScreen

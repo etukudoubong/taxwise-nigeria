@@ -1338,6 +1338,8 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   const isCompany=profile.mode==="company";
   const agg=computeAggregates(txns,profile);
   const [showCatPicker,setShowCatPicker]=useState(false);
+  const [breakdown,setBreakdown]=useState(null); // {title, rows, total, working}
+  const openBreakdown=(title,rows,total,working)=>setBreakdown({title,rows,total,working});
 
   const CAT_OPTIONS=isCompany?[]:[ 
     {v:"A",label:"Category A",sub:"Salaried — employer deducts PAYE"},
@@ -1364,50 +1366,216 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
     ?(agg.vatPayable+agg.whtOut+agg.payeOut+(citR?.total||0))
     :(agg.vatPayable+(isCatCD?agg.whtOut:0)+agg.estPIT);
 
-  // Category-specific dashboard stat tiles
+  // ── Breakdown data helpers ─────────────────────────────────────────────────
+  const incomeTxns   = txns.filter(t=>t.type==="income"&&t.compliance_status!=="kiv"&&t.compliance_status!=="excluded");
+  const expenseTxns  = txns.filter(t=>t.type==="expense"&&t.compliance_status!=="kiv"&&t.compliance_status!=="excluded");
+  const excludedTxns = txns.filter(t=>t.compliance_status==="excluded");
+  const kivTxns_     = txns.filter(t=>t.compliance_status==="kiv");
+
+  // Data source breakdown
+  const bySource = {
+    manual:  txns.filter(t=>t.source==="manual"),
+    import:  txns.filter(t=>t.source==="import"&&!t.source?.includes("camera")),
+    camera:  txns.filter(t=>t.source==="camera"||t.aiCaptured),
+    other:   txns.filter(t=>!t.source||(!["manual","import","camera"].includes(t.source))),
+  };
+
+  // Exclusion reasons breakdown
+  const excludedByRule    = excludedTxns.filter(t=>t.autoRule||t.taxStream);
+  const excludedByOwnAcc  = excludedTxns.filter(t=>t.taxStream==="own_account_transfer"||t.autoRule?.includes("own account"));
+  const excludedByCat     = excludedTxns.filter(t=>t.taxStream==="employment"||t.autoRule?.includes("Cat A"));
+
+  // PIT working steps (individual)
+  const pitWorking = !isCompany ? [
+    {label:"Gross Income",                 value: agg.income,                    note:"All income transactions"},
+    {label:"Less: Allowable Expenses",     value:-(agg.allowableExpenses||0),    note:isCatCD?"Wholly-and-exclusively business expenses (NTA 2025 S.20)":"Not applicable for Cat "+cat+" — employees cannot deduct expenses"},
+    {label:"Net Income",                   value: agg.income-(agg.allowableExpenses||0), bold:true, note:"Taxable income before reliefs"},
+    {label:"Less: Consolidated Relief",   value:-Math.max(200000,(agg.income-(agg.allowableExpenses||0))*.01), note:"₦200,000 or 1% of income — whichever is higher (NTA 2025 S.11)"},
+    {label:"Less: Pension (8%)",          value:-Math.round(agg.income*.08),      note:"Employee pension contribution (NTA 2025 S.12)"},
+    {label:"Less: NHF (2.5%)",            value:-Math.round(agg.income*.025),     note:"National Housing Fund contribution"},
+    {label:"Chargeable Income",           value: Math.max(0, agg.income-(agg.allowableExpenses||0)-Math.max(200000,(agg.income-(agg.allowableExpenses||0))*.01)-Math.round(agg.income*.08)-Math.round(agg.income*.025)), bold:true, note:"Subject to graduated PIT rates"},
+    {label:"Gross PIT (graduated)",       value: agg.estPIT+agg.payeIn,          note:"Applied at 7%–24% per NTA 2025 First Schedule"},
+    {label:"Less: PAYE Credit",           value:-agg.payeIn,                     note:cat==="A"||cat==="D"?"Deducted at source by employer":"Not applicable (no employer PAYE)"},
+    {label:"Less: WHT Credit",            value:-agg.whtIn,                      note:"WHT deducted by clients / payers — NTA 2025 Ch.Two Pt.IV"},
+    {label:"Net PIT Liability",           value: Math.max(0,agg.estPIT),         bold:true, highlight:true, note:"Final amount due to NRS"},
+  ] : null;
+
+  // CIT working (company)
+  const citWorking = isCompany && citR ? [
+    {label:"Turnover",                    value:turnover,                         note:"Total revenue from all income transactions"},
+    {label:"Less: Cost of Sales / Opex",  value:-agg.expenses,                   note:"All deductible business expenses (NTA 2025 S.20)"},
+    {label:"Adjusted Profit",             value:Math.max(0,agg.net),             bold:true, note:"Before capital allowances"},
+    {label:"Less: Capital Allowances",   value:-(citR.ca||0),                    note:"Qualifying assets at NTA 2025 rates (10%/20%/25%)"},
+    {label:"Taxable Profit",             value:Math.max(0,agg.net-(citR.ca||0)), bold:true, note:""},
+    {label:"CIT at "+(citR.rate||30)+"%", value:citR.cit||0,                    note:"NTA 2025 S.116 — "+citR.tier},
+    {label:"Development Levy",           value:citR.devLevy||0,                  note:"NTA 2025 S.117 — ₦50,000 (small) or ₦250,000 (medium/large)"},
+    {label:"Less: WHT Credits",          value:-agg.whtIn,                       note:"WHT deducted by customers — offset against CIT"},
+    {label:"Net CIT Liability",          value:Math.max(0,(citR.total||0)-agg.whtIn), bold:true, highlight:true, note:"Due 6 months after year-end"},
+  ] : null;
+
+  // Category-specific dashboard stat tiles — now all clickable
   const statTiles=isCompany?[
-    {l:"Income to Date", v:fmt(agg.income),   c:"#4ADE80", nav:null},
-    {l:"Expenses",       v:fmt(agg.expenses),  c:"#F87171", nav:null},
-    {l:"WHT to Remit",   v:fmt(agg.whtOut),    c:"#FCA5A5", nav:"schedule_whtOut", sub:"tap for schedule"},
-    {l:"PAYE (Staff)",   v:fmt(agg.payeOut),   c:"#93C5FD", nav:"schedule_payeOut", sub:"tap for schedule"},
+    {l:"Income to Date",  v:fmt(agg.income),   c:"#4ADE80",
+     onClick:()=>openBreakdown("Income Breakdown",incomeTxns,agg.income,null)},
+    {l:"Expenses",        v:fmt(agg.expenses),  c:"#F87171",
+     onClick:()=>openBreakdown("Expense Breakdown",expenseTxns,agg.expenses,null)},
+    {l:"WHT to Remit",    v:fmt(agg.whtOut),    c:"#FCA5A5", nav:"schedule_whtOut", sub:"tap for schedule",
+     onClick:()=>onNav("schedule_whtOut")},
+    {l:"PAYE (Staff)",    v:fmt(agg.payeOut),   c:"#93C5FD", nav:"schedule_payeOut", sub:"tap for schedule",
+     onClick:()=>onNav("schedule_payeOut")},
   ]:cat==="A"?[
-    {l:"Income to Date", v:fmt(agg.income),   c:"#4ADE80", nav:null},
-    {l:"Expenses",       v:fmt(agg.expenses),  c:"#F87171", nav:null},
-    {l:"PAYE Credit",    v:fmt(agg.payeIn),    c:"#93C5FD", nav:"schedule_payeIn",  sub:"employer deducted"},
-    {l:"WHT Credits",    v:fmt(agg.whtIn),     c:"#4ADE80", nav:"schedule_whtIn",   sub:"tap for schedule"},
+    {l:"Income to Date",  v:fmt(agg.income),   c:"#4ADE80",
+     onClick:()=>openBreakdown("Income Breakdown",incomeTxns,agg.income,null)},
+    {l:"Expenses",        v:fmt(agg.expenses),  c:"#F87171",
+     onClick:()=>openBreakdown("Expense Breakdown",expenseTxns,agg.expenses,null)},
+    {l:"PAYE Credit",     v:fmt(agg.payeIn),    c:"#93C5FD", sub:"employer deducted",
+     onClick:()=>openBreakdown("PAYE Credit",agg.schedules.payeIn,agg.payeIn,null)},
+    {l:"WHT Credits",     v:fmt(agg.whtIn),     c:"#4ADE80", sub:"tap to view",
+     onClick:()=>openBreakdown("WHT Credits",agg.schedules.whtIn,agg.whtIn,null)},
   ]:cat==="B"?[
-    {l:"Income to Date",   v:fmt(agg.income),   c:"#4ADE80", nav:null},
-    {l:"Expenses",         v:fmt(agg.expenses),  c:"#F87171", nav:null},
-    {l:"Est. PIT Due",     v:fmt(agg.estPIT),    c:"#FCD34D", nav:null, sub:"self-assessment"},
-    {l:"WHT Credits",      v:fmt(agg.whtIn),     c:"#4ADE80", nav:"schedule_whtIn", sub:"tap for schedule"},
+    {l:"Income to Date",  v:fmt(agg.income),   c:"#4ADE80",
+     onClick:()=>openBreakdown("Income Breakdown",incomeTxns,agg.income,null)},
+    {l:"Expenses",        v:fmt(agg.expenses),  c:"#F87171",
+     onClick:()=>openBreakdown("Expense Breakdown",expenseTxns,agg.expenses,null)},
+    {l:"Est. PIT Due",    v:fmt(agg.estPIT),    c:"#FCD34D", sub:"tap for working",
+     onClick:()=>openBreakdown("PIT Computation",null,agg.estPIT,pitWorking)},
+    {l:"WHT Credits",     v:fmt(agg.whtIn),     c:"#4ADE80", sub:"tap to view",
+     onClick:()=>openBreakdown("WHT Credits",agg.schedules.whtIn,agg.whtIn,null)},
   ]:cat==="C"?[
-    {l:"Income to Date",   v:fmt(agg.income),         c:"#4ADE80", nav:null},
-    {l:"Allowable Exp.",   v:fmt(agg.allowableExpenses),c:"#F87171", nav:null, sub:"deductible"},
-    {l:"WHT Credits",      v:fmt(agg.whtIn),           c:"#4ADE80", nav:"schedule_whtIn", sub:"from clients"},
-    {l:"Est. PIT Due",     v:fmt(agg.estPIT),          c:"#FCD34D", nav:null, sub:"after WHT credit"},
+    {l:"Income to Date",  v:fmt(agg.income),   c:"#4ADE80",
+     onClick:()=>openBreakdown("Income Breakdown",incomeTxns,agg.income,null)},
+    {l:"Allowable Exp.",  v:fmt(agg.allowableExpenses||0), c:"#F87171", sub:"deductible",
+     onClick:()=>openBreakdown("Allowable Expenses",expenseTxns.filter(t=>t.taxAllowable!==false),agg.allowableExpenses||0,null)},
+    {l:"WHT Credits",     v:fmt(agg.whtIn),    c:"#4ADE80", sub:"from clients",
+     onClick:()=>openBreakdown("WHT Credits from Clients",agg.schedules.whtIn,agg.whtIn,null)},
+    {l:"Est. PIT Due",    v:fmt(agg.estPIT),   c:"#FCD34D", sub:"tap for working",
+     onClick:()=>openBreakdown("PIT Computation",null,agg.estPIT,pitWorking)},
   ]/* D */:[ 
-    {l:"Income to Date",   v:fmt(agg.income),   c:"#4ADE80", nav:null},
-    {l:"PAYE Credit",      v:fmt(agg.payeIn),   c:"#93C5FD", nav:"schedule_payeIn", sub:"salary portion"},
-    {l:"WHT Credits",      v:fmt(agg.whtIn),    c:"#4ADE80", nav:"schedule_whtIn",  sub:"business income"},
-    {l:"Est. PIT Due",     v:fmt(agg.estPIT),   c:"#FCD34D", nav:null, sub:"net after credits"},
+    {l:"Income to Date",  v:fmt(agg.income),   c:"#4ADE80",
+     onClick:()=>openBreakdown("Income Breakdown",incomeTxns,agg.income,null)},
+    {l:"PAYE Credit",     v:fmt(agg.payeIn),   c:"#93C5FD", sub:"salary portion",
+     onClick:()=>openBreakdown("PAYE Credit",agg.schedules.payeIn,agg.payeIn,null)},
+    {l:"WHT Credits",     v:fmt(agg.whtIn),    c:"#4ADE80", sub:"business income",
+     onClick:()=>openBreakdown("WHT Credits",agg.schedules.whtIn,agg.whtIn,null)},
+    {l:"Est. PIT Due",    v:fmt(agg.estPIT),   c:"#FCD34D", sub:"tap for working",
+     onClick:()=>openBreakdown("PIT Computation",null,agg.estPIT,pitWorking)},
   ];
+
+  // ── Breakdown modal ────────────────────────────────────────────────────────
+  const BreakdownModal = ()=>{
+    if(!breakdown) return null;
+    const {title, rows, total, working} = breakdown;
+    return(
+      <div style={{position:"fixed",inset:0,background:"rgba(11,22,40,.85)",zIndex:900,
+        display:"flex",flexDirection:"column",overflowY:"auto"}}
+        onClick={()=>setBreakdown(null)}>
+        <div style={{marginTop:"auto",width:"100%",maxWidth:430,alignSelf:"center",
+          background:"#fff",borderRadius:"20px 20px 0 0",maxHeight:"85vh",
+          display:"flex",flexDirection:"column"}}
+          onClick={e=>e.stopPropagation()}>
+          {/* Header */}
+          <div style={{padding:"16px 16px 12px",borderBottom:"1px solid #E2E8F0",
+            display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+            <div>
+              <div style={{fontSize:14,fontWeight:800,color:"#0B1628"}}>{title}</div>
+              <div style={{fontSize:12,fontWeight:700,color:C.green,marginTop:2}}>{fmt(total)}</div>
+            </div>
+            <button onClick={()=>setBreakdown(null)}
+              style={{background:"#F1F5F9",border:"none",borderRadius:8,
+                width:32,height:32,fontSize:16,cursor:"pointer",color:C.muted}}>✕</button>
+          </div>
+          {/* Body */}
+          <div style={{overflowY:"auto",padding:"12px 16px 32px"}}>
+            {/* Working steps (PIT/CIT computation) */}
+            {working&&(
+              <div>
+                <div style={{fontSize:10,fontWeight:700,letterSpacing:".08em",color:C.muted,marginBottom:10}}>
+                  TAX COMPUTATION WORKING
+                </div>
+                {working.map((step,i)=>(
+                  <div key={i} style={{
+                    display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+                    padding:"9px 10px",marginBottom:4,borderRadius:8,
+                    background:step.highlight?"#F0FDF4":step.bold?"#F8FAFC":"#fff",
+                    border:`1px solid ${step.highlight?C.green:step.bold?"#E2E8F0":"#F1F5F9"}`}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:12,fontWeight:step.bold?700:400,
+                        color:step.highlight?C.green:C.ink}}>{step.label}</div>
+                      {step.note&&<div style={{fontSize:10,color:C.muted,marginTop:1,lineHeight:1.4}}>{step.note}</div>}
+                    </div>
+                    <div style={{fontSize:13,fontWeight:step.bold?800:600,
+                      color:step.highlight?C.green:step.value<0?C.red:C.ink,
+                      flexShrink:0,marginLeft:12,fontFamily:"monospace"}}>
+                      {step.value<0?"("+fmt(Math.abs(step.value))+")":fmt(step.value)}
+                    </div>
+                  </div>
+                ))}
+                <div style={{fontSize:10,color:C.muted,marginTop:8,lineHeight:1.5,
+                  padding:"8px 10px",background:"#F8FAFC",borderRadius:8}}>
+                  ℹ Estimates based on transactions recorded. Consult a registered tax
+                  consultant for your final self-assessment return.
+                </div>
+              </div>
+            )}
+            {/* Transaction rows */}
+            {rows&&rows.length>0&&(
+              <div>
+                <div style={{fontSize:10,fontWeight:700,letterSpacing:".08em",color:C.muted,marginBottom:8}}>
+                  {rows.length} TRANSACTION{rows.length!==1?"S":""}
+                </div>
+                {rows.map((t,i)=>(
+                  <div key={t.id||i} style={{display:"flex",justifyContent:"space-between",
+                    alignItems:"flex-start",padding:"8px 0",
+                    borderBottom:"1px solid #F1F5F9"}}>
+                    <div style={{flex:1,minWidth:0,marginRight:8}}>
+                      <div style={{fontSize:11,color:C.ink,lineHeight:1.3,
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {t.desc||t.description||"—"}
+                      </div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:1}}>{t.date||""}</div>
+                    </div>
+                    <div style={{fontSize:12,fontWeight:700,flexShrink:0,
+                      color:(t.type==="income"||t.gross>0)?C.green:C.red}}>
+                      {fmt(t.amount||t.gross||t.tax||0)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {rows&&rows.length===0&&(
+              <div style={{textAlign:"center",padding:"32px 0",color:C.muted}}>
+                <div style={{fontSize:28,marginBottom:8}}>📭</div>
+                <div style={{fontSize:13}}>No transactions in this category</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return(
     <div style={{paddingBottom:80}}>
+      <BreakdownModal/>
       {/* Hero */}
       <div className={isCompany?"hero-blue":"hero-green"}>
         <div style={{fontSize:11,opacity:.65,letterSpacing:".08em",marginBottom:4,fontWeight:700}}>
           {isCompany?profile.companyName||"YOUR COMPANY":profile.name||"YOUR DASHBOARD"} · TAX POSITION
         </div>
-        <div style={{fontSize:38,fontWeight:800,letterSpacing:"-.02em",marginBottom:4}}>{fmt(totalTax)}</div>
+        <div onClick={()=>openBreakdown(isCompany?"CIT Working":"PIT Working",null,totalTax,isCompany?citWorking:pitWorking)}
+          style={{cursor:"pointer",display:"inline-block"}}>
+          <div style={{fontSize:38,fontWeight:800,letterSpacing:"-.02em",marginBottom:2}}>{fmt(totalTax)}</div>
+          <div style={{fontSize:9,opacity:.45,marginBottom:4}}>↗ tap to see working</div>
+        </div>
         <div style={{fontSize:12,opacity:.65}}>Estimated obligations · {new Date().toLocaleDateString("en-NG",{month:"long",year:"numeric"})}</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:16}}>
           {statTiles.map(s=>(
-            <div key={s.l} onClick={()=>s.nav&&onNav(s.nav)}
-              style={{background:"rgba(255,255,255,.1)",border:`1px solid ${s.nav?"rgba(255,255,255,.25)":"rgba(255,255,255,.12)"}`,borderRadius:10,padding:"10px 12px",cursor:s.nav?"pointer":"default",position:"relative"}}>
+            <div key={s.l} onClick={s.onClick||undefined}
+              style={{background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.2)",
+                borderRadius:10,padding:"10px 12px",cursor:"pointer",position:"relative"}}>
               <div style={{fontSize:10,opacity:.65,letterSpacing:".04em"}}>{s.l}</div>
               <div style={{fontSize:16,fontWeight:700,color:s.c,marginTop:2}}>{s.v}</div>
-              {s.sub&&<div style={{fontSize:9,opacity:.55,marginTop:2}}>↗ {s.sub}</div>}
+              <div style={{fontSize:9,opacity:.5,marginTop:2}}>↗ tap for breakdown</div>
             </div>
           ))}
         </div>
@@ -1549,6 +1717,128 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+
+        {/* ── Data Sources Summary ────────────────────────── */}
+        <div className="card">
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div className="ctitle" style={{marginBottom:0}}>DATA SOURCES</div>
+            <span style={{fontSize:11,fontWeight:700,color:C.blue}}>{txns.length} total transactions</span>
+          </div>
+          {[
+            {l:"Manual Entry",    icon:"✍️", txns:bySource.manual,  color:"#7C3AED"},
+            {l:"CSV / Excel Import",icon:"📄", txns:bySource.import, color:C.blue},
+            {l:"Camera / AI Scan",icon:"📷", txns:bySource.camera, color:"#059669"},
+            {l:"Other / System",  icon:"⚙", txns:bySource.other,  color:C.muted},
+          ].filter(s=>s.txns.length>0).map(s=>{
+            const inc = s.txns.filter(t=>t.type==="income").reduce((a,t)=>a+t.amount,0);
+            const exp = s.txns.filter(t=>t.type==="expense").reduce((a,t)=>a+t.amount,0);
+            return(
+              <div key={s.l} onClick={()=>openBreakdown(s.l,s.txns,inc+exp,null)}
+                style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                  padding:"9px 10px",marginBottom:6,borderRadius:10,cursor:"pointer",
+                  background:"#F8FAFC",border:"1px solid #E2E8F0"}}>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <span style={{fontSize:16}}>{s.icon}</span>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{s.l}</div>
+                    <div style={{fontSize:10,color:C.muted}}>{s.txns.length} transaction{s.txns.length!==1?"s":""}</div>
+                  </div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:11,fontWeight:700,color:C.green}}>+{fmt(inc)}</div>
+                  <div style={{fontSize:11,fontWeight:700,color:C.red}}>-{fmt(exp)}</div>
+                </div>
+              </div>
+            );
+          })}
+          {txns.length===0&&(
+            <div style={{textAlign:"center",padding:"16px 0",color:C.muted,fontSize:12}}>
+              No transactions yet — add or import to get started
+            </div>
+          )}
+        </div>
+
+        {/* ── Exclusions Summary ───────────────────────────── */}
+        {excludedTxns.length>0&&(
+          <div className="card">
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <div className="ctitle" style={{marginBottom:0}}>EXCLUDED TRANSACTIONS</div>
+              <span style={{fontSize:11,fontWeight:700,color:"#DC2626"}}>{excludedTxns.length} excluded</span>
+            </div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.5}}>
+              These transactions were removed from tax computations. Tap each to review the
+              contributing transactions.
+            </div>
+            {[
+              {l:"By Import Rules",    icon:"⚙", txns:excludedByRule.filter(t=>!excludedByOwnAcc.includes(t)&&!excludedByCat.includes(t)), color:"#7C3AED",
+               note:"Auto-classified as non-taxable by your import rules"},
+              {l:"Own Account Transfers",icon:"🏦",txns:excludedByOwnAcc, color:C.blue,
+               note:"Inter-account transfers — not taxable income"},
+              {l:"Category Exclusions",icon:"👤",txns:excludedByCat, color:"#92400E",
+               note:"Transactions excluded based on your taxpayer category"},
+              {l:"Other Exclusions",   icon:"✗", txns:excludedTxns.filter(t=>!excludedByRule.includes(t)&&!excludedByOwnAcc.includes(t)&&!excludedByCat.includes(t)), color:C.red,
+               note:"Manually excluded or excluded during import"},
+            ].filter(s=>s.txns.length>0).map(s=>{
+              const total = s.txns.reduce((a,t)=>a+t.amount,0);
+              return(
+                <div key={s.l} onClick={()=>openBreakdown(s.l+" (Excluded)",s.txns,total,null)}
+                  style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                    padding:"9px 10px",marginBottom:6,borderRadius:10,cursor:"pointer",
+                    background:"#FEF2F2",border:"1px solid #FECACA"}}>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <span style={{fontSize:16}}>{s.icon}</span>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:600,color:"#7F1D1D"}}>{s.l}</div>
+                      <div style={{fontSize:10,color:"#DC2626",opacity:.7}}>{s.txns.length} item{s.txns.length!==1?"s":""} · {s.note}</div>
+                    </div>
+                  </div>
+                  <div style={{fontSize:12,fontWeight:700,color:"#DC2626",flexShrink:0,marginLeft:8}}>
+                    {fmt(total)}
+                  </div>
+                </div>
+              );
+            })}
+            <button onClick={()=>onNav("journal")}
+              style={{width:"100%",marginTop:4,padding:"8px",background:"#FEF2F2",
+                border:"1px solid #FECACA",borderRadius:8,color:"#DC2626",
+                fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              Review in Journal → Excluded tab
+            </button>
+          </div>
+        )}
+
+        {/* ── Tax Obligation Working ───────────────────────── */}
+        <div className="card">
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div className="ctitle" style={{marginBottom:0}}>
+              {isCompany?"CIT COMPUTATION":"PIT COMPUTATION"} — WORKING
+            </div>
+            <span style={{fontSize:11,fontWeight:700,color:C.green}}>{fmt(totalTax)}</span>
+          </div>
+          {(isCompany?citWorking:pitWorking)?.map((step,i)=>(
+            <div key={i} style={{
+              display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+              padding:"8px 10px",marginBottom:3,borderRadius:8,
+              background:step.highlight?"#F0FDF4":step.bold?"#F8FAFC":"#fff",
+              border:`1px solid ${step.highlight?C.green:step.bold?"#E2E8F0":"#F1F5F9"}`}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:step.bold?700:400,
+                  color:step.highlight?C.green:C.ink}}>{step.label}</div>
+                {step.note&&<div style={{fontSize:9,color:C.muted,marginTop:1,lineHeight:1.4}}>{step.note}</div>}
+              </div>
+              <div style={{fontSize:12,fontWeight:step.bold?800:600,
+                color:step.highlight?C.green:step.value<0?C.red:C.ink,
+                flexShrink:0,marginLeft:12,fontFamily:"monospace"}}>
+                {step.value<0?"("+fmt(Math.abs(step.value))+")":fmt(step.value)}
+              </div>
+            </div>
+          ))}
+          <div style={{marginTop:8,fontSize:10,color:C.muted,lineHeight:1.5,
+            padding:"8px 10px",background:"#F8FAFC",borderRadius:8}}>
+            Estimates computed from {txns.length} transactions. 
+            Tap the tax figure above for full working in a modal.
           </div>
         </div>
 

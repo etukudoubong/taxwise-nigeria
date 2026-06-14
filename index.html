@@ -780,61 +780,89 @@ function classifyTxn(desc, type){
     law:"NTA 2025, Sec 20"};
 }
 
-function computeAggregates(txns){
-  let income=0, expenses=0;
+function computeAggregates(txns, profile){
+  // Profile-aware aggregation — category determines what applies
+  const cat        = profile?.empCategory || "A";
+  const isCompany  = profile?.mode === "company";
+  const isVatReg   = isCompany || profile?.vatRegistered === "yes";
+  const isCatCD    = cat === "C" || cat === "D";
+  // Cat A/B: PAYE is handled by employer — only credit applies (payeIn)
+  // Cat C:   No PAYE, no employer — WHT credits from clients are primary
+  // Cat D:   PAYE on salary portion only; WHT credits on business income
+  // Company: Must remit PAYE for employees (payeOut); WHT on contracts
+
+  let income=0, expenses=0, allowableExpenses=0;
   let vatOut=0, vatIn=0, whtIn=0, whtOut=0, payeIn=0, payeOut=0;
 
   const schedules={
-    whtOut:[],    // WHT you must deduct & remit
-    whtIn:[],     // WHT deducted from your income (credit)
-    vatOut:[],    // Output VAT on your sales
-    vatIn:[],     // Input VAT on your purchases
-    payeOut:[],   // PAYE you must deduct & remit
-    payeIn:[],    // PAYE deducted from your salary (credit)
-    cgtEvents:[],  // CGT-flagged asset disposal transactions
+    whtOut:[], whtIn:[], vatOut:[], vatIn:[],
+    payeOut:[], payeIn:[], cgtEvents:[],
   };
 
   for(const t of txns){
-    if(t.compliance_status==="kiv") continue; // KIV items not yet posted
+    if(t.compliance_status==="kiv"||t.compliance_status==="excluded") continue;
     const r=classifyTxn(t.desc, t.type);
 
     if(t.type==="income"){
       income+=t.amount;
-      if(["WHT","WHT+VAT","Zero-VAT"].some(h=>r.head.startsWith(h.split("+")[0]))||r.head==="WHT"){
+
+      // WHT credits: apply for Cat C/D (self-employed, professional fees)
+      // and for companies receiving payments with WHT deducted
+      const isWHTHead = ["WHT","WHT+VAT","Zero-VAT"].some(h=>r.head.startsWith(h.split("+")[0]))||r.head==="WHT";
+      if(isWHTHead && (isCatCD||isCompany)){
         const wht=r.wht_amount_fn?r.wht_amount_fn(t.amount):t.amount*.10;
         if(wht>0){
           whtIn+=wht;
           schedules.whtIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:wht,rate:"10%",type:"WHT Credit",law:"NTA 2025 Ch.Two Pt.IV"});
         }
       }
-      if(r.head==="VAT+CIT"||r.head==="WHT+VAT"){
+
+      // VAT output: only if VAT-registered
+      if((r.head==="VAT+CIT"||r.head==="WHT+VAT") && isVatReg){
         const vat=t.amount*.075;
         vatOut+=vat;
         schedules.vatOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:vat,rate:"7.5%",type:"Output VAT",law:"NTA 2025 Ch.Four Sec 52"});
       }
-      if(r.head==="PAYE"){
-        const paye=t.amount*.15; // estimated at 15%
+
+      // PAYE credit: only for Cat A/D where employer deducts PAYE
+      // Cat A: employer deducts PAYE — shows as credit on annual return
+      // Cat D: salary portion has PAYE deducted
+      // Cat B/C: no employer PAYE — self-assess directly
+      if(r.head==="PAYE" && (cat==="A"||cat==="D")){
+        const paye=t.amount*.15;
         payeIn+=paye;
-        schedules.payeIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE Credit",law:"TAA 2025 Sec 13"});
+        schedules.payeIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE Credit (employer deducted)",law:"TAA 2025 Sec 13"});
       }
+
       if(r.head==="CGT-EVENT"){
         schedules.cgtEvents.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:0,rate:"CGT — check calculator",type:"Asset Disposal",status:t.compliance_status||"pending",law:"NTA 2025 S.34-S.46"});
       }
+
     } else {
       expenses+=t.amount;
-      if(r.compliance_required && r.head.startsWith("WHT-out") && r.wht_rate){
+      // Allowable expenses: only for Cat C/D and companies (wholly-and-exclusively test)
+      if(t.taxAllowable!==false && (isCatCD||isCompany)){
+        allowableExpenses+=t.amount;
+      }
+
+      // WHT on outgoing payments: only companies and Cat C/D (making business payments)
+      if(r.compliance_required && r.head.startsWith("WHT-out") && r.wht_rate && (isCatCD||isCompany)){
         const wht=t.amount*(r.wht_rate/100);
         const net=t.amount-wht;
         whtOut+=wht;
         schedules.whtOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:wht,net,rate:r.wht_rate+"%",type:r.head,status:t.compliance_status||"pending",law:r.law});
       }
-      if(r.head==="PAYE-out"){
-        const paye=t.amount*.15; // estimated; payroll engine gives exact
+
+      // PAYE out: only companies (must remit staff PAYE)
+      if(r.head==="PAYE-out" && isCompany){
+        const paye=t.amount*.15;
         payeOut+=paye;
         schedules.payeOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE",status:t.compliance_status||"pending",law:"TAA 2025 Sec 13"});
       }
-      if(r.head==="Overhead"||r.head==="Expense"){
-        if(t.desc.toLowerCase().match(/purchase|bought|supplies|stock|inventory|material/)){
+
+      // Input VAT: only if VAT-registered
+      if(isVatReg && (r.head==="Overhead"||r.head==="Expense")){
+        if(t.vatFlag||t.desc.toLowerCase().match(/purchase|supplies|stock|inventory|material/)){
           const vat=t.amount*.075;
           vatIn+=vat;
           schedules.vatIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:vat,rate:"7.5%",type:"Input VAT",law:"NTA 2025 Ch.Four Sec 59"});
@@ -844,13 +872,29 @@ function computeAggregates(txns){
   }
 
   const vatNet=vatOut-vatIn;
+
+  // Category-specific PIT estimate
+  let estPIT=0;
+  if(!isCompany){
+    const annualIncome=income; // annualise if needed
+    const deductions=isCatCD?allowableExpenses:0;
+    const taxable=Math.max(0,annualIncome-deductions-payeIn); // rough estimate
+    estPIT=pitBands(taxable)-payeIn;
+    estPIT=Math.max(0,estPIT);
+  }
+
   return{
-    income, expenses, net:income-expenses,
+    income, expenses, allowableExpenses,
+    net:income-expenses, netAllowable:income-allowableExpenses,
     vatOut, vatIn, vatNet, vatPayable:Math.max(0,vatNet), vatRefund:Math.max(0,-vatNet),
-    whtIn, whtOut, payeIn, payeOut, cgtEvents:schedules.cgtEvents.length,
-    estCIT:Math.max(0,income-expenses)*.30,
-    schedules,  // line-by-line breakdown per tax head
+    whtIn, whtOut, payeIn, payeOut,
+    cgtEvents:schedules.cgtEvents.length,
+    estCIT:isCompany?Math.max(0,income-expenses)*.30:0,
+    estPIT,
+    schedules,
     txnCount:txns.length,
+    // Category context for display
+    cat, isCompany, isCatCD, isVatReg,
   };
 }
 
@@ -1260,7 +1304,7 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
 
 function Dashboard({profile,txns,kiv,onNav,setProfile}){
   const isCompany=profile.mode==="company";
-  const agg=computeAggregates(txns);
+  const agg=computeAggregates(txns,profile);
   const [showCatPicker,setShowCatPicker]=useState(false);
 
   const CAT_OPTIONS=isCompany?[]:[ 
@@ -1278,9 +1322,43 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
     {n:isCompany?"CIT":"PIT", label:isCompany?"CIT Return":"Annual PIT Return",days:getDaysLeft(isCompany?"CIT":"PIT")},
   ];
 
+  const cat=profile.empCategory||"A";
+  const isCatCD=cat==="C"||cat==="D";
   const citR=isCompany?computeCIT(Math.max(0,agg.net),turnover,profile.fixedAssets||0,profile.isProfessional||false):null;
   const complianceScore=78;
-  const totalTax=agg.vatPayable+agg.whtOut+agg.payeOut+(isCompany?citR?.total||0:agg.payeIn);
+
+  // Category-aware total and stats
+  const totalTax=isCompany
+    ?(agg.vatPayable+agg.whtOut+agg.payeOut+(citR?.total||0))
+    :(agg.vatPayable+(isCatCD?agg.whtOut:0)+agg.estPIT);
+
+  // Category-specific dashboard stat tiles
+  const statTiles=isCompany?[
+    {l:"Income to Date", v:fmt(agg.income),   c:"#4ADE80", nav:null},
+    {l:"Expenses",       v:fmt(agg.expenses),  c:"#F87171", nav:null},
+    {l:"WHT to Remit",   v:fmt(agg.whtOut),    c:"#FCA5A5", nav:"schedule_whtOut", sub:"tap for schedule"},
+    {l:"PAYE (Staff)",   v:fmt(agg.payeOut),   c:"#93C5FD", nav:"schedule_payeOut", sub:"tap for schedule"},
+  ]:cat==="A"?[
+    {l:"Income to Date", v:fmt(agg.income),   c:"#4ADE80", nav:null},
+    {l:"Expenses",       v:fmt(agg.expenses),  c:"#F87171", nav:null},
+    {l:"PAYE Credit",    v:fmt(agg.payeIn),    c:"#93C5FD", nav:"schedule_payeIn",  sub:"employer deducted"},
+    {l:"WHT Credits",    v:fmt(agg.whtIn),     c:"#4ADE80", nav:"schedule_whtIn",   sub:"tap for schedule"},
+  ]:cat==="B"?[
+    {l:"Income to Date",   v:fmt(agg.income),   c:"#4ADE80", nav:null},
+    {l:"Expenses",         v:fmt(agg.expenses),  c:"#F87171", nav:null},
+    {l:"Est. PIT Due",     v:fmt(agg.estPIT),    c:"#FCD34D", nav:null, sub:"self-assessment"},
+    {l:"WHT Credits",      v:fmt(agg.whtIn),     c:"#4ADE80", nav:"schedule_whtIn", sub:"tap for schedule"},
+  ]:cat==="C"?[
+    {l:"Income to Date",   v:fmt(agg.income),         c:"#4ADE80", nav:null},
+    {l:"Allowable Exp.",   v:fmt(agg.allowableExpenses),c:"#F87171", nav:null, sub:"deductible"},
+    {l:"WHT Credits",      v:fmt(agg.whtIn),           c:"#4ADE80", nav:"schedule_whtIn", sub:"from clients"},
+    {l:"Est. PIT Due",     v:fmt(agg.estPIT),          c:"#FCD34D", nav:null, sub:"after WHT credit"},
+  ]/* D */:[ 
+    {l:"Income to Date",   v:fmt(agg.income),   c:"#4ADE80", nav:null},
+    {l:"PAYE Credit",      v:fmt(agg.payeIn),   c:"#93C5FD", nav:"schedule_payeIn", sub:"salary portion"},
+    {l:"WHT Credits",      v:fmt(agg.whtIn),    c:"#4ADE80", nav:"schedule_whtIn",  sub:"business income"},
+    {l:"Est. PIT Due",     v:fmt(agg.estPIT),   c:"#FCD34D", nav:null, sub:"net after credits"},
+  ];
 
   return(
     <div style={{paddingBottom:80}}>
@@ -1292,18 +1370,7 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
         <div style={{fontSize:38,fontWeight:800,letterSpacing:"-.02em",marginBottom:4}}>{fmt(totalTax)}</div>
         <div style={{fontSize:12,opacity:.65}}>Estimated obligations · {new Date().toLocaleDateString("en-NG",{month:"long",year:"numeric"})}</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:16}}>
-          {[
-            {l:"Income to Date", v:fmt(agg.income),   c:"#4ADE80", nav:null, sub:null},
-            {l:"Expenses",       v:fmt(agg.expenses),  c:"#F87171", nav:null, sub:null},
-            {l:isCompany?"WHT to Remit":"WHT Credits",
-              v:fmt(isCompany?agg.whtOut:agg.whtIn),
-              c:"#FCA5A5", nav:isCompany?"schedule_whtOut":"schedule_whtIn",
-              sub:"tax only · tap for schedule"},
-            {l:isCompany?"Output VAT":"PAYE Credit",
-              v:fmt(isCompany?agg.vatOut:agg.payeIn),
-              c:"#93C5FD", nav:isCompany?"schedule_vatOut":"schedule_payeIn",
-              sub:"tax only · tap for schedule"},
-          ].map(s=>(
+          {statTiles.map(s=>(
             <div key={s.l} onClick={()=>s.nav&&onNav(s.nav)}
               style={{background:"rgba(255,255,255,.1)",border:`1px solid ${s.nav?"rgba(255,255,255,.25)":"rgba(255,255,255,.12)"}`,borderRadius:10,padding:"10px 12px",cursor:s.nav?"pointer":"default",position:"relative"}}>
               <div style={{fontSize:10,opacity:.65,letterSpacing:".04em"}}>{s.l}</div>
@@ -1486,13 +1553,13 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   );
 }
 
-function JournalScreen({txns,setTxns,kiv,setKiv,onNav}){
+function JournalScreen({txns,setTxns,kiv,setKiv,onNav,profile}){
   const[filter,setFilter]=useState("all");
   const[showAdd,setShowAdd]=useState(false);
   const[newTxn,setNewTxn]=useState({desc:"",amount:"",type:"income",date:today()});
   const[pendingTxn,setPendingTxn]=useState(null);  // awaiting compliance popup
   const[editTxn,setEditTxn]=useState(null);         // for edit screen
-  const agg=computeAggregates(txns);
+  const agg=computeAggregates(txns,profile);
   const kivTxns=kiv||[];
 
   const tryPost=(txn)=>{
@@ -2682,7 +2749,7 @@ function TaxScheduleScreen({scheduleKey, schedules, profile, onBack}){
 }
 
 function CITScreen({profile, txns, assets, onBack}){
-  const agg = computeAggregates(txns);
+  const agg = computeAggregates(txns,profile);
   const turnover = computeTurnover(txns);
   const totalCA = assets.reduce((s,a)=>s+computeAssetCA(a).annual,0);
 
@@ -2712,7 +2779,7 @@ function CITScreen({profile, txns, assets, onBack}){
   useEffect(()=>{
     if(!override){
       const newTurnover = computeTurnover(txns);
-      const newAgg = computeAggregates(txns);
+      const newAgg = computeAggregates(txns,profile);
       const newCA = assets.reduce((s,a)=>s+computeAssetCA(a).annual,0);
       const newCatCD = profile.empCategory==="C"||profile.empCategory==="D";
       const newIsCompany = profile.mode==="company";
@@ -3849,7 +3916,7 @@ function DeadlinesScreen({profile,onBack}){
 function VATScreen({txns,onBack}){
   const[output,setOutput]=useState(0);
   const[input,setInput]=useState(0);
-  const agg=computeAggregates(txns);
+  const agg=computeAggregates(txns,profile);
   const ov=output||agg.vatOut;
   const iv=input||agg.vatIn;
   const net=ov-iv;
@@ -3990,7 +4057,7 @@ function AgentScreen({profile,txns,onBack}){
   const[input,setInput]=useState("");
   const[loading,setLoading]=useState(false);
   const endRef=useRef(null);
-  const agg=computeAggregates(txns);
+  const agg=computeAggregates(txns,profile);
   useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[msgs,loading]);
 
   const send=async()=>{
@@ -4174,7 +4241,7 @@ Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocale
 
 function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,authUser,onSignOut,onEditSetup,onNav,ownAccountsCount,importRulesCount,sub,importRules,setImportRules,setOwnAccounts}){
   const[edit,setEdit]=useState({...profile});
-  const agg=computeAggregates(txns);
+  const agg=computeAggregates(txns,profile);
   const [signingOut, setSigningOut] = useState(false);
 
   const save=()=>{
@@ -4434,7 +4501,7 @@ function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,
 }
 
 function TaxSummaryScreen({txns,profile,onNav,onBack}){
-  const agg=computeAggregates(txns);
+  const agg=computeAggregates(txns,profile);
   const isCompany=profile.mode==="company";
   const flags=txns.filter(t=>{const r=classifyTxn(t.desc,t.type);return r.compliance_required&&t.compliance_status!=="done"&&t.compliance_status!=="waived";});
   const today=new Date().toISOString().split("T")[0];
@@ -4578,7 +4645,50 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
     );
   };
 
-  const totalDue=agg.vatPayable+agg.whtOut+agg.payeOut+(isCompany?agg.estCIT:0);
+  // Category-aware totals and labels
+  const cat = profile.empCategory||"A";
+  const isCatCD = cat==="C"||cat==="D";
+
+  // Total obligations depend on category
+  const totalDue = isCompany
+    ? agg.vatPayable+agg.whtOut+agg.payeOut+agg.estCIT
+    : agg.vatPayable+agg.whtOut+(isCatCD?0:0)+agg.estPIT; // PIT shown separately
+
+  // Category-specific hero stats
+  const heroStats = isCompany
+    ? [
+        {l:"WHT to Remit",  v:fmt(agg.whtOut),    c:"#F87171"},
+        {l:"VAT Payable",   v:fmt(agg.vatPayable), c:"#FCA5A5"},
+        {l:"PAYE (Staff)",  v:fmt(agg.payeOut),    c:"#93C5FD"},
+      ]
+    : cat==="A" ? [
+        {l:"WHT Credits",       v:fmt(agg.whtIn),     c:"#4ADE80"},
+        {l:"VAT",               v:fmt(agg.vatPayable), c:"#FCA5A5"},
+        {l:"PAYE Credit",       v:fmt(agg.payeIn),    c:"#93C5FD"},
+      ]
+    : cat==="B" ? [
+        {l:"WHT Credits",       v:fmt(agg.whtIn),     c:"#4ADE80"},
+        {l:"VAT",               v:fmt(agg.vatPayable), c:"#FCA5A5"},
+        {l:"Self-Assessment",   v:fmt(agg.estPIT),    c:"#FCD34D"},
+      ]
+    : cat==="C" ? [
+        {l:"WHT Credits",       v:fmt(agg.whtIn),     c:"#4ADE80"},
+        {l:"VAT",               v:fmt(agg.vatPayable), c:"#FCA5A5"},
+        {l:"Est. PIT (net)",    v:fmt(agg.estPIT),    c:"#FCD34D"},
+      ]
+    : /* D */ [
+        {l:"WHT Credits",       v:fmt(agg.whtIn),     c:"#4ADE80"},
+        {l:"PAYE Credit",       v:fmt(agg.payeIn),    c:"#93C5FD"},
+        {l:"Est. PIT (net)",    v:fmt(agg.estPIT),    c:"#FCD34D"},
+      ];
+
+  // Category narration shown under total
+  const categoryNarration = isCompany
+    ? "Company — CIT + VAT + WHT + PAYE obligations"
+    : cat==="A" ? "Cat A — Employed: PAYE deducted by employer. WHT credits offset annual return."
+    : cat==="B" ? "Cat B — Employed (no PAYE): file annual self-assessment return to NRS."
+    : cat==="C" ? "Cat C — Self-Employed: no PAYE credit. WHT from clients offsets PIT. Deductible expenses reduce taxable income."
+    : "Cat D — Mixed: PAYE credit on salary + WHT on business income. File annual return.";
 
   return(
     <div style={{paddingBottom:80}}>
@@ -4595,16 +4705,13 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
       {/* Hero */}
       <div style={{background:`linear-gradient(135deg,${C.navy},#1E3A5F)`,padding:"18px 16px 22px",color:"#fff"}}>
         <div style={{fontSize:10,opacity:.6,letterSpacing:".1em",marginBottom:4,fontWeight:700}}>
-          TOTAL TAX OBLIGATIONS · {period.toUpperCase()}
+          {isCompany?"COMPANY TAX OBLIGATIONS":"INDIVIDUAL TAX POSITION"} · {period.toUpperCase()}
         </div>
         <div style={{fontSize:36,fontWeight:800,letterSpacing:"-.02em"}}>{fmt(totalDue)}</div>
         <div style={{fontSize:11,opacity:.6,marginTop:2}}>{entity} · {txns.length} transactions</div>
+        <div style={{fontSize:10,opacity:.5,marginTop:3,lineHeight:1.5}}>{categoryNarration}</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginTop:14}}>
-          {[
-            {l:"WHT",  v:fmt(agg.whtOut),    c:"#F87171"},
-            {l:"VAT",  v:fmt(agg.vatPayable), c:"#FCA5A5"},
-            {l:"PAYE", v:fmt(isCompany?agg.payeOut:agg.payeIn), c:"#93C5FD"},
-          ].map(s=>(
+          {heroStats.map(s=>(
             <div key={s.l} style={{background:"rgba(255,255,255,.1)",borderRadius:8,padding:"8px 10px"}}>
               <div style={{fontSize:9,opacity:.6,letterSpacing:".06em",marginBottom:2}}>{s.l}</div>
               <div style={{fontSize:14,fontWeight:700,color:s.c}}>{s.v}</div>
@@ -4621,46 +4728,91 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
 
       <div style={{padding:"12px 12px 0"}}>
 
-        {/* ── DOWNLOADABLE SCHEDULES HUB ─── */}
+        {/* Category context banner */}
+        <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,
+          padding:"10px 12px",marginBottom:14,fontSize:11,color:"#1E40AF",lineHeight:1.6}}>
+          <strong>
+            {isCompany?"🏢 Company":"👤 "+{"A":"Category A","B":"Category B","C":"Category C","D":"Category D"}[cat]}
+          </strong>
+          {" — "}
+          {isCompany
+            ?"CIT, VAT, WHT and PAYE obligations apply. All deductible business expenses reduce taxable profit."
+            :cat==="A"?"Employed: PAYE deducted at source by employer. WHT credits offset annual PIT return. Expenses are not deductible."
+            :cat==="B"?"Employed (no PAYE): You must file a self-assessment annual return and pay PIT directly to NRS. No employer PAYE credit."
+            :cat==="C"?"Self-Employed: WHT credits from clients offset PIT liability. Business expenses are deductible under NTA 2025 S.20. File annual self-assessment return."
+            :"Mixed Income (Cat D): PAYE credit on salary component + WHT credits on business income. Both apply. File annual return combining both."}
+        </div>
+
+        {/* ── WITHHOLDING TAX ─── */}
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".1em",color:C.muted,marginBottom:8,marginTop:4}}>WITHHOLDING TAX</div>
-        <SchedCard schedKey="whtOut" icon="📋"
-          title="WHT Remittance Schedule"
-          subtitle="WHT you must deduct from payments & remit"
-          color={C.red} due="21st of next month"
-          law="NTA 2025 Ch.Two Pt.IV"/>
-        <SchedCard schedKey="whtIn" icon="✅"
-          title="WHT Credit Schedule"
-          subtitle="WHT deducted from your income by payers"
-          color={C.green} due="Offset on annual return"
-          law="NTA 2025 Ch.Two Pt.IV"/>
+        {(isCatCD||isCompany)&&(
+          <SchedCard schedKey="whtOut" icon="📋"
+            title="WHT to Deduct & Remit"
+            subtitle={isCompany?"WHT on contractor/supplier payments — remit to NRS":"WHT you must deduct from payments to contractors"}
+            color={C.red} due="21st of next month"
+            law="NTA 2025 Ch.Two Pt.IV"/>
+        )}
+        {!isCompany&&(
+          <SchedCard schedKey="whtIn" icon="✅"
+            title={cat==="A"||cat==="B"?"WHT Credits (if any)":"WHT Credits from Clients"}
+            subtitle={cat==="C"||cat==="D"?"WHT your clients deducted from professional fees — credit on annual return":"WHT deducted from investment/interest income"}
+            color={C.green} due="Offset on annual PIT return"
+            law="NTA 2025 Ch.Two Pt.IV"/>
+        )}
+        {isCompany&&(
+          <SchedCard schedKey="whtIn" icon="✅"
+            title="WHT Credits Received"
+            subtitle="WHT deducted from income by your customers"
+            color={C.green} due="Offset against CIT liability"
+            law="NTA 2025 Ch.Two Pt.IV"/>
+        )}
 
+        {/* ── VALUE ADDED TAX ─── */}
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".1em",color:C.muted,marginBottom:8,marginTop:14}}>VALUE ADDED TAX</div>
-        <SchedCard schedKey="vatOut" icon="🧾"
-          title="Output VAT Schedule"
-          subtitle="VAT charged on your taxable supplies"
-          color={C.amber} due="21st of next month"
-          law="NTA 2025 Ch.Four Sec 54"/>
-        <SchedCard schedKey="vatIn" icon="🟢"
-          title="Input VAT Schedule"
-          subtitle="VAT on qualifying purchases — deductible"
-          color={C.green} due="Netted against output VAT"
-          law="NTA 2025 Ch.Four Sec 59"/>
+        {agg.isVatReg?(
+          <>
+            <SchedCard schedKey="vatOut" icon="🧾"
+              title="Output VAT Schedule"
+              subtitle="VAT charged on your taxable supplies"
+              color={C.amber} due="21st of next month"
+              law="NTA 2025 Ch.Four Sec 54"/>
+            <SchedCard schedKey="vatIn" icon="🟢"
+              title="Input VAT Schedule"
+              subtitle="VAT on qualifying purchases — deductible"
+              color={C.green} due="Netted against output VAT"
+              law="NTA 2025 Ch.Four Sec 59"/>
+          </>
+        ):(
+          <div style={{background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:10,
+            padding:"10px 12px",marginBottom:8,fontSize:11,color:C.muted}}>
+            VAT not applicable — not registered. Register when turnover exceeds ₦25m/year (NTA 2025 S.51).
+          </div>
+        )}
 
+        {/* ── PAYE ─── */}
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".1em",color:C.muted,marginBottom:8,marginTop:14}}>PAYE</div>
         {isCompany?(
           <SchedCard schedKey="payeOut" icon="👥"
             title="PAYE Remittance Schedule"
-            subtitle="PAYE deducted from staff salaries"
+            subtitle="PAYE deducted from staff salaries — remit to NRS by 10th"
             color={C.blue} due="10th of next month"
             law="TAA 2025 Sec 13"/>
-        ):(
+        ):cat==="A"||cat==="D"?(
           <SchedCard schedKey="payeIn" icon="💼"
             title="PAYE Credit Schedule"
-            subtitle="PAYE your employer deducted from your salary"
+            subtitle="PAYE your employer deducted from your salary — credit on annual return"
             color={C.green} due="Offset on annual PIT return"
             law="TAA 2025 Sec 13"/>
+        ):(
+          <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:10,
+            padding:"10px 12px",marginBottom:8,fontSize:11,color:"#166534",lineHeight:1.6}}>
+            <strong>No PAYE applies for {cat==="B"?"Category B":"Category C"}.</strong>
+            {cat==="B"?" You receive gross salary and pay Personal Income Tax directly via annual self-assessment."
+            :" Self-employed taxpayers are not subject to employer PAYE. WHT credits from clients offset your annual PIT liability."}
+          </div>
         )}
 
+        {/* ── CGT ─── */}
         <div style={{fontSize:10,fontWeight:700,letterSpacing:".1em",color:C.muted,marginBottom:8,marginTop:14}}>CAPITAL GAINS TAX</div>
         <SchedCard schedKey="cgtEvents" icon="📊"
           title="CGT Events — Asset Disposals"
@@ -5137,12 +5289,12 @@ function App(){
   const renderScreen=()=>{
     if(screen.startsWith("schedule_")){
       const key=screen.replace("schedule_","");
-      const agg=computeAggregates(txns);
+      const agg=computeAggregates(txns,profile);
       return <TaxScheduleScreen key={profileKey} scheduleKey={key} schedules={agg.schedules} profile={profile} onBack={back}/>;
     }
     switch(screen){
       case "dashboard":  return <Dashboard key={profileKey} profile={profile} txns={txns} kiv={kiv} onNav={nav} setProfile={setProfile}/>;
-      case "journal":    return <JournalScreen key={profileKey} txns={txns} setTxns={setTxns} kiv={kiv} setKiv={setKiv} onNav={nav}/>;
+      case "journal":    return <JournalScreen key={profileKey} txns={txns} setTxns={setTxns} kiv={kiv} setKiv={setKiv} onNav={nav} profile={profile}/>;
       case "calculate":  return <CalculateScreen key={profile.empCategory+profile.mode} profile={profile} txns={txns} onBack={back}/>;
       case "deadlines":  return <DeadlinesScreen key={profileKey} profile={profile} txns={txns} onBack={back}/>;
       case "vat":        return <VATScreen key={profileKey} profile={profile} txns={txns} onBack={back}/>;
@@ -5197,7 +5349,7 @@ function App(){
       case "payroll":    return <PayrollScreen employees={employees} setEmployees={setEmployees} onBack={back}/>;
       case "assets":     return <AssetRegisterScreen assets={assets} setAssets={setAssets} onBack={back}/>;
       case "ca":         return <AssetRegisterScreen assets={assets} setAssets={setAssets} onBack={back}/>;
-      case "kiv":        return <JournalScreen txns={txns} setTxns={setTxns} kiv={kiv} setKiv={setKiv} onNav={nav}/>;
+      case "kiv":        return <JournalScreen txns={txns} setTxns={setTxns} kiv={kiv} setKiv={setKiv} onNav={nav} profile={profile}/>;
       default:           return <Dashboard profile={profile} txns={txns} kiv={kiv} onNav={nav} setProfile={setProfile}/>;
     }
   };

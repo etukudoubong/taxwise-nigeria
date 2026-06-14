@@ -917,11 +917,16 @@ function computeAggregates(txns, profile){
     const gross = income;
     const businessDeductions = isCatCD ? allowableExpenses : 0;
     const netIncome = Math.max(0, gross - businessDeductions);
-    const pensionRelief = Math.round(gross * 0.08);   // S.30(2)(a)(iii)
-    const nhfRelief     = Math.round(gross * 0.025);  // S.30(2)(a)(i)
+    // Pension relief: allowed only if employer deducts OR employee self-contributed
+    // NTA 2025 S.30(2)(a)(iii); PRA 2014 S.11 — contribution must actually be made
+    const empDed   = profile?.employerDeductions || {};
+    const selfCont = profile?.selfContributions  || {};
+    const pensionAllowed = empDed.pension || selfCont.pension;
+    const nhfAllowed     = empDed.nhf     || selfCont.nhf;
+    const nhisAllowed    = empDed.nhis    || selfCont.nhis;
+    const pensionRelief  = pensionAllowed ? Math.round(gross * 0.08)  : 0; // S.30(2)(a)(iii)
+    const nhfRelief      = nhfAllowed     ? Math.round(gross * 0.025) : 0; // S.30(2)(a)(i)
     // Rent relief: 20% of annual rent, max ₦500k — NTA 2025 S.30(2)(a)(vi)
-    // Only apply if employer has NOT already factored it into PAYE (Cat A)
-    // For Cat B/C/D: always apply if rent is known
     const rentPaid = profile?.rentPaid || 0;
     const employerRentInPAYE = profile?.employerRentInPAYE || "";
     const applyRentRelief = rentPaid > 0 && employerRentInPAYE !== "yes" && employerRentInPAYE !== "unsure";
@@ -1147,6 +1152,9 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
     mode:"individual",
     empCategory:"A",
     employerDeductions:{paye:true,pension:true,nhf:false,nhis:false},
+    // For items employer does NOT deduct — did employee make the contribution themselves?
+    // Deduction only allowed for contributions ACTUALLY made (NTA 2025 S.30(2)(a); PRA 2014 S.11)
+    selfContributions:{pension:false,nhf:false,nhis:false},
     rentPaid:0,            // annual rent paid — NTA 2025 S.30(2)(a)(vi)
     employerRentInPAYE:"",// "yes"|"no"|"unsure" — has employer already factored rent into PAYE?
     companyName:"",sector:"Trading",isProfessional:false,
@@ -1156,6 +1164,7 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
   const set=(k,v)=>setData(d=>({...d,[k]:v}));
   const toggleDS=(ds)=>setData(d=>({...d,dataSources:d.dataSources.includes(ds)?d.dataSources.filter(x=>x!==ds):[...d.dataSources,ds]}));
   const toggleED=(k)=>setData(d=>({...d,employerDeductions:{...d.employerDeductions,[k]:!d.employerDeductions[k]}}));
+  const toggleSC=(k)=>setData(d=>({...d,selfContributions:{...(d.selfContributions||{}), [k]:!(d.selfContributions||{})[k]}}));
 
   if(step===0) return(
     <div className="onboard-hero">
@@ -1229,24 +1238,96 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
           {data.empCategory==="A"&&(
             <>
               <div className="fg">
-                <label className="lbl">WHICH DEDUCTIONS DOES YOUR EMPLOYER MAKE? (select all that apply)</label>
-                <div style={{fontSize:12,color:C.muted,marginBottom:10}}>This ensures the right computation — deductions already made by your employer will not be double-counted.</div>
+                <label className="lbl">WHICH DEDUCTIONS DOES YOUR EMPLOYER MAKE?</label>
+                <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}}>
+                  Tick each deduction your employer makes. For anything your employer does
+                  NOT deduct, we will ask whether you made the contribution yourself —
+                  because the law only allows a deduction for contributions <strong>actually made</strong>
+                  (NTA 2025 S.30(2)(a); PRA 2014 S.11).
+                </div>
                 {[
-                  {k:"paye",    label:"PAYE (Income Tax)",          note:"Deducted from salary before you receive it"},
-                  {k:"pension", label:"Pension (8% employee)",      note:"Pension Reform Act — employer deducts employee share"},
-                  {k:"nhf",     label:"NHF (2.5% of basic salary)", note:"National Housing Fund contribution"},
-                  {k:"nhis",    label:"NHIS / HMO",                 note:"Health insurance contributions"},
-                ].map(d=>(
-                  <div key={d.k} onClick={()=>toggleED(d.k)} style={{display:"flex",gap:12,alignItems:"flex-start",padding:"10px 0",borderBottom:"1px solid #F1F5F9",cursor:"pointer"}}>
-                    <div className={"ds-check"+(data.employerDeductions[d.k]?" on":"")}>
-                      {data.employerDeductions[d.k]&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+                  {k:"paye",    label:"PAYE (Income Tax)",
+                   note:"Deducted from salary before you receive it",
+                   selfNote:null, // PAYE is not self-claimable
+                   law:"NTAA 2025 S.13"},
+                  {k:"pension", label:"Pension (8% employee)",
+                   note:"Pension Reform Act 2014 S.11 — employer deducts employee's 8%",
+                   selfNote:"If your employer fails to deduct pension, you can contribute directly to your PFA and claim the deduction — but only if you actually made the payment. You must have a PFA contribution statement as evidence.",
+                   selfLaw:"NTA 2025 S.30(2)(a)(iii); PRA 2014 S.11"},
+                  {k:"nhf",     label:"NHF (2.5% of basic salary)",
+                   note:"National Housing Fund — deducted and remitted to FMBN",
+                   selfNote:"You can contribute directly to FMBN and claim the deduction. Only deductible if you actually contributed — a FMBN receipt is required evidence.",
+                   selfLaw:"NTA 2025 S.30(2)(a)(i); NHF Act S.4"},
+                  {k:"nhis",    label:"NHIS / HMO premiums",
+                   note:"Health insurance contributions",
+                   selfNote:"If you pay your own health insurance premiums directly (e.g. personal HMO plan), those premiums are deductible — but only the amount you actually paid.",
+                   selfLaw:"NTA 2025 S.30(2)(a)(ii)"},
+                ].map(d=>{
+                  const empDoes = data.employerDeductions[d.k];
+                  const selfDid = (data.selfContributions||{})[d.k];
+                  return(
+                    <div key={d.k} style={{marginBottom:8,borderRadius:10,border:"1px solid #E2E8F0",overflow:"hidden"}}>
+                      {/* Employer deduction toggle */}
+                      <div onClick={()=>d.k!=="paye"&&toggleED(d.k)}
+                        style={{display:"flex",gap:12,alignItems:"flex-start",
+                          padding:"10px 12px",cursor:d.k==="paye"?"default":"pointer",
+                          background:empDoes?"#F0FDF4":"#fff"}}>
+                        <div className={"ds-check"+(empDoes?" on":"")}>
+                          {empDoes&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{d.label}</div>
+                          <div style={{fontSize:10,color:C.muted,marginTop:1}}>
+                            {empDoes?"✓ Employer deducts this":"Employer does NOT deduct this"} · {d.law||""}
+                          </div>
+                        </div>
+                        {d.k!=="paye"&&<div style={{fontSize:10,color:C.muted,flexShrink:0}}>
+                          {empDoes?"tap to change":"tap to change"}
+                        </div>}
+                      </div>
+                      {/* If employer does NOT deduct (and it's claimable by self) — ask if employee self-contributed */}
+                      {!empDoes&&d.selfNote&&(
+                        <div style={{padding:"10px 12px",background:"#FFFBEB",borderTop:"1px solid #FEF3C7"}}>
+                          <div style={{fontSize:11,color:"#92400E",marginBottom:8,lineHeight:1.5}}>
+                            ⚖ <strong>Your employer does not deduct {d.label}.</strong> Did you make
+                            this contribution yourself directly?
+                          </div>
+                          <div style={{fontSize:10,color:"#78350F",marginBottom:10,lineHeight:1.5,
+                            padding:"6px 8px",background:"rgba(255,255,255,.6)",borderRadius:6}}>
+                            {d.selfNote}
+                          </div>
+                          <div style={{display:"flex",gap:8}}>
+                            {[{v:true,l:"Yes — I contributed myself"},{v:false,l:"No — not contributed"}].map(opt=>(
+                              <div key={String(opt.v)} onClick={()=>toggleSC(d.k)}
+                                style={{flex:1,padding:"9px 8px",borderRadius:8,cursor:"pointer",
+                                  textAlign:"center",fontSize:11,fontWeight:700,
+                                  border:`2px solid ${selfDid===opt.v?
+                                    opt.v?C.green:"#DC2626":C.border}`,
+                                  background:selfDid===opt.v?
+                                    opt.v?"#F0FDF4":"#FEF2F2":"#fff",
+                                  color:selfDid===opt.v?
+                                    opt.v?C.green:"#DC2626":C.muted}}>
+                                {opt.l}
+                              </div>
+                            ))}
+                          </div>
+                          {selfDid===true&&(
+                            <div style={{marginTop:6,fontSize:10,color:C.green,lineHeight:1.5,fontWeight:600}}>
+                              ✓ Deduction will be applied. Ensure you have a valid contribution
+                              statement / receipt as evidence for NRS audit purposes.
+                            </div>
+                          )}
+                          {selfDid===false&&(
+                            <div style={{marginTop:6,fontSize:10,color:"#DC2626",lineHeight:1.5,fontWeight:600}}>
+                              ✗ No deduction applied — you cannot claim relief for a contribution
+                              not made. Consider making the contribution directly to qualify.
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <div>
-                      <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{d.label}</div>
-                      <div style={{fontSize:11,color:C.muted,marginTop:1}}>{d.note}</div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {/* Rent paid — for rent relief computation */}
@@ -1520,8 +1601,13 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   const _gross     = agg.income;
   const _allowExp  = (isCatCD||isCompany) ? (agg.allowableExpenses||0) : 0;
   const _netIncome = Math.max(0, _gross - _allowExp);
-  const _pension   = Math.round(_gross * 0.08);  // 8% employee pension — S.30(2)(a)(iii)
-  const _nhf       = Math.round(_gross * 0.025); // 2.5% NHF — S.30(2)(a)(i)
+  // Statutory relief deductions — only if actually contributed (NTA 2025 S.30(2)(a))
+  const _empDed   = profile.employerDeductions || {};
+  const _selfCont = profile.selfContributions  || {};
+  const _pensionOK = _empDed.pension || _selfCont.pension;
+  const _nhfOK     = _empDed.nhf     || _selfCont.nhf;
+  const _pension   = _pensionOK ? Math.round(_gross * 0.08)  : 0; // S.30(2)(a)(iii)
+  const _nhf       = _nhfOK    ? Math.round(_gross * 0.025) : 0; // S.30(2)(a)(i)
   // Rent relief — NTA 2025 S.30(2)(a)(vi)
   const _rentPaid  = profile.rentPaid || 0;
   const _empRentInPAYE = profile.employerRentInPAYE || "";
@@ -1546,10 +1632,16 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
      note:"Gross income less allowable expenses"},
     {label:"Less: Pension Contribution (8%)",
      value:-_pension,
-     note:"Employee pension — 8% of gross salary (NTA 2025 S.30(2)(a)(iii); PRA 2014)"},
+     note:_pensionOK
+       ?(_empDed.pension?"Deducted by employer (PRA 2014 S.11) — NTA 2025 S.30(2)(a)(iii)"
+        :"Self-contributed to PFA — NTA 2025 S.30(2)(a)(iii). Keep PFA statement as evidence.")
+       :"NOT DEDUCTED — neither employer nor employee contributed. No deduction allowed (NTA 2025 S.30(2)(a)(iii); contributions must actually be made)."},
     {label:"Less: NHF Contribution (2.5%)",
      value:-_nhf,
-     note:"National Housing Fund — 2.5% of gross (NTA 2025 S.30(2)(a)(i); NHF Act)"},
+     note:_nhfOK
+       ?(_empDed.nhf?"Deducted by employer — NTA 2025 S.30(2)(a)(i)"
+        :"Self-contributed to FMBN — NTA 2025 S.30(2)(a)(i). Keep FMBN receipt as evidence.")
+       :"NOT DEDUCTED — no contribution made. No deduction allowed (NTA 2025 S.30(2)(a)(i))."},
     {label:"Less: Rent Relief",
      value:-_rentRelief,
      note:_rentPaid===0

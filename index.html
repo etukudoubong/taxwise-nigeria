@@ -1258,9 +1258,18 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
   );
 }
 
-function Dashboard({profile,txns,kiv,onNav}){
+function Dashboard({profile,txns,kiv,onNav,setProfile}){
   const isCompany=profile.mode==="company";
   const agg=computeAggregates(txns);
+  const [showCatPicker,setShowCatPicker]=useState(false);
+
+  const CAT_OPTIONS=isCompany?[]:[ 
+    {v:"A",label:"Category A",sub:"Salaried — employer deducts PAYE"},
+    {v:"B",label:"Category B",sub:"Salaried — no PAYE deducted"},
+    {v:"C",label:"Category C",sub:"Self-employed / freelancer"},
+    {v:"D",label:"Category D",sub:"Mixed — salary + business income"},
+  ];
+  const catLabel = {"A":"Cat A — PAYE","B":"Cat B — No PAYE","C":"Cat C — Self-Employed","D":"Cat D — Mixed Income"};
   const turnover=computeTurnover(txns); // IMPROVEMENT 1: live from transactions
   const deadlines=[
     {n:"PAYE",label:isCompany?"PAYE Remittance":"PAYE / Employer",days:getDaysLeft("PAYE")},
@@ -1308,7 +1317,73 @@ function Dashboard({profile,txns,kiv,onNav}){
             CIT classification based on turnover to date: <strong>{citR?.tier||"—"}</strong>
           </div>
         )}
+        {/* Taxpayer category pill — always visible, tap to change */}
+        {!isCompany&&(
+          <div style={{marginTop:10,display:"flex",alignItems:"center",gap:8}}>
+            <div onClick={()=>setShowCatPicker(true)}
+              style={{display:"flex",alignItems:"center",gap:6,
+                background:"rgba(255,255,255,.12)",border:"1px solid rgba(255,255,255,.2)",
+                borderRadius:20,padding:"5px 12px",cursor:"pointer"}}>
+              <span style={{fontSize:11,fontWeight:700,color:"#fff"}}>
+                {catLabel[profile.empCategory||"A"]}
+              </span>
+              <span style={{fontSize:10,color:"rgba(255,255,255,.5)"}}>✎</span>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Category picker modal */}
+      {showCatPicker&&!isCompany&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(11,22,40,.85)",zIndex:900,
+          display:"flex",alignItems:"flex-end",justifyContent:"center"}}
+          onClick={()=>setShowCatPicker(false)}>
+          <div style={{width:"100%",maxWidth:430,background:"#fff",
+            borderRadius:"20px 20px 0 0",padding:"20px 20px 36px"}}
+            onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:13,fontWeight:800,color:"#0B1628",marginBottom:4}}>
+              Taxpayer Category
+            </div>
+            <div style={{fontSize:11,color:"#64748B",marginBottom:16,lineHeight:1.5}}>
+              Your category determines which NTA 2025 tax rules apply. Changing it will recompute your tax position.
+            </div>
+            {CAT_OPTIONS.map(opt=>(
+              <div key={opt.v} onClick={()=>{
+                  if(setProfile) setProfile({...profile,empCategory:opt.v});
+                  setShowCatPicker(false);
+                }}
+                style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",
+                  marginBottom:8,borderRadius:12,cursor:"pointer",
+                  border:`2px solid ${profile.empCategory===opt.v?"#1D4ED8":"#E2E8F0"}`,
+                  background:profile.empCategory===opt.v?"#EFF6FF":"#fff"}}>
+                <div style={{width:28,height:28,borderRadius:8,flexShrink:0,
+                  background:profile.empCategory===opt.v?"#1D4ED8":"#F1F5F9",
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:13,fontWeight:800,
+                  color:profile.empCategory===opt.v?"#fff":"#64748B"}}>
+                  {opt.v}
+                </div>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,
+                    color:profile.empCategory===opt.v?"#1D4ED8":"#0F172A"}}>
+                    {opt.label}
+                  </div>
+                  <div style={{fontSize:11,color:"#94A3B8",marginTop:1}}>{opt.sub}</div>
+                </div>
+                {profile.empCategory===opt.v&&(
+                  <div style={{marginLeft:"auto",color:"#1D4ED8",fontSize:16}}>✓</div>
+                )}
+              </div>
+            ))}
+            <button onClick={()=>setShowCatPicker(false)}
+              style={{width:"100%",marginTop:4,padding:"12px",background:"#F1F5F9",
+                border:"none",borderRadius:10,color:"#64748B",fontSize:13,
+                fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* KIV alert if items pending */}
       {kiv&&kiv.length>0&&(
@@ -4120,11 +4195,16 @@ function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,
           <div style={{fontSize:10,opacity:.6,letterSpacing:".1em",marginBottom:6}}>TAXPAYER PROFILE</div>
           <div style={{fontSize:20,fontWeight:700}}>{profile.name||"Your Name"}</div>
           <div style={{fontSize:13,opacity:.7,marginTop:2}}>TIN: {profile.tin||"Not set"}</div>
-          <div style={{display:"flex",gap:8,marginTop:12}}>
+          <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
             <span className="pill" style={{background:"rgba(255,255,255,.15)",color:"#fff",padding:"4px 10px"}}>
               {profile.mode==="company"?"🏢 Company":"👤 Individual"}
             </span>
             {profile.mode==="company"&&<span className="pill" style={{background:"rgba(255,255,255,.15)",color:"#fff",padding:"4px 10px"}}>{profile.sector}</span>}
+            {profile.mode!=="company"&&(
+              <span className="pill" style={{background:"rgba(255,255,255,.15)",color:"#fff",padding:"4px 10px",fontWeight:700}}>
+                {{"A":"Cat A — PAYE","B":"Cat B — No PAYE","C":"Cat C — Self-Employed","D":"Cat D — Mixed"}[profile.empCategory||"A"]}
+              </span>
+            )}
           </div>
         </div>
 
@@ -4161,6 +4241,47 @@ function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,
           </div>
           <div style={{fontSize:11,color:C.muted,marginTop:8}}>Switching mode changes your dashboard and tax computations.</div>
         </div>
+
+        {/* Taxpayer category — individuals only */}
+        {edit.mode!=="company"&&(
+          <div className="card">
+            <div className="ctitle">TAXPAYER CATEGORY</div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.5}}>
+              Your category determines which NTA 2025 rules apply to your income and expenses.
+            </div>
+            {[
+              {v:"A",label:"Category A — Salaried (PAYE deducted)",sub:"Your employer deducts PAYE before paying you",color:"#2563EB"},
+              {v:"B",label:"Category B — Salaried (No PAYE)",sub:"You receive gross salary and pay tax yourself",color:"#D97706"},
+              {v:"C",label:"Category C — Self-Employed / Freelancer",sub:"Tax on net profit; WHT from clients is a credit",color:"#059669"},
+              {v:"D",label:"Category D — Mixed Income",sub:"Salary + freelance/rental/investment income",color:"#7C3AED"},
+            ].map(opt=>(
+              <div key={opt.v} onClick={()=>setEdit(p=>({...p,empCategory:opt.v}))}
+                style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
+                  marginBottom:8,borderRadius:10,cursor:"pointer",
+                  border:`2px solid ${edit.empCategory===opt.v?opt.color:C.border}`,
+                  background:edit.empCategory===opt.v?opt.color+"10":"#fff"}}>
+                <div style={{width:28,height:28,borderRadius:8,flexShrink:0,
+                  background:edit.empCategory===opt.v?opt.color:"#F1F5F9",
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:13,fontWeight:800,
+                  color:edit.empCategory===opt.v?"#fff":C.muted}}>
+                  {opt.v}
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,fontWeight:700,
+                    color:edit.empCategory===opt.v?opt.color:C.ink}}>{opt.label}</div>
+                  <div style={{fontSize:10,color:C.muted,marginTop:1}}>{opt.sub}</div>
+                </div>
+                {edit.empCategory===opt.v&&(
+                  <div style={{color:opt.color,fontSize:16,flexShrink:0}}>✓</div>
+                )}
+              </div>
+            ))}
+            <div style={{fontSize:10,color:C.muted,marginTop:4,lineHeight:1.5}}>
+              Tap Save above to apply. Changing category will recompute your entire tax position.
+            </div>
+          </div>
+        )}
 
         {/* Re-run setup wizard */}
         <div className="card">
@@ -5016,7 +5137,7 @@ function App(){
       return <TaxScheduleScreen scheduleKey={key} schedules={agg.schedules} profile={profile} onBack={back}/>;
     }
     switch(screen){
-      case "dashboard":  return <Dashboard profile={profile} txns={txns} kiv={kiv} onNav={nav}/>;
+      case "dashboard":  return <Dashboard profile={profile} txns={txns} kiv={kiv} onNav={nav} setProfile={setProfile}/>;
       case "journal":    return <JournalScreen txns={txns} setTxns={setTxns} kiv={kiv} setKiv={setKiv} onNav={nav}/>;
       case "calculate":  return <CalculateScreen profile={profile} onBack={back}/>;
       case "deadlines":  return <DeadlinesScreen profile={profile} onBack={back}/>;
@@ -5073,7 +5194,7 @@ function App(){
       case "assets":     return <AssetRegisterScreen assets={assets} setAssets={setAssets} onBack={back}/>;
       case "ca":         return <AssetRegisterScreen assets={assets} setAssets={setAssets} onBack={back}/>;
       case "kiv":        return <JournalScreen txns={txns} setTxns={setTxns} kiv={kiv} setKiv={setKiv} onNav={nav}/>;
-      default:           return <Dashboard profile={profile} txns={txns} kiv={kiv} onNav={nav}/>;
+      default:           return <Dashboard profile={profile} txns={txns} kiv={kiv} onNav={nav} setProfile={setProfile}/>;
     }
   };
 

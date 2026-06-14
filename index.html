@@ -493,7 +493,11 @@ function computePIT(p){
   const annual=monthlyIncome*12, total=annual+otherIncome;
   if(category==="E"||monthlyIncome<=70000&&otherIncome===0)
     return{annual:0,monthly:0,eff:0,exempt:true,totalGross:total,payeCredit:payeDeducted*12,balanceDue:0,refund:payeDeducted*12};
-  const rentRelief        = Math.min(rentPaid*.2, 500000);
+  // Rent relief — only apply if employer has NOT already included in PAYE
+  // Cat A: check employerRentInPAYE; Cat B/C/D: always apply if rent known
+  const _erip = p.employerRentInPAYE||"";
+  const _applyRent = rentPaid>0 && _erip!=="yes" && _erip!=="unsure";
+  const rentRelief = _applyRent ? Math.min(rentPaid*.2, 500000) : 0;
   const pensionDeduction  = pensionAnnual>0 ? pensionAnnual : annual*.08;
   const nhfDeduction      = nhfAnnual;
   const nhisDeduction     = nhisAnnual;
@@ -909,13 +913,20 @@ function computeAggregates(txns, profile){
   let estPIT=0;
   if(!isCompany){
     // NTA 2025 PIT computation — no consolidated relief (abolished)
-    // Reliefs: pension (8%), NHF (2.5%) per NTA 2025 S.30(2)(a)
+    // Reliefs: pension (8%), NHF (2.5%), rent relief per NTA 2025 S.30(2)(a)
     const gross = income;
     const businessDeductions = isCatCD ? allowableExpenses : 0;
     const netIncome = Math.max(0, gross - businessDeductions);
-    const pensionRelief = Math.round(gross * 0.08);  // S.30(2)(a)(iii)
-    const nhfRelief     = Math.round(gross * 0.025); // S.30(2)(a)(i)
-    const chargeable = Math.max(0, netIncome - pensionRelief - nhfRelief);
+    const pensionRelief = Math.round(gross * 0.08);   // S.30(2)(a)(iii)
+    const nhfRelief     = Math.round(gross * 0.025);  // S.30(2)(a)(i)
+    // Rent relief: 20% of annual rent, max ₦500k — NTA 2025 S.30(2)(a)(vi)
+    // Only apply if employer has NOT already factored it into PAYE (Cat A)
+    // For Cat B/C/D: always apply if rent is known
+    const rentPaid = profile?.rentPaid || 0;
+    const employerRentInPAYE = profile?.employerRentInPAYE || "";
+    const applyRentRelief = rentPaid > 0 && employerRentInPAYE !== "yes" && employerRentInPAYE !== "unsure";
+    const rentRelief = applyRentRelief ? Math.min(rentPaid * 0.2, 500000) : 0;
+    const chargeable = Math.max(0, netIncome - pensionRelief - nhfRelief - rentRelief);
     const grossPIT = pitBands(chargeable);
     estPIT = Math.max(0, grossPIT - payeIn - whtIn);
   }
@@ -1136,6 +1147,8 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
     mode:"individual",
     empCategory:"A",
     employerDeductions:{paye:true,pension:true,nhf:false,nhis:false},
+    rentPaid:0,            // annual rent paid — NTA 2025 S.30(2)(a)(vi)
+    employerRentInPAYE:"",// "yes"|"no"|"unsure" — has employer already factored rent into PAYE?
     companyName:"",sector:"Trading",isProfessional:false,
     dataSources:["manual"],
     onboarded:true,
@@ -1214,25 +1227,130 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
             </select>
           </div>
           {data.empCategory==="A"&&(
-            <div className="fg">
-              <label className="lbl">WHICH DEDUCTIONS DOES YOUR EMPLOYER MAKE? (select all that apply)</label>
-              <div style={{fontSize:12,color:C.muted,marginBottom:10}}>This ensures the right computation — deductions already made by your employer will not be double-counted.</div>
-              {[
-                {k:"paye",    label:"PAYE (Income Tax)",          note:"Deducted from salary before you receive it"},
-                {k:"pension", label:"Pension (8% employee)",      note:"Pension Reform Act — employer deducts employee share"},
-                {k:"nhf",     label:"NHF (2.5% of basic salary)", note:"National Housing Fund contribution"},
-                {k:"nhis",    label:"NHIS / HMO",                 note:"Health insurance contributions"},
-              ].map(d=>(
-                <div key={d.k} onClick={()=>toggleED(d.k)} style={{display:"flex",gap:12,alignItems:"flex-start",padding:"10px 0",borderBottom:"1px solid #F1F5F9",cursor:"pointer"}}>
-                  <div className={"ds-check"+(data.employerDeductions[d.k]?" on":"")}>
-                    {data.employerDeductions[d.k]&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+            <>
+              <div className="fg">
+                <label className="lbl">WHICH DEDUCTIONS DOES YOUR EMPLOYER MAKE? (select all that apply)</label>
+                <div style={{fontSize:12,color:C.muted,marginBottom:10}}>This ensures the right computation — deductions already made by your employer will not be double-counted.</div>
+                {[
+                  {k:"paye",    label:"PAYE (Income Tax)",          note:"Deducted from salary before you receive it"},
+                  {k:"pension", label:"Pension (8% employee)",      note:"Pension Reform Act — employer deducts employee share"},
+                  {k:"nhf",     label:"NHF (2.5% of basic salary)", note:"National Housing Fund contribution"},
+                  {k:"nhis",    label:"NHIS / HMO",                 note:"Health insurance contributions"},
+                ].map(d=>(
+                  <div key={d.k} onClick={()=>toggleED(d.k)} style={{display:"flex",gap:12,alignItems:"flex-start",padding:"10px 0",borderBottom:"1px solid #F1F5F9",cursor:"pointer"}}>
+                    <div className={"ds-check"+(data.employerDeductions[d.k]?" on":"")}>
+                      {data.employerDeductions[d.k]&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+                    </div>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{d.label}</div>
+                      <div style={{fontSize:11,color:C.muted,marginTop:1}}>{d.note}</div>
+                    </div>
                   </div>
-                  <div>
-                    <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{d.label}</div>
-                    <div style={{fontSize:11,color:C.muted,marginTop:1}}>{d.note}</div>
-                  </div>
+                ))}
+              </div>
+
+              {/* Rent paid — for rent relief computation */}
+              <div className="fg">
+                <label className="lbl">ANNUAL RENT PAID (₦) — OPTIONAL</label>
+                <input className="inp" type="number" min="0"
+                  value={data.rentPaid||""} 
+                  onChange={e=>set("rentPaid",parseFloat(e.target.value)||0)}
+                  placeholder="e.g. 600000"/>
+                <div style={{fontSize:11,color:C.muted,marginTop:4,lineHeight:1.5}}>
+                  Under NTA 2025 S.30(2)(a)(vi), you are entitled to a <strong>Rent Relief</strong> equal
+                  to 20% of your annual rent paid, capped at <strong>₦500,000</strong>.
+                  Enter the total annual rent you pay (not your employer's rent allowance).
                 </div>
-              ))}
+              </div>
+
+              {data.rentPaid>0&&(
+                <div className="fg">
+                  <label className="lbl">HAS YOUR EMPLOYER ALREADY INCLUDED YOUR RENT IN THE PAYE COMPUTATION?</label>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}}>
+                    Some employers factor rent allowance or housing allowance into the PAYE calculation
+                    before remitting to the IRS. If your employer has already accounted for rent relief
+                    in your PAYE, claiming it again here would be <strong>double relief</strong> —
+                    which is a tax offence under NTAA 2025 S.70.
+                    Check your payslip or ask your HR/payroll department.
+                  </div>
+                  {["yes","no","unsure"].map(opt=>(
+                    <div key={opt} onClick={()=>set("employerRentInPAYE",opt)}
+                      style={{display:"flex",gap:12,alignItems:"flex-start",
+                        padding:"12px",marginBottom:6,borderRadius:10,cursor:"pointer",
+                        border:`2px solid ${data.employerRentInPAYE===opt?
+                          opt==="yes"?C.amber:opt==="no"?C.green:C.blue
+                          :C.border}`,
+                        background:data.employerRentInPAYE===opt?
+                          opt==="yes"?"#FFFBEB":opt==="no"?"#F0FDF4":"#EFF6FF"
+                          :"#fff"}}>
+                      <div style={{width:22,height:22,borderRadius:"50%",flexShrink:0,
+                        border:`2px solid ${data.employerRentInPAYE===opt?
+                          opt==="yes"?C.amber:opt==="no"?C.green:C.blue
+                          :C.border}`,
+                        background:data.employerRentInPAYE===opt?
+                          opt==="yes"?C.amber:opt==="no"?C.green:C.blue
+                          :"#fff",
+                        display:"flex",alignItems:"center",justifyContent:"center"}}>
+                        {data.employerRentInPAYE===opt&&<span style={{color:"#fff",fontSize:12,fontWeight:900}}>✓</span>}
+                      </div>
+                      <div>
+                        <div style={{fontSize:13,fontWeight:700,color:C.ink}}>
+                          {opt==="yes"?"Yes — employer has already factored rent into PAYE"
+                           :opt==="no"?"No — employer has NOT accounted for rent in PAYE"
+                           :"I'm not sure / I need to check"}
+                        </div>
+                        <div style={{fontSize:11,color:C.muted,marginTop:2}}>
+                          {opt==="yes"?"Rent relief will NOT be applied here to avoid double relief"
+                           :opt==="no"?"Rent relief of "+fmt(Math.min(data.rentPaid*.2,500000))+" will be applied to reduce your PIT"
+                           :"We will NOT apply rent relief until you confirm — you can update this in Profile anytime"}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {data.employerRentInPAYE==="yes"&&(
+                    <div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:8,
+                      padding:"10px 12px",marginTop:4,fontSize:11,color:"#92400E",lineHeight:1.5}}>
+                      ⚠ <strong>No rent relief applied.</strong> Your employer has already accounted
+                      for this in your PAYE — claiming it again would constitute double relief under
+                      NTAA 2025 S.70 and may attract a penalty of ₦100,000 or 10% of the relief
+                      wrongly claimed, whichever is higher.
+                    </div>
+                  )}
+                  {data.employerRentInPAYE==="no"&&(
+                    <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:8,
+                      padding:"10px 12px",marginTop:4,fontSize:11,color:"#166534",lineHeight:1.5}}>
+                      ✓ <strong>Rent relief of {fmt(Math.min(data.rentPaid*.2,500000))} will be applied</strong> (20%
+                      of ₦{(data.rentPaid||0).toLocaleString()}, capped at ₦500,000) — NTA 2025 S.30(2)(a)(vi).
+                      This reduces your chargeable income and annual PIT liability.
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Cat B — also needs rent info, no employer double-count risk */}
+          {data.empCategory==="B"&&(
+            <div className="fg">
+              <label className="lbl">ANNUAL RENT PAID (₦) — OPTIONAL</label>
+              <input className="inp" type="number" min="0"
+                value={data.rentPaid||""}
+                onChange={e=>set("rentPaid",parseFloat(e.target.value)||0)}
+                placeholder="e.g. 600000"/>
+              <div style={{fontSize:11,color:C.muted,marginTop:4,lineHeight:1.5}}>
+                Under NTA 2025 S.30(2)(a)(vi), you are entitled to a <strong>Rent Relief</strong> equal
+                to 20% of your annual rent paid, capped at <strong>₦500,000</strong>.
+                Since your employer does not deduct PAYE, you file a self-assessment return —
+                this relief will reduce your chargeable income.
+              </div>
+              {data.rentPaid>0&&(
+                <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:8,
+                  padding:"10px 12px",marginTop:8,fontSize:11,color:"#166534",lineHeight:1.5}}>
+                  ✓ <strong>Rent relief of {fmt(Math.min(data.rentPaid*.2,500000))}</strong> will be
+                  applied in your PIT computation (20% of ₦{(data.rentPaid||0).toLocaleString()},
+                  capped at ₦500,000) — NTA 2025 S.30(2)(a)(vi).
+                </div>
+              )}
             </div>
           )}
         </>
@@ -1402,10 +1520,14 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   const _gross     = agg.income;
   const _allowExp  = (isCatCD||isCompany) ? (agg.allowableExpenses||0) : 0;
   const _netIncome = Math.max(0, _gross - _allowExp);
-  const _pension   = Math.round(_gross * 0.08);  // 8% employee pension
-  const _nhf       = Math.round(_gross * 0.025); // 2.5% NHF
-  // Rent relief: not knowable from txns alone — shown as "enter in calculator"
-  const _chargeable = Math.max(0, _netIncome - _pension - _nhf);
+  const _pension   = Math.round(_gross * 0.08);  // 8% employee pension — S.30(2)(a)(iii)
+  const _nhf       = Math.round(_gross * 0.025); // 2.5% NHF — S.30(2)(a)(i)
+  // Rent relief — NTA 2025 S.30(2)(a)(vi)
+  const _rentPaid  = profile.rentPaid || 0;
+  const _empRentInPAYE = profile.employerRentInPAYE || "";
+  const _applyRent = _rentPaid > 0 && _empRentInPAYE !== "yes" && _empRentInPAYE !== "unsure";
+  const _rentRelief = _applyRent ? Math.min(_rentPaid * 0.2, 500000) : 0;
+  const _chargeable = Math.max(0, _netIncome - _pension - _nhf - _rentRelief);
   const _grossPIT   = pitBands(_chargeable);
   const _netPIT     = Math.max(0, _grossPIT - agg.payeIn - agg.whtIn);
 
@@ -1428,9 +1550,15 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
     {label:"Less: NHF Contribution (2.5%)",
      value:-_nhf,
      note:"National Housing Fund — 2.5% of gross (NTA 2025 S.30(2)(a)(i); NHF Act)"},
-    {label:"Less: Rent Relief (est.)",
-     value:0,
-     note:"20% of annual rent paid, max ₦500,000 (NTA 2025 S.30(2)(a)(vi)) — enter rent in PIT Calculator for exact figure"},
+    {label:"Less: Rent Relief",
+     value:-_rentRelief,
+     note:_rentPaid===0
+       ?"Not set — enter annual rent paid in Profile to claim this relief (NTA 2025 S.30(2)(a)(vi))"
+       :_empRentInPAYE==="yes"
+       ?"Not applied — your employer has already factored rent into PAYE (to avoid double relief, NTAA 2025 S.70)"
+       :_empRentInPAYE==="unsure"
+       ?"Not applied yet — confirm whether employer included rent in PAYE (check payslip or HR), then update in Profile"
+       :"20% of ₦"+((_rentPaid||0).toLocaleString())+" rent paid, capped at ₦500,000 (NTA 2025 S.30(2)(a)(vi))"},
     {label:"Less: NHIS / Life Insurance / Housing Loan Interest",
      value:0,
      note:"NHIS premiums (S.30(2)(a)(ii)), life insurance (S.30(2)(a)(v)), housing loan interest (S.30(2)(a)(iv)) — enter amounts in PIT Calculator"},
@@ -4268,11 +4396,22 @@ function CGTPanel({cgtData,setCgtData}){
 
 function CalculateScreen({profile,txns,onBack}){
   const[tab,setTab]=useState("pit");
-  const[pitData,setPitData]=useState({monthlyIncome:0,payeDeducted:0,otherIncome:0,rentPaid:0,nhfAnnual:0,nhisAnnual:0,pensionAnnual:0,lifeInsAnnual:0,housingLoanInterest:0,category:profile.empCategory||"A"});
+  const[pitData,setPitData]=useState({
+    monthlyIncome:0,payeDeducted:0,otherIncome:0,
+    rentPaid:profile.rentPaid||0,
+    nhfAnnual:0,nhisAnnual:0,pensionAnnual:0,lifeInsAnnual:0,housingLoanInterest:0,
+    category:profile.empCategory||"A",
+    employerRentInPAYE:profile.employerRentInPAYE||"",
+  });
   useEffect(()=>{
-    setPitData(p=>({...p, category:profile.empCategory||"A"}));
+    setPitData(p=>({
+      ...p,
+      category:profile.empCategory||"A",
+      rentPaid:profile.rentPaid||p.rentPaid||0,
+      employerRentInPAYE:profile.employerRentInPAYE||p.employerRentInPAYE||"",
+    }));
     setCgtData(p=>({...p, isCompany:profile.mode==="company"}));
-  },[profile.empCategory, profile.mode]);
+  },[profile.empCategory, profile.mode, profile.rentPaid, profile.employerRentInPAYE]);
   const[whtData,setWhtData]=useState({amount:200000,type:"professional"});
   const[vatData,setVatData]=useState({amount:500000,tier:"standard"});
   const[penData,setPenData]=useState({tax:500000,days:30});
@@ -4913,6 +5052,60 @@ function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,
             <div style={{fontSize:10,color:C.muted,marginTop:4,lineHeight:1.5}}>
               Tap Save above to apply. Changing category will recompute your entire tax position.
             </div>
+          </div>
+        )}
+
+        {/* Rent Relief — Cat A and B only */}
+        {edit.mode!=="company"&&(edit.empCategory==="A"||edit.empCategory==="B")&&(
+          <div className="card">
+            <div className="ctitle">RENT RELIEF — NTA 2025 S.30(2)(a)(vi)</div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.6}}>
+              You are entitled to deduct 20% of your annual rent paid from your chargeable income,
+              capped at ₦500,000. This replaces the old Consolidated Relief Allowance.
+            </div>
+            <div className="fg">
+              <label className="lbl">ANNUAL RENT PAID (₦)</label>
+              <input className="inp" type="number" min="0"
+                value={edit.rentPaid||""}
+                onChange={e=>setEdit(p=>({...p,rentPaid:parseFloat(e.target.value)||0}))}
+                placeholder="e.g. 600000"/>
+              {(edit.rentPaid||0)>0&&(
+                <div style={{fontSize:11,color:C.green,marginTop:4,fontWeight:700}}>
+                  Relief: {fmt(Math.min((edit.rentPaid||0)*.2,500000))}
+                </div>
+              )}
+            </div>
+            {(edit.rentPaid||0)>0&&edit.empCategory==="A"&&(
+              <div className="fg">
+                <label className="lbl">HAS YOUR EMPLOYER ALREADY INCLUDED RENT IN YOUR PAYE?</label>
+                <div style={{fontSize:11,color:C.muted,marginBottom:8,lineHeight:1.5}}>
+                  If yes, we will NOT apply this relief again — double relief is a tax offence under NTAA 2025 S.70.
+                </div>
+                {["yes","no","unsure"].map(opt=>(
+                  <div key={opt} onClick={()=>setEdit(p=>({...p,employerRentInPAYE:opt}))}
+                    style={{display:"flex",gap:10,alignItems:"center",padding:"10px 12px",
+                      marginBottom:6,borderRadius:10,cursor:"pointer",
+                      border:`2px solid ${edit.employerRentInPAYE===opt?
+                        opt==="yes"?C.amber:opt==="no"?C.green:C.blue:C.border}`,
+                      background:edit.employerRentInPAYE===opt?
+                        opt==="yes"?"#FFFBEB":opt==="no"?"#F0FDF4":"#EFF6FF":"#fff"}}>
+                    <div style={{width:20,height:20,borderRadius:"50%",flexShrink:0,
+                      border:`2px solid ${edit.employerRentInPAYE===opt?
+                        opt==="yes"?C.amber:opt==="no"?C.green:C.blue:C.border}`,
+                      background:edit.employerRentInPAYE===opt?
+                        opt==="yes"?C.amber:opt==="no"?C.green:C.blue:"#fff",
+                      display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      {edit.employerRentInPAYE===opt&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+                    </div>
+                    <div style={{fontSize:12,fontWeight:600,color:C.ink}}>
+                      {opt==="yes"?"Yes — already in PAYE (no further relief)"
+                       :opt==="no"?"No — apply rent relief of "+fmt(Math.min((edit.rentPaid||0)*.2,500000))
+                       :"Not sure — hold off until confirmed"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

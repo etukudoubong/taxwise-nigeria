@@ -453,7 +453,7 @@ const DEFAULT_STORE={
     name:"",tin:"",email:"",phone:"",
     mode:"individual",
     empCategory:"A",
-    employerDeductions:{paye:true,pension:true,nhf:false,nhis:false},
+    employerDeductions:{paye:true,pension:false,nhf:false,nhis:false},
     companyName:"",fixedAssets:0,isProfessional:false,
     sector:"",yearEnd:"December",
     dataSources:["manual"],
@@ -1151,7 +1151,7 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
     name:"",email:"",phone:"",tin:"",
     mode:"individual",
     empCategory:"A",
-    employerDeductions:{paye:true,pension:true,nhf:false,nhis:false},
+    employerDeductions:{paye:true,pension:false,nhf:false,nhis:false},
     // For items employer does NOT deduct — did employee make the contribution themselves?
     // Deduction only allowed for contributions ACTUALLY made (NTA 2025 S.30(2)(a); PRA 2014 S.11)
     selfContributions:{pension:false,nhf:false,nhis:false},
@@ -1165,6 +1165,26 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
   const toggleDS=(ds)=>setData(d=>({...d,dataSources:d.dataSources.includes(ds)?d.dataSources.filter(x=>x!==ds):[...d.dataSources,ds]}));
   const toggleED=(k)=>setData(d=>({...d,employerDeductions:{...d.employerDeductions,[k]:!d.employerDeductions[k]}}));
   const toggleSC=(k)=>setData(d=>({...d,selfContributions:{...(d.selfContributions||{}), [k]:!(d.selfContributions||{})[k]}}));
+  // When category changes, reset employer deductions to correct defaults
+  // Cat A: employer may deduct PAYE, pension, NHF (ask user)
+  // Cat B: employer makes NO deductions by definition (that is the definition of Cat B)
+  // Cat C/D: self-employed / mixed — no employer
+  const handleCatChange = (cat) => {
+    set("empCategory", cat);
+    if(cat==="B"||cat==="C"||cat==="D"){
+      // No employer deductions for these categories
+      setData(d=>({...d, empCategory:cat,
+        employerDeductions:{paye:false,pension:false,nhf:false,nhis:false},
+        selfContributions:{pension:false,nhf:false,nhis:false},
+      }));
+    } else if(cat==="A"){
+      // Reset to ask — don't assume
+      setData(d=>({...d, empCategory:cat,
+        employerDeductions:{paye:true,pension:false,nhf:false,nhis:false},
+        selfContributions:{pension:false,nhf:false,nhis:false},
+      }));
+    }
+  };
 
   if(step===0) return(
     <div className="onboard-hero">
@@ -1227,7 +1247,7 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
         <>
           <div className="fg">
             <label className="lbl">YOUR EMPLOYMENT SITUATION</label>
-            <select className="sel" value={data.empCategory} onChange={e=>set("empCategory",e.target.value)}>
+            <select className="sel" value={data.empCategory} onChange={e=>handleCatChange(e.target.value)}>
               <option value="A">Employed — my employer deducts tax from my salary</option>
               <option value="B">Employed — my employer does NOT deduct tax</option>
               <option value="C">Self-employed / I run my own business</option>
@@ -1410,29 +1430,91 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
             </>
           )}
 
-          {/* Cat B — also needs rent info, no employer double-count risk */}
+          {/* Cat B — employer makes NO deductions; ask what employee contributes themselves */}
           {data.empCategory==="B"&&(
-            <div className="fg">
-              <label className="lbl">ANNUAL RENT PAID (₦) — OPTIONAL</label>
-              <input className="inp" type="number" min="0"
-                value={data.rentPaid||""}
-                onChange={e=>set("rentPaid",parseFloat(e.target.value)||0)}
-                placeholder="e.g. 600000"/>
-              <div style={{fontSize:11,color:C.muted,marginTop:4,lineHeight:1.5}}>
-                Under NTA 2025 S.30(2)(a)(vi), you are entitled to a <strong>Rent Relief</strong> equal
-                to 20% of your annual rent paid, capped at <strong>₦500,000</strong>.
-                Since your employer does not deduct PAYE, you file a self-assessment return —
-                this relief will reduce your chargeable income.
+            <>
+              <div className="ibox amber" style={{marginBottom:4}}>
+                <div className="ititle" style={{color:C.amber}}>Category B — Self-Assessment Required</div>
+                <p style={{fontSize:12,color:C.ink,lineHeight:1.6}}>
+                  Your employer does not deduct PAYE, pension, NHF or NHIS.
+                  Under NTA 2025, you must file a self-assessment return and pay PIT directly.
+                  Reliefs are available <strong>only for contributions you actually make yourself</strong> —
+                  you cannot claim a deduction for a contribution not made (NTA 2025 S.30(2)(a)).
+                </p>
               </div>
-              {data.rentPaid>0&&(
-                <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:8,
-                  padding:"10px 12px",marginTop:8,fontSize:11,color:"#166534",lineHeight:1.5}}>
-                  ✓ <strong>Rent relief of {fmt(Math.min(data.rentPaid*.2,500000))}</strong> will be
-                  applied in your PIT computation (20% of ₦{(data.rentPaid||0).toLocaleString()},
-                  capped at ₦500,000) — NTA 2025 S.30(2)(a)(vi).
+
+              <div className="fg">
+                <label className="lbl">STATUTORY CONTRIBUTIONS — WHAT DO YOU CONTRIBUTE YOURSELF?</label>
+                <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}}>
+                  Tick each one you actually pay. Evidence required on NRS audit.
                 </div>
-              )}
-            </div>
+                {[
+                  {k:"pension",
+                   label:"Pension — 8% of salary to a licensed PFA",
+                   note:"Deductible only if you contribute to a licensed Pension Fund Administrator (PFA) registered under PRA 2014. Evidence: annual PFA contribution statement.",
+                   law:"NTA 2025 S.30(2)(a)(iii); PRA 2014 S.11"},
+                  {k:"nhf",
+                   label:"NHF — 2.5% of basic salary to FMBN",
+                   note:"National Housing Fund contribution paid directly to Federal Mortgage Bank of Nigeria. Evidence: FMBN payment receipt.",
+                   law:"NTA 2025 S.30(2)(a)(i); NHF Act S.4"},
+                  {k:"nhis",
+                   label:"NHIS / Personal HMO premiums",
+                   note:"Health insurance premiums you pay personally (e.g. individual HMO plan). Evidence: premium receipts or HMO certificate.",
+                   law:"NTA 2025 S.30(2)(a)(ii)"},
+                ].map(d=>{
+                  const selfDid = (data.selfContributions||{})[d.k];
+                  return(
+                    <div key={d.k} style={{marginBottom:8,borderRadius:10,
+                      border:`1.5px solid ${selfDid?C.green:C.border}`,overflow:"hidden"}}>
+                      <div onClick={()=>toggleSC(d.k)}
+                        style={{display:"flex",gap:12,alignItems:"flex-start",
+                          padding:"10px 12px",cursor:"pointer",
+                          background:selfDid?"#F0FDF4":"#fff"}}>
+                        <div className={"ds-check"+(selfDid?" on":"")}>
+                          {selfDid&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{d.label}</div>
+                          <div style={{fontSize:10,color:C.muted,marginTop:1}}>{d.law}</div>
+                        </div>
+                      </div>
+                      {selfDid&&(
+                        <div style={{padding:"8px 12px",background:"#F0FDF4",
+                          borderTop:"1px solid #BBF7D0",fontSize:10,color:"#166534",lineHeight:1.5}}>
+                          ✓ Deduction will be applied. <strong>Evidence required:</strong> {d.note}
+                        </div>
+                      )}
+                      {!selfDid&&(
+                        <div style={{padding:"8px 12px",background:"#F8FAFC",
+                          borderTop:"1px solid #F1F5F9",fontSize:10,color:C.muted,lineHeight:1.5}}>
+                          Not contributing → no deduction. {d.note}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="fg">
+                <label className="lbl">ANNUAL RENT PAID (₦) — OPTIONAL</label>
+                <input className="inp" type="number" min="0"
+                  value={data.rentPaid||""}
+                  onChange={e=>set("rentPaid",parseFloat(e.target.value)||0)}
+                  placeholder="e.g. 600000"/>
+                <div style={{fontSize:11,color:C.muted,marginTop:4,lineHeight:1.5}}>
+                  Under NTA 2025 S.30(2)(a)(vi), <strong>Rent Relief</strong> = 20% of annual
+                  rent paid, capped at <strong>₦500,000</strong>. Since your employer does not
+                  deduct PAYE, you file self-assessment — this relief reduces your chargeable income.
+                </div>
+                {data.rentPaid>0&&(
+                  <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:8,
+                    padding:"10px 12px",marginTop:8,fontSize:11,color:"#166534",lineHeight:1.5}}>
+                    ✓ <strong>Rent relief of {fmt(Math.min((data.rentPaid||0)*.2,500000))}</strong> will be
+                    applied (20% of ₦{(data.rentPaid||0).toLocaleString()}, capped at ₦500,000).
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </>
       )}

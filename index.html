@@ -631,7 +631,7 @@ function classifyTxn(desc, type){
     if(d.match(/salary|salari|wage|payroll credit|employment income|paye credit|monthly pay/))
       return{head:"PAYE",icon:"💼",color:C.blue,compliance_required:false,
         obligation:"Salary taxed via PAYE at source by employer. Not taxed again in self-assessment. PAYE credited against annual return.",
-        law:"NTA 2025, Ch. Two Pt. I; TAA 2025 Sec 13"};
+        law:"NTA 2025, Ch. Two Pt. I; NTAA 2025 Sec 13"};
 
     if(d.match(/consult|professional fee|advisory fee|technical fee|management fee|legal fee received|audit fee received/))
       return{head:"WHT+VAT",icon:"📋",color:C.purple,compliance_required:false,
@@ -708,7 +708,7 @@ function classifyTxn(desc, type){
       wht_rate:null,
       obligation:"ACTION REQUIRED: Deduct PAYE from each employee's gross salary BEFORE payment. Remit total PAYE to State IRS by 10th of next month. Also remit employer pension contribution (10%).",
       compliance_prompt:"Have you deducted PAYE from each employee's salary and set it aside for remittance to the State IRS by the 10th?",
-      law:"TAA 2025, Sec 13; NTA 2025, Ch. Two Pt. I"};
+      law:"NTAA 2025, Sec 13; NTA 2025, Ch. Two Pt. I"};
 
   if(d.match(/consulting fee paid|consultant paid|professional fee paid|advisory fee paid|legal fee paid|audit fee paid|accountant paid|lawyer paid|engineer paid|surveyor paid|architect paid/))
     return{head:"WHT-out",icon:"⚖️",color:C.purple,compliance_required:true,
@@ -846,7 +846,7 @@ function computeAggregates(txns, profile){
       if(r.head==="PAYE" && (cat==="A"||cat==="D")){
         const paye=t.amount*.15;
         payeIn+=paye;
-        schedules.payeIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE Credit (employer deducted)",law:"TAA 2025 Sec 13"});
+        schedules.payeIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE Credit (employer deducted)",law:"NTAA 2025 Sec 13"});
       }
 
       if(r.head==="CGT-EVENT"){
@@ -882,7 +882,7 @@ function computeAggregates(txns, profile){
       if(r.head==="PAYE-out" && isCompany){
         const paye=t.amount*.15;
         payeOut+=paye;
-        schedules.payeOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE",status:t.compliance_status||"pending",law:"TAA 2025 Sec 13"});
+        schedules.payeOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE",status:t.compliance_status||"pending",law:"NTAA 2025 Sec 13"});
       }
 
       // Input VAT: only if VAT-registered AND explicitly flagged
@@ -908,11 +908,16 @@ function computeAggregates(txns, profile){
   // Category-specific PIT estimate
   let estPIT=0;
   if(!isCompany){
-    const annualIncome=income; // annualise if needed
-    const deductions=isCatCD?allowableExpenses:0;
-    const taxable=Math.max(0,annualIncome-deductions-payeIn); // rough estimate
-    estPIT=pitBands(taxable)-payeIn;
-    estPIT=Math.max(0,estPIT);
+    // NTA 2025 PIT computation — no consolidated relief (abolished)
+    // Reliefs: pension (8%), NHF (2.5%) per NTA 2025 S.30(2)(a)
+    const gross = income;
+    const businessDeductions = isCatCD ? allowableExpenses : 0;
+    const netIncome = Math.max(0, gross - businessDeductions);
+    const pensionRelief = Math.round(gross * 0.08);  // S.30(2)(a)(iii)
+    const nhfRelief     = Math.round(gross * 0.025); // S.30(2)(a)(i)
+    const chargeable = Math.max(0, netIncome - pensionRelief - nhfRelief);
+    const grossPIT = pitBands(chargeable);
+    estPIT = Math.max(0, grossPIT - payeIn - whtIn);
   }
 
   return{
@@ -997,7 +1002,7 @@ const CA_ELIGIBILITY_STEPS=[
     id:"not_expensed",
     question:"Has this expenditure NOT already been deducted as a revenue expense in your accounts?",
     hint:"The same amount cannot be both an expense deduction AND a capital allowance claim.",
-    failAction:"STOP — Remove this from your expense deductions before claiming CA. Double relief is a statutory offence under TAA 2025 and will attract penalties.",
+    failAction:"STOP — Remove this from your expense deductions before claiming CA. Double relief is a statutory offence under NTAA 2025 and will attract penalties.",
     law:"NTA 2025, First Schedule Para 14",
   },
   {
@@ -1155,7 +1160,7 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
         </div>
       ))}
       <button className="btn btn-green" style={{marginTop:24,maxWidth:320,width:"100%"}} onClick={()=>setStep(1)}>Get Started →</button>
-      <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:12}}>NTA 2025 · TAA 2025 · NRS Act 2025 · JRB Act 2025</div>
+      <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:12}}>NTA 2025 · NTAA 2025 · NRS Act 2025 · JRB Act 2025</div>
     </div>
   );
 
@@ -1386,18 +1391,68 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   const excludedByCat     = excludedTxns.filter(t=>t.taxStream==="employment"||t.autoRule?.includes("Cat A"));
 
   // PIT working steps (individual)
+  // PIT computation per NTA 2025 — Consolidated Relief ABOLISHED
+  // Reliefs under NTA 2025 S.30(2)(a):
+  //   (i)   NHF contributions — 2.5% of gross
+  //   (ii)  NHIS contributions
+  //   (iii) Employee pension — 8% of gross
+  //   (iv)  Interest on owner-occupied housing loan
+  //   (v)   Life insurance premiums
+  //   (vi)  Rent relief — 20% of annual rent, max ₦500,000
+  const _gross     = agg.income;
+  const _allowExp  = (isCatCD||isCompany) ? (agg.allowableExpenses||0) : 0;
+  const _netIncome = Math.max(0, _gross - _allowExp);
+  const _pension   = Math.round(_gross * 0.08);  // 8% employee pension
+  const _nhf       = Math.round(_gross * 0.025); // 2.5% NHF
+  // Rent relief: not knowable from txns alone — shown as "enter in calculator"
+  const _chargeable = Math.max(0, _netIncome - _pension - _nhf);
+  const _grossPIT   = pitBands(_chargeable);
+  const _netPIT     = Math.max(0, _grossPIT - agg.payeIn - agg.whtIn);
+
   const pitWorking = !isCompany ? [
-    {label:"Gross Income",                 value: agg.income,                    note:"All income transactions"},
-    {label:"Less: Allowable Expenses",     value:-(agg.allowableExpenses||0),    note:isCatCD?"Wholly-and-exclusively business expenses (NTA 2025 S.20)":"Not applicable for Cat "+cat+" — employees cannot deduct expenses"},
-    {label:"Net Income",                   value: agg.income-(agg.allowableExpenses||0), bold:true, note:"Taxable income before reliefs"},
-    {label:"Less: Consolidated Relief",   value:-Math.max(200000,(agg.income-(agg.allowableExpenses||0))*.01), note:"₦200,000 or 1% of income — whichever is higher (NTA 2025 S.11)"},
-    {label:"Less: Pension (8%)",          value:-Math.round(agg.income*.08),      note:"Employee pension contribution (NTA 2025 S.12)"},
-    {label:"Less: NHF (2.5%)",            value:-Math.round(agg.income*.025),     note:"National Housing Fund contribution"},
-    {label:"Chargeable Income",           value: Math.max(0, agg.income-(agg.allowableExpenses||0)-Math.max(200000,(agg.income-(agg.allowableExpenses||0))*.01)-Math.round(agg.income*.08)-Math.round(agg.income*.025)), bold:true, note:"Subject to graduated PIT rates"},
-    {label:"Gross PIT (graduated)",       value: agg.estPIT+agg.payeIn,          note:"Applied at 7%–24% per NTA 2025 First Schedule"},
-    {label:"Less: PAYE Credit",           value:-agg.payeIn,                     note:cat==="A"||cat==="D"?"Deducted at source by employer":"Not applicable (no employer PAYE)"},
-    {label:"Less: WHT Credit",            value:-agg.whtIn,                      note:"WHT deducted by clients / payers — NTA 2025 Ch.Two Pt.IV"},
-    {label:"Net PIT Liability",           value: Math.max(0,agg.estPIT),         bold:true, highlight:true, note:"Final amount due to NRS"},
+    {label:"Gross Income (annual)",
+     value:_gross,
+     note:"Total income from all transactions — NTA 2025 S.3"},
+    {label:"Less: Allowable Business Expenses",
+     value:-_allowExp,
+     note:isCatCD
+       ?"Expenses wholly-and-exclusively for business (NTA 2025 S.20). Cat "+cat+" only."
+       :"Cat "+cat+" — employment income: business expenses not deductible (NTA 2025 S.20(4))"},
+    {label:"Net Income",
+     value:_netIncome,
+     bold:true,
+     note:"Gross income less allowable expenses"},
+    {label:"Less: Pension Contribution (8%)",
+     value:-_pension,
+     note:"Employee pension — 8% of gross salary (NTA 2025 S.30(2)(a)(iii); PRA 2014)"},
+    {label:"Less: NHF Contribution (2.5%)",
+     value:-_nhf,
+     note:"National Housing Fund — 2.5% of gross (NTA 2025 S.30(2)(a)(i); NHF Act)"},
+    {label:"Less: Rent Relief (est.)",
+     value:0,
+     note:"20% of annual rent paid, max ₦500,000 (NTA 2025 S.30(2)(a)(vi)) — enter rent in PIT Calculator for exact figure"},
+    {label:"Less: NHIS / Life Insurance / Housing Loan Interest",
+     value:0,
+     note:"NHIS premiums (S.30(2)(a)(ii)), life insurance (S.30(2)(a)(v)), housing loan interest (S.30(2)(a)(iv)) — enter amounts in PIT Calculator"},
+    {label:"Chargeable Income",
+     value:_chargeable,
+     bold:true,
+     note:"Subject to graduated PIT rates — NTA 2025 First Schedule (Part I)"},
+    {label:"Gross PIT (graduated rates)",
+     value:_grossPIT,
+     note:"0% on first ₦800k; 15% next ₦2m; 18% next ₦2.2m; 21% next ₦3m; 23% next ₦4m; 25% above — NTA 2025 First Schedule"},
+    {label:"Less: PAYE Credit",
+     value:-agg.payeIn,
+     note:cat==="A"||cat==="D"
+       ?"PAYE deducted at source by employer — NTAA 2025 S.13"
+       :"Not applicable — Cat "+cat+" has no employer PAYE"},
+    {label:"Less: WHT Credits",
+     value:-agg.whtIn,
+     note:"WHT deducted by payers — offset against annual PIT liability (NTA 2025 Ch.Two Pt.IV)"},
+    {label:"Net PIT Liability",
+     value:_netPIT,
+     bold:true, highlight:true,
+     note:"Estimated amount due to NRS on annual self-assessment return (NTAA 2025 S.11) · Due 31 July"},
   ] : null;
 
   // CIT working (company)
@@ -1852,7 +1907,7 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
               <div key={d.n} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F1F5F9"}}>
                 <div>
                   <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{d.label}</div>
-                  <div style={{fontSize:10,color:C.muted}}>TAA 2025</div>
+                  <div style={{fontSize:10,color:C.muted}}>NTAA 2025</div>
                 </div>
                 <span className="pill" style={{background:bg,color:col}}>
                   {d.days>0?`${d.days}d left`:d.days===0?"TODAY":"OVERDUE"}
@@ -2509,7 +2564,7 @@ function CompliancePopup({txn, rule, onDone, onWaive, onLater, onNav}){
 
         <div style={{fontSize:11,color:C.muted,marginTop:10,textAlign:"center",lineHeight:1.5}}>
           Closing or tapping outside also holds this in KIV.<br/>
-          Non-compliance attracts penalties under TAA 2025 Sec 65.
+          Non-compliance attracts penalties under NTAA 2025 Sec 65.
         </div>
       </div>
     </div>
@@ -2628,7 +2683,7 @@ function PayrollScreen({employees,setEmployees,onBack}){
 
             <div style={{marginTop:10,padding:"8px 10px",background:C.surface,borderRadius:8,fontSize:11,color:C.muted}}>
               Annual PAYE: {fmt(p.annualPAYE)} · Effective rate: {p.effectiveRate?.toFixed(1)||"0"}%<br/>
-              Remit PAYE to State IRS by 10th of next month · TAA 2025, Sec 13
+              Remit PAYE to State IRS by 10th of next month · NTAA 2025, Sec 13
             </div>
           </div>
         </div>
@@ -2658,7 +2713,7 @@ function PayrollScreen({employees,setEmployees,onBack}){
 
       <div style={{padding:"12px 14px 0"}}>
         <div className="ibox blue">
-          <div className="ititle" style={{color:C.blue}}>TAA 2025, Sec 13 — Employer obligations</div>
+          <div className="ititle" style={{color:C.blue}}>NTAA 2025, Sec 13 — Employer obligations</div>
           <p style={{fontSize:12,color:C.ink,lineHeight:1.5}}>Deduct PAYE from gross salary. Remit to State IRS by <strong>10th of next month</strong>. Employer pension: 10%. Employee pension: 8%. NHF: 2.5%. File annual PAYE schedule by 31 January.</p>
         </div>
 
@@ -3179,7 +3234,7 @@ function TaxScheduleScreen({scheduleKey, schedules, profile, onBack}){
           <div style={{marginTop:12,padding:"8px 12px",background:"rgba(255,255,255,.1)",borderRadius:8,fontSize:11}}>
             <span style={{opacity:.7}}>Due date: </span>
             <strong>{scheduleKey==="payeOut"?"10th of next month":"21st of next month"}</strong>
-            <span style={{opacity:.7}}> · TAA 2025</span>
+            <span style={{opacity:.7}}> · NTAA 2025</span>
           </div>
         )}
       </div>
@@ -3443,7 +3498,7 @@ function CITScreen({profile, txns, assets, onBack}){
             <div className="ibox green">
               <div className="ititle" style={{color:C.green}}>🛡 ZERO CIT — SMALL COMPANY EXEMPTION</div>
               <p style={{fontSize:12,color:C.ink,lineHeight:1.6}}>
-                Your company qualifies for the 0% CIT rate under NTA 2025 Sec 202. No CIT or Development Levy is payable. You must still file your annual return by 6 months after year-end (TAA 2025 Sec 11).
+                Your company qualifies for the 0% CIT rate under NTA 2025 Sec 202. No CIT or Development Levy is payable. You must still file your annual return by 6 months after year-end (NTAA 2025 Sec 11).
               </p>
             </div>
           ):(
@@ -3470,7 +3525,7 @@ function CITScreen({profile, txns, assets, onBack}){
             <div className="ctitle">💳 WHT CREDIT & BALANCE PAYABLE</div>
             <div className="ibox slate" style={{marginBottom:10}}>
               <p style={{fontSize:11,color:C.ink,lineHeight:1.5}}>
-                WHT deducted at source by customers on payments to you is a credit against CIT due — TAA 2025 Sec 74.
+                WHT deducted at source by customers on payments to you is a credit against CIT due — NTAA 2025 Sec 74.
               </p>
             </div>
             <div className="fg">
@@ -3493,7 +3548,7 @@ function CITScreen({profile, txns, assets, onBack}){
 
             {balanceDue>0&&(
               <div className="ibox amber" style={{marginTop:10}}>
-                <div className="ititle" style={{color:C.amber}}>📅 Payment deadline — TAA 2025 Sec 11</div>
+                <div className="ititle" style={{color:C.amber}}>📅 Payment deadline — NTAA 2025 Sec 11</div>
                 <p style={{fontSize:11,color:C.ink,lineHeight:1.5}}>
                   CIT is due <strong>6 months after your accounting year-end</strong>. Late payment attracts interest at CBN MPR + 15% (≈41.75% p.a.) plus ₦250,000 filing penalty.
                 </p>
@@ -4357,7 +4412,7 @@ function CalculateScreen({profile,txns,onBack}){
         {tab==="pen"&&(
           <>
             <div className="card">
-              <div className="ctitle">PENALTY CALCULATOR — TAA 2025 SEC 65</div>
+              <div className="ctitle">PENALTY CALCULATOR — NTAA 2025 SEC 65</div>
               <div className="fg"><label className="lbl">TAX AMOUNT DUE (₦)</label><input className="inp" type="number" value={penData.tax||""} onChange={e=>setPenData(p=>({...p,tax:parseFloat(e.target.value)||0}))}/></div>
               <div className="fg"><label className="lbl">DAYS LATE</label><input className="inp" type="number" value={penData.days||""} onChange={e=>setPenData(p=>({...p,days:parseInt(e.target.value)||0}))}/></div>
             </div>
@@ -4379,11 +4434,11 @@ function CalculateScreen({profile,txns,onBack}){
 function DeadlinesScreen({profile,onBack}){
   const isCompany=profile.mode==="company";
   const deadlines=[
-    {name:"PAYE Remittance",icon:"👥",type:"PAYE",law:"TAA 2025, Sec 13",rule:"10th of every month",desc:"Employer remits to State IRS"},
-    {name:"VAT Return & Payment",icon:"🧾",type:"VAT",law:"TAA 2025, Sec 16",rule:"21st of every month",desc:"File VAT return and remit net VAT"},
+    {name:"PAYE Remittance",icon:"👥",type:"PAYE",law:"NTAA 2025, Sec 13",rule:"10th of every month",desc:"Employer remits to State IRS"},
+    {name:"VAT Return & Payment",icon:"🧾",type:"VAT",law:"NTAA 2025, Sec 16",rule:"21st of every month",desc:"File VAT return and remit net VAT"},
     {name:"WHT Remittance",icon:"📋",type:"WHT",law:"NTA 2025, Ch. Two",rule:"21st of every month",desc:"Remit all WHT deducted"},
-    {name:isCompany?"CIT Return":"Annual PIT Return",icon:"📊",type:isCompany?"CIT":"PIT",law:"TAA 2025, Sec 11",rule:isCompany?"6 months after year-end":"31 July annually",desc:"Self-assessment + payment"},
-    ...(isCompany?[{name:"Annual PAYE Schedule",icon:"📄",type:"ANNUAL",law:"TAA 2025, Sec 14",rule:"31 January",desc:"File schedule for all employees"}]:[]),
+    {name:isCompany?"CIT Return":"Annual PIT Return",icon:"📊",type:isCompany?"CIT":"PIT",law:"NTAA 2025, Sec 11",rule:isCompany?"6 months after year-end":"31 July annually",desc:"Self-assessment + payment"},
+    ...(isCompany?[{name:"Annual PAYE Schedule",icon:"📄",type:"ANNUAL",law:"NTAA 2025, Sec 14",rule:"31 January",desc:"File schedule for all employees"}]:[]),
   ];
 
   return(
@@ -4391,7 +4446,7 @@ function DeadlinesScreen({profile,onBack}){
       <Hdr title="Filing Deadlines" onBack={onBack}/>
       <div className="pad-full" style={{paddingTop:12}}>
         <div className="ibox red">
-          <div className="ititle" style={{color:C.red}}>⚠ TAA 2025, Sec 65 — Penalty reminder</div>
+          <div className="ititle" style={{color:C.red}}>⚠ NTAA 2025, Sec 65 — Penalty reminder</div>
           <p style={{fontSize:12,color:C.ink,lineHeight:1.6}}>
             {isCompany?"Company":"Individual"} late filing penalty: <strong>{isCompany?"₦250,000 first month + ₦50,000/month":"₦50,000 first month + ₦25,000/month"}</strong>. Plus interest at <strong>CBN MPR + 15% (≈41.75% p.a.)</strong>
           </p>
@@ -4485,8 +4540,8 @@ function FAQScreen({onBack}){
         {q:"How does TaxWise compute my taxes?", a:"Every transaction you enter is classified automatically — income, expense, VAT, WHT, PAYE — using the NTA 2025 rules. The dashboard shows your live tax position updated in real time. You never need to enter tax figures manually."},
         {q:"What is the CIT rate for my company?", a:"Under NTA 2025 Sec 202, small companies (turnover ≤₦50M, fixed assets ≤₦250M, not professional services) pay 0% CIT. All other companies pay 30% CIT plus 4% Education Development Levy. The old 20% medium tier has been abolished."},
         {q:"What is the VAT rate?", a:"Standard VAT is 7.5% under NTA 2025 Chapter Four. Zero-rated supplies include exports, medical goods, food, and education. Exempt supplies include petroleum products, land, transportation, and EVs. Zero-rated differs from exempt — zero-rated allows input VAT recovery, exempt does not."},
-        {q:"How is PAYE calculated?", a:"PAYE is computed on taxable income after pension (8% employee), NHF (2.5%), and NHIS deductions. The NTA 2025 PIT bands are: 0% on first ₦800,000; then 15%, 18%, 21%, 23%, and 25% on higher bands. The Consolidated Relief Allowance has been abolished under NTA 2025."},
-        {q:"What WHT rates apply?", a:"WHT is 10% on professional fees, consulting, director fees, dividends, interest, rent, royalties, and commission. WHT is 5% on contract, supply, and construction payments. You must remit by the 21st of the following month under TAA 2025."},
+        {q:"How is PAYE calculated?", a:"PAYE is computed on taxable income after the following reliefs under NTA 2025 S.30(2)(a): pension (8% employee contribution), NHF (2.5%), NHIS premiums, life insurance premiums, interest on owner-occupied housing loan, and rent relief (20% of annual rent paid, maximum ₦500,000). The Consolidated Relief Allowance has been abolished by the Tax Reform Act. PIT bands per NTA 2025 First Schedule: 0% on first ₦800,000; 15% on next ₦2m; 18% on next ₦2.2m; 21% on next ₦3m; 23% on next ₦4m; 25% above ₦12m."},
+        {q:"What WHT rates apply?", a:"WHT is 10% on professional fees, consulting, director fees, dividends, interest, rent, royalties, and commission. WHT is 5% on contract, supply, and construction payments. You must remit by the 21st of the following month under NTAA 2025."},
         {q:"What are the penalties for late filing?", a:"Individuals: ₦50,000 for the first month of default plus ₦25,000 for each subsequent month. Companies: ₦250,000 for the first month plus ₦50,000 for each subsequent month. Interest accrues at CBN MPR + 15% (approximately 41.75% per annum) on unpaid tax."},
       ]
     },
@@ -4710,7 +4765,7 @@ Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocale
 
   return(
     <div style={{display:"flex",flexDirection:"column",height:"100%",paddingBottom:0}}>
-      <Hdr title="AI Tax Agent" onBack={onBack} subtitle="NTA 2025 · TAA 2025 · NRS Act 2025"/>
+      <Hdr title="AI Tax Agent" onBack={onBack} subtitle="NTA 2025 · NTAA 2025 · NRS Act 2025"/>
       <div style={{flex:1,overflowY:"auto",padding:"12px 14px 8px",display:"flex",flexDirection:"column",gap:8}}>
         {msgs.map((m,i)=>(
           m.role==="assistant"?(
@@ -4957,7 +5012,7 @@ function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,
 
         <div style={{textAlign:"center",fontSize:11,color:C.muted,marginTop:8,lineHeight:1.6}}>
           TaxWise Nigeria · Version 1.0<br/>
-          Based on NTA 2025 (No.3) · TAA 2025 (No.5) · NRS Act 2025 (No.4) · JRB Act 2025 (No.6)<br/>
+          Based on NTA 2025 (No.3) · NTAA 2025 (No.5) · NRS Act 2025 (No.4) · JRB Act 2025 (No.6)<br/>
           For informational purposes — consult a registered tax consultant for binding advice.
         </div>
 
@@ -5034,8 +5089,8 @@ function TaxSummaryScreen({txns,profile,onNav,onBack}){
       whtIn: {title:"WHT Credit Schedule",    law:"NTA 2025 Ch.Two Pt.IV — Sec 28",due:"Offset on annual return",note:"WHT deducted from income by payers"},
       vatOut:{title:"Output VAT Schedule",    law:"NTA 2025 Ch.Four — Sec 54",     due:"21st of next month",note:"VAT charged on taxable supplies"},
       vatIn: {title:"Input VAT Schedule",     law:"NTA 2025 Ch.Four — Sec 59",     due:"Deductible from output VAT",note:"VAT on qualifying purchases"},
-      payeOut:{title:"PAYE Remittance Schedule",law:"TAA 2025 Sec 13",             due:"10th of next month",note:"PAYE deducted from staff salaries"},
-      payeIn:     {title:"PAYE Credit Schedule",      law:"TAA 2025 Sec 13",              due:"Credit on annual PIT return",note:"PAYE deducted by employer"},
+      payeOut:{title:"PAYE Remittance Schedule",law:"NTAA 2025 Sec 13",             due:"10th of next month",note:"PAYE deducted from staff salaries"},
+      payeIn:     {title:"PAYE Credit Schedule",      law:"NTAA 2025 Sec 13",              due:"Credit on annual PIT return",note:"PAYE deducted by employer"},
       cgtEvents:  {title:"CGT Events — Asset Disposals",law:"NTA 2025 S.34-S.46",           due:"31 March following year",    note:"Possible Capital Gains Tax transactions"},
     };
     const m=META[key]||{title:key,law:"NTA 2025",due:"",note:""};
@@ -5145,7 +5200,7 @@ ${(isCatCD||isCompany)?`<tr><td>WHT Deducted & Remittable<\/td><td class="amt re
 <tr><td>WHT Credits (deducted from your income)<\/td><td class="amt green">${fmt(agg.whtIn)}<\/td><\/tr>
 <\/table>
 
-<h2>PAYE — TAA 2025 Sec 13<\/h2>
+<h2>PAYE — NTAA 2025 Sec 13<\/h2>
 <table><tr><th>Head<\/th><th class="amt">Amount (₦)<\/th><\/tr>
 ${isCompany?`<tr><td>PAYE to Remit (staff salaries)<\/td><td class="amt red">${fmt(agg.payeOut)}<\/td><\/tr>`:
   (profile.empCategory==="A"||profile.empCategory==="D")?`<tr><td>PAYE Credit (employer deducted)<\/td><td class="amt green">${fmt(agg.payeIn)}<\/td><\/tr>`:
@@ -5434,13 +5489,13 @@ ${yearTxns.length>50?`<tr><td colspan="4" style="text-align:center;color:#94a3b8
             title="PAYE Remittance Schedule"
             subtitle="PAYE deducted from staff salaries — remit to NRS by 10th"
             color={C.blue} due="10th of next month"
-            law="TAA 2025 Sec 13"/>
+            law="NTAA 2025 Sec 13"/>
         ):cat==="A"||cat==="D"?(
           <SchedCard schedKey="payeIn" icon="💼"
             title="PAYE Credit Schedule"
             subtitle="PAYE your employer deducted from your salary — credit on annual return"
             color={C.green} due="Offset on annual PIT return"
-            law="TAA 2025 Sec 13"/>
+            law="NTAA 2025 Sec 13"/>
         ):(
           <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:10,
             padding:"10px 12px",marginBottom:8,fontSize:11,color:"#166534",lineHeight:1.6}}>
@@ -5486,7 +5541,7 @@ ${yearTxns.length>50?`<tr><td colspan="4" style="text-align:center;color:#94a3b8
         </div>
 
         <div className="card">
-          <div className="ctitle">PAYE — TAA 2025 Sec 13</div>
+          <div className="ctitle">PAYE — NTAA 2025 Sec 13</div>
           {isCompany?(
             <TaxRow label="PAYE on staff salaries" taxAmount={agg.payeOut}
               grossAmount={txns.filter(t=>classifyTxn(t.desc,t.type).head==="PAYE-out").reduce((s,t)=>s+t.amount,0)}
@@ -5520,7 +5575,7 @@ ${yearTxns.length>50?`<tr><td colspan="4" style="text-align:center;color:#94a3b8
         )}
 
         <div style={{fontSize:10,color:C.muted,textAlign:"center",lineHeight:1.8,marginTop:4,marginBottom:8}}>
-          All figures computed from transaction data · NTA 2025 (No.3) · TAA 2025 (No.5){"\n"}
+          All figures computed from transaction data · NTA 2025 (No.3) · NTAA 2025 (No.5){"\n"}
           Tap "⬇ All" at top right to download all schedules in one file
         </div>
       </div>

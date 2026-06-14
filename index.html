@@ -2957,8 +2957,178 @@ function OwnAccountsScreen({ownAccounts, setOwnAccounts, onBack}){
   );
 }
 
+// ── ResetDataModal ───────────────────────────────────────────────────────────
+function ResetDataModal({txns, setTxns, assets, setAssets, importRules, setImportRules, profile, setProfile}){
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState(1); // 1=confirm financial, 2=ask optional
+  const [delOwnAccounts, setDelOwnAccounts] = useState(false);
+  const [delRules, setDelRules] = useState(false);
+  const [delProfile, setDelProfile] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const txnCount = txns.length;
+  const assetCount = (assets||[]).length;
+
+  const doReset = () => {
+    // Always delete: transactions and assets (financial data)
+    setTxns([]);
+    if(setAssets) setAssets([]);
+    // Optional: own accounts
+    if(delOwnAccounts && setProfile){
+      setProfile(p=>({...p, ownAccounts:[]}));
+    }
+    // Optional: import rules
+    if(delRules && setImportRules){
+      setImportRules([]);
+    }
+    // Optional: profile (reset to defaults but keep auth)
+    if(delProfile && setProfile){
+      setProfile(p=>({
+        ...p,
+        name:"", tin:"", phone:"", companyName:"", sector:"",
+        empCategory:"A", vatRegistered:"no", monthlyIncome:0,
+        payeDeducted:0, otherIncome:0, rentPaid:0, nhfAnnual:0,
+        nhisAnnual:0, pensionAnnual:0, lifeInsAnnual:0, housingLoanInterest:0,
+      }));
+    }
+    setDone(true);
+  };
+
+  if(!open) return(
+    <button onClick={()=>{setOpen(true);setStep(1);setDone(false);setDelOwnAccounts(false);setDelRules(false);setDelProfile(false);}}
+      style={{width:"100%",padding:"11px",background:"#FEF2F2",
+        border:"1.5px solid #FECACA",borderRadius:10,
+        color:"#DC2626",fontSize:13,fontWeight:700,
+        cursor:"pointer",fontFamily:"inherit"}}>
+      🗑 Clear Financial Data
+    </button>
+  );
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(11,22,40,.85)",zIndex:900,
+      display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+      <div style={{width:"100%",maxWidth:430,background:"#fff",
+        borderRadius:"20px 20px 0 0",padding:"24px 20px 36px"}}>
+
+        {done?(
+          <>
+            <div style={{textAlign:"center",marginBottom:20}}>
+              <div style={{fontSize:44,marginBottom:10}}>✅</div>
+              <div style={{fontSize:18,fontWeight:800,color:"#0B1628",marginBottom:6}}>Data Cleared</div>
+              <div style={{fontSize:13,color:"#64748B",lineHeight:1.6}}>
+                {txnCount} transaction{txnCount!==1?"s":""} and {assetCount} asset{assetCount!==1?"s":""} deleted.
+                {delRules?" Import rules cleared.":""}
+                {delOwnAccounts?" Own accounts cleared.":""}
+                {delProfile?" Profile information reset.":""}
+              </div>
+            </div>
+            <button onClick={()=>setOpen(false)}
+              style={{width:"100%",padding:"13px",background:"#059669",border:"none",
+                borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,
+                cursor:"pointer",fontFamily:"inherit"}}>
+              Done
+            </button>
+          </>
+        ):step===1?(
+          <>
+            <div style={{fontSize:11,fontWeight:700,color:"#DC2626",letterSpacing:".08em",marginBottom:12}}>
+              CLEAR FINANCIAL DATA
+            </div>
+            <div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:12,
+              padding:"14px",marginBottom:16}}>
+              <div style={{fontSize:14,fontWeight:700,color:"#DC2626",marginBottom:8}}>
+                This will permanently delete:
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {[
+                  `${txnCount} transaction${txnCount!==1?"s":""} (journal entries, imports)`,
+                  `${assetCount} asset${assetCount!==1?"s":""} in the asset register`,
+                  "All excluded transactions",
+                  "KIV / compliance queue items",
+                ].map((item,i)=>(
+                  <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",fontSize:12,color:"#7F1D1D"}}>
+                    <span style={{color:"#DC2626",flexShrink:0}}>✗</span>{item}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:10,
+              padding:"10px 12px",marginBottom:16,fontSize:11,color:"#166534",lineHeight:1.5}}>
+              <strong>Not deleted:</strong> Your profile, own accounts, import rules, and cloud account remain intact.
+              You will be asked about those on the next screen.
+            </div>
+            <button onClick={()=>setStep(2)}
+              style={{width:"100%",padding:"13px",background:"#DC2626",border:"none",
+                borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,
+                cursor:"pointer",fontFamily:"inherit",marginBottom:10}}>
+              Continue →
+            </button>
+            <button onClick={()=>setOpen(false)}
+              style={{width:"100%",padding:"12px",background:"none",
+                border:"1.5px solid #E2E8F0",borderRadius:12,color:"#64748B",
+                fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+              Cancel
+            </button>
+          </>
+        ):(
+          <>
+            <div style={{fontSize:11,fontWeight:700,color:"#475569",letterSpacing:".08em",marginBottom:12}}>
+              ALSO DELETE? (OPTIONAL)
+            </div>
+            <div style={{fontSize:12,color:"#64748B",marginBottom:14,lineHeight:1.6}}>
+              Your financial data will be cleared. Do you also want to delete any of the following?
+            </div>
+            {[
+              {key:"delOwnAccounts", val:delOwnAccounts, set:setDelOwnAccounts,
+                label:"Own Accounts",
+                sub:"Bank accounts you marked as yours — used for transfer detection"},
+              {key:"delRules", val:delRules, set:setDelRules,
+                label:"Import Rules",
+                sub:"Auto-classification rules you created for recurring transactions"},
+              {key:"delProfile", val:delProfile, set:setDelProfile,
+                label:"Profile Information",
+                sub:"Your name, TIN, income details, tax category — keeps you signed in"},
+            ].map(item=>(
+              <div key={item.key} onClick={()=>item.set(v=>!v)}
+                style={{display:"flex",gap:10,alignItems:"flex-start",
+                  padding:"12px",marginBottom:8,cursor:"pointer",
+                  border:`1.5px solid ${item.val?"#DC2626":"#E2E8F0"}`,
+                  borderRadius:10,background:item.val?"#FEF2F2":"#fff"}}>
+                <div style={{width:20,height:20,borderRadius:5,flexShrink:0,marginTop:1,
+                  border:`2px solid ${item.val?"#DC2626":"#CBD5E1"}`,
+                  background:item.val?"#DC2626":"#fff",
+                  display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  {item.val&&<span style={{color:"#fff",fontSize:12,fontWeight:900}}>✓</span>}
+                </div>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:item.val?"#DC2626":"#0F172A"}}>{item.label}</div>
+                  <div style={{fontSize:11,color:"#94A3B8",marginTop:2}}>{item.sub}</div>
+                </div>
+              </div>
+            ))}
+            <button onClick={doReset}
+              style={{width:"100%",padding:"13px",background:"#DC2626",border:"none",
+                borderRadius:12,color:"#fff",fontSize:14,fontWeight:700,
+                cursor:"pointer",fontFamily:"inherit",marginBottom:10,marginTop:4}}>
+              Clear Data Now
+            </button>
+            <button onClick={()=>setOpen(false)}
+              style={{width:"100%",padding:"12px",background:"none",
+                border:"1.5px solid #E2E8F0",borderRadius:12,color:"#64748B",
+                fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+              Cancel
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ImportRulesScreen({importRules, setImportRules, onBack}){
-  const blank={id:null,name:"",pattern:"",matchType:"contains",
+  const blank={id:null,name:"",
+    matchField:"description", // "description" | "account_number" | "name" | "phone" | "any"
+    pattern:"",matchType:"contains",
     newType:"",newCategory:"",taxAllowable:true,included:true,appendNote:""};
   const[form,setForm]=useState({...blank});
   const[editing,setEditing]=useState(false);
@@ -2971,8 +3141,16 @@ function ImportRulesScreen({importRules, setImportRules, onBack}){
     ["loan","Loan"],["pension_remittance","Pension Remittance"],["own_account_transfer","Own Account Transfer"],
     ["refund","Refund"],["other","Other"]];
 
+  const MATCH_FIELDS=[
+    ["description","Transaction Description / Narration"],
+    ["account_number","Account Number (transfer to/from)"],
+    ["name","Account Name (transfer to/from)"],
+    ["phone","Phone Number (transfer to/from)"],
+    ["any","Any field (description, name, account, phone)"],
+  ];
+
   const save=()=>{
-    if(!form.pattern.trim()) return setError("Enter a keyword or pattern to match");
+    if(!form.pattern.trim()) return setError("Enter a keyword, number or name to match");
     if(!form.name.trim()) return setError("Give this rule a name");
     if(editing){
       setImportRules(p=>p.map(r=>r.id===form.id?form:r));
@@ -2983,17 +3161,29 @@ function ImportRulesScreen({importRules, setImportRules, onBack}){
     setEditing(false);
     setError("");
   };
-  const edit=(r)=>{setForm({...r});setEditing(true);};
+  const edit=(r)=>{setForm({...r,matchField:r.matchField||"description"});setEditing(true);};
   const remove=(id)=>setImportRules(p=>p.filter(r=>r.id!==id));
+
+  const matchFieldLabel = MATCH_FIELDS.find(([v])=>v===form.matchField)?.[1]||"description";
+
+  const placeholders = {
+    description:"e.g. GRACE ETUKUDO or PENSION or TRF FROM SAVINGS",
+    account_number:"e.g. 0123456789 or 6394464782",
+    name:"e.g. JENNIFER ADOGA or UBONG ETUKUDO",
+    phone:"e.g. 08012345678 or +2348012345678",
+    any:"e.g. GRACE or 0123456789 — matches any field",
+  };
 
   return(
     <div style={{paddingBottom:100}}>
-      <Hdr title="Import Rules" subtitle="Auto-reclassify transactions on every import" onBack={onBack}/>
+      <Hdr title="Import Rules" subtitle="Auto-classify transactions on every import" onBack={onBack}/>
       <div className="pad">
         <div className="ibox blue" style={{marginBottom:12}}>
           <div className="ititle" style={{color:C.blue}}>What are Import Rules?</div>
           <p style={{fontSize:11,color:C.ink,lineHeight:1.6}}>
-            Rules let you tell TaxWise how to automatically classify certain transactions every time you import. For example: "All transactions containing 'GRACE ETUKUDO' should be classified as Pension Remittance, non-taxable". Once set, these apply automatically to every future import.
+            Rules tell TaxWise how to automatically classify transactions on every import.
+            Match by description, account number, name, or phone number — then set the tax treatment.
+            Example: "Transfers to/from account 0123456789 are own-account transfers, non-taxable."
           </p>
         </div>
 
@@ -3001,16 +3191,41 @@ function ImportRulesScreen({importRules, setImportRules, onBack}){
           <div className="ctitle">{editing?"EDIT RULE":"CREATE A RULE"}</div>
           <div className="fg">
             <label className="lbl">RULE NAME (for your reference)</label>
-            <input className="inp" placeholder="e.g. Grace Etukudo pension transfers" value={form.name} onChange={e=>set("name",e.target.value)}/>
+            <input className="inp" placeholder="e.g. Grace pension transfers or My GTBank savings" value={form.name} onChange={e=>set("name",e.target.value)}/>
           </div>
+
           <div className="fg">
-            <label className="lbl">MATCH — keyword or phrase in transaction description</label>
-            <input className="inp" placeholder="e.g. GRACE ETUKUDO or TRF FROM SAVINGS" value={form.pattern} onChange={e=>set("pattern",e.target.value)}/>
+            <label className="lbl">MATCH BY</label>
+            <select className="sel" value={form.matchField||"description"} onChange={e=>set("matchField",e.target.value)}>
+              {MATCH_FIELDS.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+            </select>
+            <div style={{fontSize:10,color:C.muted,marginTop:4,lineHeight:1.5}}>
+              {form.matchField==="account_number"&&"TaxWise will scan narrations for this account number (transfers usually include it)."}
+              {form.matchField==="name"&&"TaxWise will scan narrations for this person or company name."}
+              {form.matchField==="phone"&&"TaxWise will scan narrations for this phone number (common in mobile money transfers)."}
+              {form.matchField==="any"&&"Matches anywhere — in description, name, account number, or phone."}
+              {form.matchField==="description"&&"Matches the full transaction narration/description."}
+            </div>
           </div>
+
+          <div className="fg">
+            <label className="lbl">
+              {form.matchField==="account_number"?"ACCOUNT NUMBER TO MATCH"
+               :form.matchField==="name"?"NAME TO MATCH"
+               :form.matchField==="phone"?"PHONE NUMBER TO MATCH"
+               :"KEYWORD OR PHRASE TO MATCH"}
+            </label>
+            <input className="inp"
+              placeholder={placeholders[form.matchField||"description"]}
+              value={form.pattern} onChange={e=>set("pattern",e.target.value)}
+              inputMode={form.matchField==="account_number"||form.matchField==="phone"?"numeric":"text"}
+            />
+          </div>
+
           <div className="fg">
             <label className="lbl">MATCH TYPE</label>
             <select className="sel" value={form.matchType} onChange={e=>set("matchType",e.target.value)}>
-              <option value="contains">Contains (anywhere in description)</option>
+              <option value="contains">Contains (anywhere in the field)</option>
               <option value="startsWith">Starts with</option>
               <option value="endsWith">Ends with</option>
               <option value="exact">Exact match</option>
@@ -3085,13 +3300,21 @@ function ImportRulesScreen({importRules, setImportRules, onBack}){
                     </button>
                   </div>
                 </div>
-                <div style={{fontSize:11,color:C.muted}}>
-                  If description <strong>{r.matchType}</strong> "<strong>{r.pattern}</strong>"
-                  {r.newType&&<span> → type: <strong>{r.newType}</strong></span>}
-                  {r.newCategory&&<span> → category: <strong>{r.newCategory}</strong></span>}
+                <div style={{fontSize:11,color:C.muted,lineHeight:1.6}}>
+                  <span style={{background:"#EFF6FF",color:"#1D4ED8",padding:"1px 6px",
+                    borderRadius:4,fontSize:10,fontWeight:600,marginRight:4}}>
+                    {(r.matchField||"description")==="account_number"?"Acct No."
+                     :(r.matchField)==="name"?"Name"
+                     :(r.matchField)==="phone"?"Phone"
+                     :(r.matchField)==="any"?"Any field"
+                     :"Description"}
+                  </span>
+                  <strong>{r.matchType}</strong> "<strong>{r.pattern}</strong>"
+                  {r.newType&&<span> → <strong>{r.newType}</strong></span>}
+                  {r.newCategory&&<span> · <strong>{r.newCategory}</strong></span>}
                   <span> · {r.taxAllowable?"✓ Allowable":"✗ Non-allowable"}</span>
                   <span> · {r.included?"Include":"Exclude"}</span>
-                  {r.appendNote&&<span> · Note: "{r.appendNote}"</span>}
+                  {r.appendNote&&<span> · "{r.appendNote}"</span>}
                 </div>
               </div>
             ))}
@@ -3836,7 +4059,7 @@ Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocale
   );
 }
 
-function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEditSetup,onNav,ownAccountsCount,importRulesCount,sub}){
+function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,authUser,onSignOut,onEditSetup,onNav,ownAccountsCount,importRulesCount,sub,importRules,setImportRules}){
   const[edit,setEdit]=useState({...profile});
   const agg=computeAggregates(txns);
   const [signingOut, setSigningOut] = useState(false);
@@ -3985,9 +4208,15 @@ function ProfileScreen({profile,setProfile,txns,onBack,authUser,onSignOut,onEdit
         <div className="card">
           <div className="ctitle">DATA MANAGEMENT</div>
           <div style={{fontSize:13,color:C.slate,marginBottom:12}}>All your data is saved locally on this device. It persists between sessions automatically.</div>
-          <button className="btn-sm btn-sm-red" style={{width:"100%",padding:10}} onClick={()=>{if(window.confirm("Delete all data and start over?")){localStorage.removeItem(STORE_KEY);window.location.reload();}}}>
-            Reset All Data
-          </button>
+          {/* Smart reset — replaces single confirm with staged modal */}
+          <ResetDataModal
+            txns={txns} setTxns={setTxns}
+            assets={assets} setAssets={setAssets}
+            ownAccounts={profile._ownAccounts}
+            importRules={importRules}
+            setImportRules={setImportRules}
+            profile={profile} setProfile={setProfile}
+          />
         </div>
 
         <div style={{textAlign:"center",fontSize:11,color:C.muted,marginTop:8,lineHeight:1.6}}>
@@ -4746,7 +4975,7 @@ function App(){
       case "upload":     return canEdit ? <CSVUploadScreen setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} profile={profile} authUser={authUser} onBack={back} ownAccounts={ownAccounts} importRules={importRules} sub={sub} setSub={setSub}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted</div>;
       case "import":     return canEdit ? <DocumentUploadScreen profile={profile} authUser={authUser} setTxns={setTxns} txns={txns} assets={assets} setAssets={setAssets} onBack={back} sub={sub} setSub={setSub}/> : <div style={{padding:40,textAlign:"center",color:C.muted}}>Access restricted — Data Entry or above</div>;
       case "agent":      return <AgentScreen profile={profile} txns={txns} onBack={back}/>;
-      case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")} onEditSetup={()=>setScreen("editSetup")} onNav={nav} ownAccountsCount={ownAccounts.length} importRulesCount={importRules.length} sub={sub}/>;
+      case "profile":    return <ProfileScreen profile={profile} setProfile={setProfile} txns={txns} setTxns={setTxns} assets={assets} setAssets={setAssets} authUser={authUser} onSignOut={handleSignOut} onBack={()=>setScreen("dashboard")} onEditSetup={()=>setScreen("editSetup")} onNav={nav} ownAccountsCount={ownAccounts.length} importRulesCount={importRules.length} sub={sub} importRules={importRules} setImportRules={setImportRules}/>;
       case "ownAccounts": return <OwnAccountsScreen ownAccounts={ownAccounts} setOwnAccounts={setOwnAccounts} onBack={back}/>;
       case "importRules": return <ImportRulesScreen importRules={importRules} setImportRules={setImportRules} onBack={back}/>;
       case "editSetup":  return <OnboardingScreen
@@ -5341,14 +5570,25 @@ function applyImportRules(transactions, ownAccounts=[], importRules=[]){
       if(!rule.pattern||!rule.pattern.trim()) continue;
       const pattern = rule.pattern.toLowerCase().trim();
       const matchType = rule.matchType||"contains";
-      let matched = false;
-      if(matchType==="contains")  matched = desc.includes(pattern);
-      if(matchType==="startsWith")matched = desc.startsWith(pattern);
-      if(matchType==="endsWith")  matched = desc.endsWith(pattern);
-      if(matchType==="exact")     matched = desc === pattern;
-      if(matchType==="regex"){
-        try{ matched = new RegExp(pattern,"i").test(t.desc||""); }catch(_){}
-      }
+      const matchField = rule.matchField||"description";
+
+      // Build the search text based on matchField
+      // All fields currently come from the narration/description text
+      // (bank statements embed account numbers, names, phones in the narration)
+      const searchText = desc; // always search the description narration
+
+      const doMatch = (text) => {
+        if(matchType==="contains")   return text.includes(pattern);
+        if(matchType==="startsWith") return text.startsWith(pattern);
+        if(matchType==="endsWith")   return text.endsWith(pattern);
+        if(matchType==="exact")      return text===pattern;
+        if(matchType==="regex"){
+          try{ return new RegExp(pattern,"i").test(t.desc||""); }catch(_){ return false; }
+        }
+        return false;
+      };
+
+      let matched = doMatch(searchText);
       if(matched){
         return{...t,
           type:      rule.newType      || t.type,

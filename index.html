@@ -1662,7 +1662,8 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
 
   // ── Breakdown data helpers ─────────────────────────────────────────────────
   const incomeTxns   = txns.filter(t=>t.type==="income"&&t.compliance_status!=="kiv"&&t.compliance_status!=="excluded");
-  const expenseTxns  = txns.filter(t=>t.type==="expense"&&t.compliance_status!=="kiv"&&t.compliance_status!=="excluded");
+  const expenseTxns  = txns.filter(t=>t.type==="expense"&&t.compliance_status!=="kiv"); // includes excluded for breakdown
+  const allowableExpTxns = expenseTxns.filter(t=>t.taxAllowable!==false&&t.compliance_status!=="excluded");
   const excludedTxns = txns.filter(t=>t.compliance_status==="excluded");
   const kivTxns_     = txns.filter(t=>t.compliance_status==="kiv");
 
@@ -1786,7 +1787,7 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   // Category-specific dashboard stat tiles — now all clickable
   const statTiles=isCompany?[
     {l:"Income to Date",  v:fmt(agg.income),   c:"#4ADE80",
-     onClick:()=>openBreakdown("Income Breakdown",incomeTxns,agg.income,null)},
+     onClick:()=>openBreakdown("Income Breakdown — "+incomeTxns.length+" transactions",incomeTxns,agg.income,null)},
     {l:"Expenses",        v:fmt(agg.expenses),  c:"#F87171",
      onClick:()=>openBreakdown("Expense Breakdown",expenseTxns,agg.expenses,null)},
     {l:"WHT to Remit",    v:fmt(agg.whtOut),    c:"#FCA5A5", nav:"schedule_whtOut", sub:"tap for schedule",
@@ -1795,34 +1796,34 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
      onClick:()=>onNav("schedule_payeOut")},
   ]:cat==="A"?[
     {l:"Income to Date",  v:fmt(agg.income),   c:"#4ADE80",
-     onClick:()=>openBreakdown("Income Breakdown",incomeTxns,agg.income,null)},
+     onClick:()=>openBreakdown("Income Breakdown — "+incomeTxns.length+" transactions",incomeTxns,agg.income,null)},
     {l:"Expenses",        v:fmt(agg.expenses),  c:"#F87171",
-     onClick:()=>openBreakdown("Expense Breakdown",expenseTxns,agg.expenses,null)},
+     onClick:()=>openBreakdown("Expense Breakdown — "+expenseTxns.length+" items",expenseTxns,agg.expenses,null)},
     {l:"PAYE Credit",     v:fmt(agg.payeIn),    c:"#93C5FD", sub:"employer deducted",
      onClick:()=>openBreakdown("PAYE Credit",agg.schedules.payeIn,agg.payeIn,null)},
     {l:"WHT Credits",     v:fmt(agg.whtIn),     c:"#4ADE80", sub:"tap to view",
      onClick:()=>openBreakdown("WHT Credits",agg.schedules.whtIn,agg.whtIn,null)},
   ]:cat==="B"?[
     {l:"Income to Date",  v:fmt(agg.income),   c:"#4ADE80",
-     onClick:()=>openBreakdown("Income Breakdown",incomeTxns,agg.income,null)},
+     onClick:()=>openBreakdown("Income Breakdown — "+incomeTxns.length+" transactions",incomeTxns,agg.income,null)},
     {l:"Expenses",        v:fmt(agg.expenses),  c:"#F87171",
-     onClick:()=>openBreakdown("Expense Breakdown",expenseTxns,agg.expenses,null)},
+     onClick:()=>openBreakdown("Expense Breakdown — "+expenseTxns.length+" items",expenseTxns,agg.expenses,null)},
     {l:"Est. PIT Due",    v:fmt(agg.estPIT),    c:"#FCD34D", sub:"tap for working",
      onClick:()=>openBreakdown("PIT Computation",null,agg.estPIT,pitWorking)},
     {l:"WHT Credits",     v:fmt(agg.whtIn),     c:"#4ADE80", sub:"tap to view",
      onClick:()=>openBreakdown("WHT Credits",agg.schedules.whtIn,agg.whtIn,null)},
   ]:cat==="C"?[
     {l:"Income to Date",  v:fmt(agg.income),   c:"#4ADE80",
-     onClick:()=>openBreakdown("Income Breakdown",incomeTxns,agg.income,null)},
+     onClick:()=>openBreakdown("Income Breakdown — "+incomeTxns.length+" transactions",incomeTxns,agg.income,null)},
     {l:"Allowable Exp.",  v:fmt(agg.allowableExpenses||0), c:"#F87171", sub:"deductible",
-     onClick:()=>openBreakdown("Allowable Expenses",expenseTxns.filter(t=>t.taxAllowable!==false),agg.allowableExpenses||0,null)},
+     onClick:()=>openBreakdown("Allowable Expenses — "+allowableExpTxns.length+" items",allowableExpTxns,agg.allowableExpenses||0,null)},
     {l:"WHT Credits",     v:fmt(agg.whtIn),    c:"#4ADE80", sub:"from clients",
      onClick:()=>openBreakdown("WHT Credits from Clients",agg.schedules.whtIn,agg.whtIn,null)},
     {l:"Est. PIT Due",    v:fmt(agg.estPIT),   c:"#FCD34D", sub:"tap for working",
      onClick:()=>openBreakdown("PIT Computation",null,agg.estPIT,pitWorking)},
   ]/* D */:[ 
     {l:"Income to Date",  v:fmt(agg.income),   c:"#4ADE80",
-     onClick:()=>openBreakdown("Income Breakdown",incomeTxns,agg.income,null)},
+     onClick:()=>openBreakdown("Income Breakdown — "+incomeTxns.length+" transactions",incomeTxns,agg.income,null)},
     {l:"PAYE Credit",     v:fmt(agg.payeIn),   c:"#93C5FD", sub:"salary portion",
      onClick:()=>openBreakdown("PAYE Credit",agg.schedules.payeIn,agg.payeIn,null)},
     {l:"WHT Credits",     v:fmt(agg.whtIn),    c:"#4ADE80", sub:"business income",
@@ -1893,23 +1894,36 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
                 <div style={{fontSize:10,fontWeight:700,letterSpacing:".08em",color:C.muted,marginBottom:8}}>
                   {rows.length} TRANSACTION{rows.length!==1?"S":""}
                 </div>
-                {rows.map((t,i)=>(
+                {rows.map((t,i)=>{
+                  const isExcluded = t.compliance_status==="excluded";
+                  const isNonAllowable = t.taxAllowable===false;
+                  const amount = t.amount||t.gross||t.tax||0;
+                  return(
                   <div key={t.id||i} style={{display:"flex",justifyContent:"space-between",
                     alignItems:"flex-start",padding:"8px 0",
-                    borderBottom:"1px solid #F1F5F9"}}>
+                    borderBottom:"1px solid #F1F5F9",
+                    opacity:isExcluded||isNonAllowable?0.55:1}}>
                     <div style={{flex:1,minWidth:0,marginRight:8}}>
                       <div style={{fontSize:11,color:C.ink,lineHeight:1.3,
                         overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                         {t.desc||t.description||"—"}
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:1}}>{t.date||""}</div>
+                      <div style={{display:"flex",gap:6,marginTop:2,flexWrap:"wrap",alignItems:"center"}}>
+                        <span style={{fontSize:10,color:C.muted}}>{t.date||""}</span>
+                        {isExcluded&&<span style={{fontSize:9,background:"#FEF2F2",color:"#DC2626",
+                          padding:"1px 6px",borderRadius:100,fontWeight:700}}>✗ Excluded</span>}
+                        {isNonAllowable&&!isExcluded&&<span style={{fontSize:9,background:"#FEF3C7",
+                          color:"#92400E",padding:"1px 6px",borderRadius:100,fontWeight:700}}>Non-allowable</span>}
+                      </div>
                     </div>
                     <div style={{fontSize:12,fontWeight:700,flexShrink:0,
-                      color:(t.type==="income"||t.gross>0)?C.green:C.red}}>
-                      {fmt(t.amount||t.gross||t.tax||0)}
+                      color:isExcluded||isNonAllowable?"#94A3B8":(t.type==="income"||t.gross>0)?C.green:C.red,
+                      textDecoration:isExcluded?"line-through":"none"}}>
+                      {fmt(amount)}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             {rows&&rows.length===0&&(

@@ -7337,16 +7337,13 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
             .sort((a,b) => b[0]-a[0])
             .map(([y, items]) => items.sort((a,b)=>a.x-b.x).map(i=>i.str).join(" ").trim())
             .filter(r=>r.length>0);
-          fullText += sortedRows.join("
-") + "
-";
+          fullText += sortedRows.join("\n") + "\n";
         }
 
         // Parse Moniepoint / standard Nigerian bank statement text
         // Pattern: date | narration | reference | debit | credit | balance
         // Moniepoint date format: 2025-11-12T08:48:27 or similar
-        const lines = fullText.split("
-").map(l=>l.trim()).filter(l=>l);
+        const lines = fullText.split("\n").map(l=>l.trim()).filter(l=>l);
         const dateRe = /^(\d{4}-\d{2}-\d{2})[T\s]/;
         const amountRe = /^[\d,]+\.\d{2}$/;
 

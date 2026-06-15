@@ -846,11 +846,13 @@ function computeAggregates(txns, profile){
         schedules.vatOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:vat,rate:"7.5%",type:"Output VAT",law:"NTA 2025 Ch.Four Sec 52"});
       }
 
-      // PAYE credit: only for Cat A/D where employer deducts PAYE
+      // PAYE credit: Cat A always; Cat D only if D1 (employer deducts)
       // Cat A: employer deducts PAYE — shows as credit on annual return
-      // Cat D: salary portion has PAYE deducted
-      // Cat B/C: no employer PAYE — self-assess directly
-      if(r.head==="PAYE" && (cat==="A"||cat==="D")){
+      // Cat D1: salary portion has PAYE deducted by employer
+      // Cat D2 / B / C: no employer PAYE — self-assess directly
+      const catDSubType = profile?.catDSubType||"";
+      const hasPAYECredit = cat==="A" || (cat==="D" && catDSubType==="D1");
+      if(r.head==="PAYE" && hasPAYECredit){
         const paye=t.amount*.15;
         payeIn+=paye;
         schedules.payeIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:paye,rate:"~15%",type:"PAYE Credit (employer deducted)",law:"NTAA 2025 Sec 13"});
@@ -928,13 +930,16 @@ function computeAggregates(txns, profile){
     const netIncome = Math.max(0, gross - businessDeductions);
     // Pension relief: allowed only if contribution actually made
     // NTA 2025 S.30(2)(a)(iii); PRA 2014 S.11
-    // IMPORTANT: Cat B employer NEVER deducts anything — override stale stored values
+    // Enforce category rules for employer deductions
+    // Cat B/C: employer NEVER deducts — override any stale stored values
+    // Cat D1: employer DOES deduct — use stored employerDeductions
+    // Cat D2: employer does NOT deduct — use self-contributions only
     const empDed_raw = profile?.employerDeductions || {};
     const selfCont   = profile?.selfContributions  || {};
-    // For Cat B/C/D: employer deductions are always zero regardless of what is stored
-    const empDed = (cat==="B"||cat==="C"||cat==="D")
+    const catDSubType2 = profile?.catDSubType||"";
+    const empDed = (cat==="B"||cat==="C"||(cat==="D"&&catDSubType2!=="D1"))
       ? {paye:false, pension:false, nhf:false, nhis:false}
-      : empDed_raw;
+      : empDed_raw; // Cat A or D1: use stored employer deductions
     const pensionAllowed = empDed.pension || selfCont.pension;
     const nhfAllowed     = empDed.nhf     || selfCont.nhf;
     const nhisAllowed    = empDed.nhis    || selfCont.nhis;
@@ -1171,7 +1176,8 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
     selfContributions:{pension:false,nhf:false,nhis:false},
     rentPaid:0,            // annual rent paid — NTA 2025 S.30(2)(a)(vi)
     employerRentInPAYE:"",// "yes"|"no"|"unsure" — has employer already factored rent into PAYE?
-    // Cat B employment income breakdown (NTA 2025 S.3)
+    catDSubType:"",        // "D1" (employer deducts PAYE/pension) | "D2" (employer does not)
+    // Cat B/D employment income breakdown (NTA 2025 S.3)
     monthlyBasicSalary:0,
     monthlyOvertime:0,
     monthlyHousingAllowance:0,
@@ -1193,15 +1199,21 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
   // Cat C/D: self-employed / mixed — no employer
   const handleCatChange = (cat) => {
     set("empCategory", cat);
-    if(cat==="B"||cat==="C"||cat==="D"){
+    if(cat==="B"||cat==="C"){
       // No employer deductions for these categories
-      setData(d=>({...d, empCategory:cat,
+      setData(d=>({...d, empCategory:cat, catDSubType:"",
+        employerDeductions:{paye:false,pension:false,nhf:false,nhis:false},
+        selfContributions:{pension:false,nhf:false,nhis:false},
+      }));
+    } else if(cat==="D"){
+      // D requires sub-type selection — reset and ask
+      setData(d=>({...d, empCategory:cat, catDSubType:"",
         employerDeductions:{paye:false,pension:false,nhf:false,nhis:false},
         selfContributions:{pension:false,nhf:false,nhis:false},
       }));
     } else if(cat==="A"){
-      // Reset to ask — don't assume
-      setData(d=>({...d, empCategory:cat,
+      // Reset to ask — don't assume employer deductions
+      setData(d=>({...d, empCategory:cat, catDSubType:"",
         employerDeductions:{paye:true,pension:false,nhf:false,nhis:false},
         selfContributions:{pension:false,nhf:false,nhis:false},
       }));
@@ -1681,6 +1693,205 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
               </div>
             </>
           )}
+
+          {/* ── CAT D SUB-TYPE ── */}
+          {data.empCategory==="D"&&(
+            <>
+              {!data.catDSubType&&(
+                <div className="fg">
+                  <label className="lbl">CATEGORY D — WHICH SITUATION APPLIES? <span style={{color:"#DC2626"}}>*</span></label>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}}>
+                    Category D covers taxpayers with <strong>both salary income AND other income</strong>
+                    (business, rental, investment). Your salary treatment depends on whether
+                    your employer makes statutory deductions.
+                  </div>
+                  {[
+                    {v:"D1",
+                     label:"D1 — Employer deducts PAYE and statutory contributions from salary",
+                     sub:"Employer deducts PAYE, pension (8%), NHF, NHIS before paying you. You also have other income from business, rental or investments that must be self-assessed.",
+                     color:"#1D4ED8",bg:"#EFF6FF",border:"#BFDBFE"},
+                    {v:"D2",
+                     label:"D2 — Employer does NOT deduct PAYE or statutory contributions",
+                     sub:"You receive gross salary with no deductions. You must self-assess and pay PIT on ALL income (salary + other) yourself. Contributions are deductible only if you make them personally.",
+                     color:"#D97706",bg:"#FFFBEB",border:"#FDE68A"},
+                  ].map(opt=>(
+                    <div key={opt.v} onClick={()=>set("catDSubType",opt.v)}
+                      style={{marginBottom:8,borderRadius:12,cursor:"pointer",
+                        border:`2px solid ${data.catDSubType===opt.v?opt.color:C.border}`,
+                        background:data.catDSubType===opt.v?opt.bg:"#fff",overflow:"hidden"}}>
+                      <div style={{padding:"12px 14px",display:"flex",gap:10,alignItems:"flex-start"}}>
+                        <div style={{width:26,height:26,borderRadius:8,flexShrink:0,marginTop:1,
+                          background:data.catDSubType===opt.v?opt.color:"#F1F5F9",
+                          display:"flex",alignItems:"center",justifyContent:"center",
+                          fontSize:11,fontWeight:800,
+                          color:data.catDSubType===opt.v?"#fff":C.muted}}>{opt.v}</div>
+                        <div>
+                          <div style={{fontSize:13,fontWeight:700,
+                            color:data.catDSubType===opt.v?opt.color:C.ink,marginBottom:3}}>
+                            {opt.label}
+                          </div>
+                          <div style={{fontSize:11,color:C.muted,lineHeight:1.5}}>{opt.sub}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* D1 — employer deducts — salary + confirm employer deductions */}
+              {data.catDSubType==="D1"&&(
+                <>
+                  <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,
+                    padding:"10px 12px",marginBottom:10,fontSize:11,color:"#1E40AF",lineHeight:1.5}}>
+                    <strong>D1 confirmed:</strong> Your employer deducts PAYE from salary.
+                    You will receive a PAYE credit on your annual return (NTAA 2025 S.13).
+                    Your other income (business/rental/investment) is self-assessed separately.
+                    <button onClick={()=>set("catDSubType","")}
+                      style={{float:"right",background:"none",border:"none",color:"#1D4ED8",
+                        fontSize:10,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline"}}>
+                      Change
+                    </button>
+                  </div>
+                  <div className="fg">
+                    <label className="lbl">MONTHLY SALARY FROM EMPLOYMENT (₦)</label>
+                    <input className="inp" type="number" min="0"
+                      value={data.monthlyBasicSalary||""}
+                      onChange={e=>set("monthlyBasicSalary",parseFloat(e.target.value)||0)}
+                      placeholder="e.g. 200000"/>
+                    <div style={{fontSize:10,color:C.muted,marginTop:3}}>
+                      Employer deducts PAYE from this. Your business/rental income is captured via transactions.
+                    </div>
+                  </div>
+                  {(data.monthlyBasicSalary||0)>0&&(
+                    <div className="fg">
+                      <label className="lbl">EMPLOYMENT ALLOWANCES (monthly)</label>
+                      {[
+                        {k:"monthlyOvertime",l:"Overtime"},
+                        {k:"monthlyHousingAllowance",l:"Housing Allowance"},
+                        {k:"monthlyTransportAllowance",l:"Transport Allowance"},
+                      ].map(f=>(
+                        <div key={f.k} style={{marginBottom:8}}>
+                          <div style={{fontSize:10,color:C.muted,marginBottom:2}}>{f.l} — <span style={{color:"#DC2626"}}>taxable (NTA 2025 S.3)</span></div>
+                          <input className="inp" type="number" min="0"
+                            value={data[f.k]||""} onChange={e=>set(f.k,parseFloat(e.target.value)||0)}
+                            placeholder="0"/>
+                        </div>
+                      ))}
+                      <div style={{marginBottom:4}}>
+                        <div style={{fontSize:10,color:C.muted,marginBottom:2}}>Annual Bonus / Commission — <span style={{color:"#DC2626"}}>taxable on receipt</span></div>
+                        <input className="inp" type="number" min="0"
+                          value={data.annualBonus||""} onChange={e=>set("annualBonus",parseFloat(e.target.value)||0)}
+                          placeholder="0"/>
+                      </div>
+                    </div>
+                  )}
+                  {/* Employer deductions confirmation for D1 */}
+                  <div className="fg">
+                    <label className="lbl">CONFIRM: WHICH DEDUCTIONS DOES YOUR EMPLOYER MAKE?</label>
+                    <div style={{fontSize:11,color:C.muted,marginBottom:8,lineHeight:1.5}}>
+                      These will not be double-counted in your self-assessment computation.
+                    </div>
+                    {[
+                      {k:"paye",label:"PAYE (Income Tax)",law:"NTAA 2025 S.13"},
+                      {k:"pension",label:"Pension 8%",law:"NTA 2025 S.30(2)(a)(iii)"},
+                      {k:"nhf",label:"NHF 2.5%",law:"NTA 2025 S.30(2)(a)(i)"},
+                      {k:"nhis",label:"NHIS / HMO",law:"NTA 2025 S.30(2)(a)(ii)"},
+                    ].map(d=>(
+                      <div key={d.k} onClick={()=>toggleED(d.k)}
+                        style={{display:"flex",gap:10,alignItems:"center",padding:"8px 10px",
+                          marginBottom:6,borderRadius:8,cursor:"pointer",
+                          border:`1px solid ${data.employerDeductions[d.k]?C.green:C.border}`,
+                          background:data.employerDeductions[d.k]?"#F0FDF4":"#fff"}}>
+                        <div className={"ds-check"+(data.employerDeductions[d.k]?" on":"")}>
+                          {data.employerDeductions[d.k]&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+                        </div>
+                        <div style={{flex:1}}>
+                          <span style={{fontSize:12,fontWeight:600,color:C.ink}}>{d.label}</span>
+                          <span style={{fontSize:10,color:C.muted,marginLeft:6}}>{d.law}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* D2 — employer does NOT deduct — same as Cat B treatment */}
+              {data.catDSubType==="D2"&&(
+                <>
+                  <div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:10,
+                    padding:"10px 12px",marginBottom:10,fontSize:11,color:"#92400E",lineHeight:1.5}}>
+                    <strong>D2 confirmed:</strong> Your employer makes NO statutory deductions.
+                    You self-assess PIT on ALL income — salary + other income combined.
+                    Deductions apply only for contributions you actually make yourself.
+                    <button onClick={()=>set("catDSubType","")}
+                      style={{float:"right",background:"none",border:"none",color:"#D97706",
+                        fontSize:10,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline"}}>
+                      Change
+                    </button>
+                  </div>
+                  <div className="fg">
+                    <label className="lbl">MONTHLY BASIC SALARY (₦) <span style={{color:"#DC2626"}}>*</span></label>
+                    <input className="inp" type="number" min="0"
+                      value={data.monthlyBasicSalary||""}
+                      onChange={e=>set("monthlyBasicSalary",parseFloat(e.target.value)||0)}
+                      placeholder="e.g. 200000"/>
+                  </div>
+                  {(data.monthlyBasicSalary||0)>0&&(
+                    <div className="fg">
+                      <label className="lbl">EMPLOYMENT ALLOWANCES (monthly)</label>
+                      {[
+                        {k:"monthlyOvertime",l:"Overtime — taxable"},
+                        {k:"monthlyHousingAllowance",l:"Housing Allowance — taxable"},
+                        {k:"monthlyTransportAllowance",l:"Transport Allowance — taxable"},
+                      ].map(f=>(
+                        <div key={f.k} style={{marginBottom:8}}>
+                          <div style={{fontSize:10,color:C.muted,marginBottom:2}}>{f.l}</div>
+                          <input className="inp" type="number" min="0"
+                            value={data[f.k]||""} onChange={e=>set(f.k,parseFloat(e.target.value)||0)}
+                            placeholder="0"/>
+                        </div>
+                      ))}
+                      <div style={{marginBottom:4}}>
+                        <div style={{fontSize:10,color:C.muted,marginBottom:2}}>Annual Bonus / Commission</div>
+                        <input className="inp" type="number" min="0"
+                          value={data.annualBonus||""} onChange={e=>set("annualBonus",parseFloat(e.target.value)||0)}
+                          placeholder="0"/>
+                      </div>
+                    </div>
+                  )}
+                  {/* D2 self-contributions — same as Cat B */}
+                  <div className="fg">
+                    <label className="lbl">STATUTORY CONTRIBUTIONS — WHAT DO YOU CONTRIBUTE YOURSELF?</label>
+                    <div style={{fontSize:11,color:C.muted,marginBottom:8,lineHeight:1.5}}>
+                      Deductible ONLY if you actually contribute. Evidence required on audit.
+                    </div>
+                    {[
+                      {k:"pension",label:"Pension 8% — to licensed PFA",law:"NTA 2025 S.30(2)(a)(iii); PRA 2014"},
+                      {k:"nhf",label:"NHF 2.5% — to FMBN",law:"NTA 2025 S.30(2)(a)(i); NHF Act"},
+                      {k:"nhis",label:"NHIS / personal HMO",law:"NTA 2025 S.30(2)(a)(ii)"},
+                    ].map(d=>{
+                      const selfDid=(data.selfContributions||{})[d.k];
+                      return(
+                        <div key={d.k} onClick={()=>toggleSC(d.k)}
+                          style={{display:"flex",gap:10,alignItems:"center",padding:"9px 10px",
+                            marginBottom:6,borderRadius:8,cursor:"pointer",
+                            border:`1.5px solid ${selfDid?C.green:C.border}`,
+                            background:selfDid?"#F0FDF4":"#fff"}}>
+                          <div className={"ds-check"+(selfDid?" on":"")}>
+                            {selfDid&&<span style={{color:"#fff",fontSize:11,fontWeight:900}}>✓</span>}
+                          </div>
+                          <div style={{flex:1}}>
+                            <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{d.label}</div>
+                            <div style={{fontSize:9,color:C.muted}}>{d.law}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </>
+          )}
         </>
       )}
 
@@ -1784,6 +1995,18 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
           alert("Please enter your monthly basic salary on the previous screen. This is required to compute your PIT accurately (NTA 2025 S.3).");
           return;
         }
+        // Cat D sub-type must be selected
+        if(data.mode!=="company"&&data.empCategory==="D"&&!data.catDSubType){
+          setStep(2);
+          alert("Please select your Category D sub-type (D1 or D2) on the previous screen to continue.");
+          return;
+        }
+        // Cat D2 salary is mandatory (like Cat B — no employer deductions)
+        if(data.mode!=="company"&&data.empCategory==="D"&&data.catDSubType==="D2"&&!(data.monthlyBasicSalary||0)){
+          setStep(2);
+          alert("Category D2: Please enter your monthly basic salary. Required to compute your combined PIT (NTA 2025 S.3).");
+          return;
+        }
         onComplete(data);
       }}>
         {editMode?"💾 Save Changes":"Start Using TaxWise →"}
@@ -1807,7 +2030,13 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
     {v:"C",label:"Category C",sub:"Self-employed / freelancer"},
     {v:"D",label:"Category D",sub:"Mixed — salary + business income"},
   ];
-  const catLabel = {"A":"Cat A — PAYE","B":"Cat B — No PAYE","C":"Cat C — Self-Employed","D":"Cat D — Mixed Income"};
+  const catDSub = profile?.catDSubType||"";
+  const catLabel = {
+    "A":"Cat A — PAYE (employer deducts)",
+    "B":"Cat B — No PAYE (self-assess)",
+    "C":"Cat C — Self-Employed",
+    "D":catDSub==="D1"?"Cat D1 — Mixed (employer deducts PAYE)":catDSub==="D2"?"Cat D2 — Mixed (no employer PAYE)":"Cat D — Mixed Income",
+  };
   const turnover=computeTurnover(txns); // IMPROVEMENT 1: live from transactions
   const deadlines=[
     {n:"PAYE",label:isCompany?"PAYE Remittance":"PAYE / Employer",days:getDaysLeft("PAYE")},
@@ -1867,7 +2096,9 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   // Cat B/C/D: employer never deducts — override stale stored values
   const _empDed_raw = profile.employerDeductions || {};
   const _selfCont   = profile.selfContributions  || {};
-  const _empDed = (cat==="B"||cat==="C"||cat==="D")
+  const _catDSubType = profile.catDSubType||"";
+  // D1: employer deducts (use stored empDed); D2/B/C: employer never deducts
+  const _empDed = (cat==="B"||cat==="C"||(cat==="D"&&_catDSubType!=="D1"))
     ? {paye:false, pension:false, nhf:false, nhis:false}
     : _empDed_raw;
   const _pensionOK = _empDed.pension || _selfCont.pension;
@@ -5938,7 +6169,11 @@ ${yearTxns.length>50?`<tr><td colspan="4" style="text-align:center;color:#94a3b8
     : cat==="A" ? "Cat A — Employed: PAYE deducted by employer. WHT credits offset annual return."
     : cat==="B" ? "Cat B — Employed (no PAYE): file annual self-assessment return to NRS."
     : cat==="C" ? "Cat C — Self-Employed: no PAYE credit. WHT from clients offsets PIT. Deductible expenses reduce taxable income."
-    : "Cat D — Mixed: PAYE credit on salary + WHT on business income. File annual return.";
+    : (profile.catDSubType==="D1")
+      ? "Cat D1 — Mixed (employer deducts PAYE): PAYE credit on salary + WHT on business income. Self-assess net liability annually."
+      : (profile.catDSubType==="D2")
+      ? "Cat D2 — Mixed (no employer PAYE): Self-assess ALL income — salary + business + other. Contributions deductible only if personally made."
+      : "Cat D — Mixed Income: Select D1 or D2 in Profile to refine your computation.";
 
   return(
     <div style={{paddingBottom:80}}>
@@ -6091,9 +6326,10 @@ ${yearTxns.length>50?`<tr><td colspan="4" style="text-align:center;color:#94a3b8
         ):(
           <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:10,
             padding:"10px 12px",marginBottom:8,fontSize:11,color:"#166534",lineHeight:1.6}}>
-            <strong>No PAYE applies for {cat==="B"?"Category B":"Category C"}.</strong>
-            {cat==="B"?" You receive gross salary and pay Personal Income Tax directly via annual self-assessment."
-            :" Self-employed taxpayers are not subject to employer PAYE. WHT credits from clients offset your annual PIT liability."}
+            <strong>No PAYE credit applies for {cat==="B"?"Category B":cat==="C"?"Category C":"Category D2"}.</strong>
+            {cat==="B"?" You receive gross salary and pay PIT directly via annual self-assessment."
+            :cat==="C"?" Self-employed — no employer PAYE. WHT credits from clients offset annual PIT."
+            :" D2: Your employer makes no deductions. You self-assess PIT on ALL income (salary + other). Contributions deductible only if personally made (NTA 2025 S.30(2)(a))."}
           </div>
         )}
 

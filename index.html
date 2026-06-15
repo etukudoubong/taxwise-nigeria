@@ -917,7 +917,13 @@ function computeAggregates(txns, profile){
   if(!isCompany){
     // NTA 2025 PIT computation — no consolidated relief (abolished)
     // Reliefs: pension (8%), NHF (2.5%), rent relief per NTA 2025 S.30(2)(a)
-    const gross = income;
+    // For Cat B: gross includes all emoluments (NTA 2025 S.3)
+    // If profile has employment breakdown, use that; otherwise use imported transactions
+    const employmentGross = (!isCompany && (cat==="A"||cat==="B") && (profile?.monthlyBasicSalary||0)>0)
+      ? ((profile.monthlyBasicSalary||0)+(profile.monthlyOvertime||0)+(profile.monthlyHousingAllowance||0)+(profile.monthlyTransportAllowance||0))*12
+        + (profile.annualBonus||0) + (profile.annualMedicalBenefit||0) + (profile.annualLeaveAllowance||0)
+      : 0;
+    const gross = employmentGross > 0 ? Math.max(income, employmentGross) : income;
     const businessDeductions = isCatCD ? allowableExpenses : 0;
     const netIncome = Math.max(0, gross - businessDeductions);
     // Pension relief: allowed only if contribution actually made
@@ -1165,6 +1171,14 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
     selfContributions:{pension:false,nhf:false,nhis:false},
     rentPaid:0,            // annual rent paid — NTA 2025 S.30(2)(a)(vi)
     employerRentInPAYE:"",// "yes"|"no"|"unsure" — has employer already factored rent into PAYE?
+    // Cat B employment income breakdown (NTA 2025 S.3)
+    monthlyBasicSalary:0,
+    monthlyOvertime:0,
+    monthlyHousingAllowance:0,
+    monthlyTransportAllowance:0,
+    annualBonus:0,
+    annualMedicalBenefit:0,
+    annualLeaveAllowance:0,
     companyName:"",sector:"Trading",isProfessional:false,
     dataSources:["manual"],
     onboarded:true,
@@ -1446,10 +1460,153 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
                 <p style={{fontSize:12,color:C.ink,lineHeight:1.6}}>
                   Your employer does not deduct PAYE, pension, NHF or NHIS.
                   Under NTA 2025, you must file a self-assessment return and pay PIT directly.
-                  Reliefs are available <strong>only for contributions you actually make yourself</strong> —
+                  All employment income — salary, overtime, bonuses, commissions, and allowances —
+                  is taxable. Reliefs are available <strong>only for contributions you actually make yourself</strong> —
                   you cannot claim a deduction for a contribution not made (NTA 2025 S.30(2)(a)).
                 </p>
               </div>
+
+              {/* Mandatory salary details for Cat B */}
+              <div className="fg">
+                <label className="lbl">MONTHLY BASIC SALARY (₦) <span style={{color:"#DC2626"}}>*</span></label>
+                <input className="inp" type="number" min="0"
+                  value={data.monthlyBasicSalary||""}
+                  onChange={e=>set("monthlyBasicSalary",parseFloat(e.target.value)||0)}
+                  placeholder="e.g. 150000"/>
+                <div style={{fontSize:10,color:C.muted,marginTop:3,lineHeight:1.5}}>
+                  Required. Your gross monthly salary before any deductions.
+                  {(data.monthlyBasicSalary||0)<=70000&&(data.monthlyBasicSalary||0)>0&&(
+                    <span style={{color:C.green,fontWeight:700}}> ✓ ₦70,000/month or below — fully exempt from PIT (NTA 2025 S.5 — National Minimum Wage exemption).</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Employment benefits — only show if salary > minimum wage */}
+              {(data.monthlyBasicSalary||0)>70000&&(
+                <>
+                  <div className="fg">
+                    <label className="lbl">EMPLOYMENT BENEFITS & ALLOWANCES</label>
+                    <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}}>
+                      All employment benefits are taxable under NTA 2025 S.3 unless specifically exempted.
+                      Enter the amounts you typically receive per month.
+                    </div>
+
+                    {/* Overtime */}
+                    <div style={{marginBottom:10}}>
+                      <label className="lbl" style={{fontSize:10}}>OVERTIME PAY (monthly average, if any)</label>
+                      <input className="inp" type="number" min="0"
+                        value={data.monthlyOvertime||""}
+                        onChange={e=>set("monthlyOvertime",parseFloat(e.target.value)||0)}
+                        placeholder="0"/>
+                      <div style={{fontSize:10,color:"#DC2626",marginTop:2}}>
+                        ✗ Fully taxable — no overtime exemption under NTA 2025. Added to gross income.
+                      </div>
+                    </div>
+
+                    {/* Bonus */}
+                    <div style={{marginBottom:10}}>
+                      <label className="lbl" style={{fontSize:10}}>BONUS / COMMISSION (annual, if any)</label>
+                      <input className="inp" type="number" min="0"
+                        value={data.annualBonus||""}
+                        onChange={e=>set("annualBonus",parseFloat(e.target.value)||0)}
+                        placeholder="0"/>
+                      <div style={{fontSize:10,color:"#DC2626",marginTop:2}}>
+                        ✗ Fully taxable in the year of receipt — NTA 2025 S.3(1)(a). Monthly average used for PIT estimate.
+                      </div>
+                    </div>
+
+                    {/* Housing allowance */}
+                    <div style={{marginBottom:10}}>
+                      <label className="lbl" style={{fontSize:10}}>HOUSING ALLOWANCE (monthly, if paid by employer)</label>
+                      <input className="inp" type="number" min="0"
+                        value={data.monthlyHousingAllowance||""}
+                        onChange={e=>set("monthlyHousingAllowance",parseFloat(e.target.value)||0)}
+                        placeholder="0"/>
+                      <div style={{fontSize:10,color:"#DC2626",marginTop:2}}>
+                        ✗ Taxable as part of gross emoluments — NTA 2025 S.3. However if your employer provides a
+                        physical house (not cash allowance), it is assessed at its annual value.
+                        Note: Separate Rent Relief (S.30(2)(a)(vi)) applies to rent <em>you pay</em>.
+                      </div>
+                    </div>
+
+                    {/* Transport allowance */}
+                    <div style={{marginBottom:10}}>
+                      <label className="lbl" style={{fontSize:10}}>TRANSPORT ALLOWANCE (monthly, if any)</label>
+                      <input className="inp" type="number" min="0"
+                        value={data.monthlyTransportAllowance||""}
+                        onChange={e=>set("monthlyTransportAllowance",parseFloat(e.target.value)||0)}
+                        placeholder="0"/>
+                      <div style={{fontSize:10,color:"#DC2626",marginTop:2}}>
+                        ✗ Taxable — NTA 2025 S.3. Exception: reimbursement of actual transport expenses
+                        (not a fixed allowance) is not taxable if supported by receipts.
+                      </div>
+                    </div>
+
+                    {/* Medical benefits */}
+                    <div style={{marginBottom:10}}>
+                      <label className="lbl" style={{fontSize:10}}>MEDICAL / HEALTH BENEFIT (annual, if any)</label>
+                      <input className="inp" type="number" min="0"
+                        value={data.annualMedicalBenefit||""}
+                        onChange={e=>set("annualMedicalBenefit",parseFloat(e.target.value)||0)}
+                        placeholder="0"/>
+                      <div style={{fontSize:10,color:C.muted,marginTop:2,lineHeight:1.5}}>
+                        <span style={{color:C.green}}>✓ Exempt if employer pays directly to a registered NHIS/HMO provider.</span>
+                        {" "}<span style={{color:"#DC2626"}}>✗ Taxable if received as cash allowance.</span>
+                        {" "}Enter zero if employer pays your HMO directly.
+                      </div>
+                    </div>
+
+                    {/* Leave allowance */}
+                    <div style={{marginBottom:6}}>
+                      <label className="lbl" style={{fontSize:10}}>LEAVE ALLOWANCE (annual, if any)</label>
+                      <input className="inp" type="number" min="0"
+                        value={data.annualLeaveAllowance||""}
+                        onChange={e=>set("annualLeaveAllowance",parseFloat(e.target.value)||0)}
+                        placeholder="0"/>
+                      <div style={{fontSize:10,color:"#DC2626",marginTop:2}}>
+                        ✗ Fully taxable — NTA 2025 S.3(1)(a). Added to gross employment income.
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Summary of gross employment income */}
+                  {(()=>{
+                    const monthly = (data.monthlyBasicSalary||0)+(data.monthlyOvertime||0)+(data.monthlyHousingAllowance||0)+(data.monthlyTransportAllowance||0);
+                    const annual  = monthly*12 + (data.annualBonus||0) + (data.annualMedicalBenefit||0) + (data.annualLeaveAllowance||0);
+                    return annual>0?(
+                      <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,
+                        padding:"12px 14px",marginBottom:8,fontSize:11}}>
+                        <div style={{fontWeight:700,color:"#1D4ED8",marginBottom:8}}>
+                          Gross Employment Income Summary
+                        </div>
+                        {[
+                          ["Basic Salary (annual)", (data.monthlyBasicSalary||0)*12],
+                          ["Overtime (annual)", (data.monthlyOvertime||0)*12],
+                          ["Housing Allowance (annual)", (data.monthlyHousingAllowance||0)*12],
+                          ["Transport Allowance (annual)", (data.monthlyTransportAllowance||0)*12],
+                          ["Bonus / Commission", data.annualBonus||0],
+                          ["Medical Benefit (taxable)", data.annualMedicalBenefit||0],
+                          ["Leave Allowance", data.annualLeaveAllowance||0],
+                        ].filter(([,v])=>v>0).map(([label,val])=>(
+                          <div key={label} style={{display:"flex",justifyContent:"space-between",
+                            padding:"3px 0",borderBottom:"1px solid #DBEAFE",fontSize:11,color:"#1E40AF"}}>
+                            <span>{label}</span>
+                            <span style={{fontWeight:600}}>{fmt(val)}</span>
+                          </div>
+                        ))}
+                        <div style={{display:"flex",justifyContent:"space-between",
+                          padding:"6px 0 0",fontSize:12,fontWeight:800,color:"#1D4ED8",marginTop:4}}>
+                          <span>Total Gross Employment Income</span>
+                          <span>{fmt(annual)}</span>
+                        </div>
+                        <div style={{fontSize:10,color:"#1E40AF",marginTop:4,opacity:.7}}>
+                          NTA 2025 S.3 — all emoluments taxable. Reliefs applied separately.
+                        </div>
+                      </div>
+                    ):null;
+                  })()}
+                </>
+              )}
 
               <div className="fg">
                 <label className="lbl">STATUTORY CONTRIBUTIONS — WHAT DO YOU CONTRIBUTE YOURSELF?</label>
@@ -1619,7 +1776,16 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
         <p style={{fontSize:12,color:C.ink,lineHeight:1.6}}>As you enter transactions, your dashboard will show live turnover, income, expenses, VAT position, PAYE obligations and CIT estimate — all computed from your actual transaction data.</p>
       </div>
 
-      <button className="btn btn-green" style={{marginTop:8}} onClick={()=>onComplete(data)}>
+      <button className="btn btn-green" style={{marginTop:8}} onClick={()=>{
+        // Cat B salary is mandatory
+        if(data.mode!=="company"&&data.empCategory==="B"&&!(data.monthlyBasicSalary||0)){
+          setStep(2);
+          setTimeout(()=>{ const el=document.querySelector("input[placeholder='e.g. 150000']"); if(el){el.scrollIntoView({behavior:"smooth",block:"center"});el.focus();} },200);
+          alert("Please enter your monthly basic salary on the previous screen. This is required to compute your PIT accurately (NTA 2025 S.3).");
+          return;
+        }
+        onComplete(data);
+      }}>
         {editMode?"💾 Save Changes":"Start Using TaxWise →"}
       </button>
       {editMode&&<button className="btn btn-ghost" style={{marginTop:8}} onClick={()=>onComplete(null)}>Cancel</button>}
@@ -1689,7 +1855,12 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   //   (iv)  Interest on owner-occupied housing loan
   //   (v)   Life insurance premiums
   //   (vi)  Rent relief — 20% of annual rent, max ₦500,000
-  const _gross     = agg.income;
+  // For Cat A/B: use employment breakdown if available, else use transactions
+  const _empMonthly = (cat==="A"||cat==="B")&&(profile.monthlyBasicSalary||0)>0
+    ? ((profile.monthlyBasicSalary||0)+(profile.monthlyOvertime||0)+(profile.monthlyHousingAllowance||0)+(profile.monthlyTransportAllowance||0))*12
+      +(profile.annualBonus||0)+(profile.annualMedicalBenefit||0)+(profile.annualLeaveAllowance||0)
+    : 0;
+  const _gross     = _empMonthly > 0 ? Math.max(agg.income, _empMonthly) : agg.income;
   const _allowExp  = (isCatCD||isCompany) ? (agg.allowableExpenses||0) : 0;
   const _netIncome = Math.max(0, _gross - _allowExp);
   // Statutory relief deductions — only if actually contributed (NTA 2025 S.30(2)(a))

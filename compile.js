@@ -32,6 +32,10 @@ if (jsxStart === -1) {
       setTimeout(startApp, 20);
       return;
     }
+    if(typeof supabase === 'undefined' || !supabase.createClient){
+      setTimeout(startApp, 20);
+      return;
+    }
     var React = window.React;
     var ReactDOM = window.ReactDOM;
     // ── TaxWise Nigeria — compiled by Sucrase ──

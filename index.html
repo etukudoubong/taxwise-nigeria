@@ -2056,7 +2056,9 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   const agg=computeAggregates(txns,profile);
   const [showCatPicker,setShowCatPicker]=useState(false);
   const [breakdown,setBreakdown]=useState(null); // {title, rows, total, working}
+  const [drillBreakdown,setDrillBreakdown]=useState(null); // sub-modal when tapping a working step
   const openBreakdown=(title,rows,total,working)=>setBreakdown({title,rows,total,working});
+  const openDrill=(title,rows,total,note)=>setDrillBreakdown({title,rows,total,note});
 
   const CAT_OPTIONS=isCompany?[]:[ 
     {v:"A",label:"Category A",sub:"Salaried — employer deducts PAYE"},
@@ -2171,7 +2173,14 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   const _grossPIT   = pitBands(_chargeable);
   const _netPIT     = Math.max(0, _grossPIT - agg.payeIn - agg.whtIn);
 
-  // Pension note
+  // Transaction drill-downs for each pitWorking step
+  const _incomeTxns   = txns.filter(t=>t.type==="income"&&t.compliance_status!=="excluded"&&t.compliance_status!=="kiv");
+  const _expenseTxns  = txns.filter(t=>t.type==="expense"&&t.compliance_status!=="excluded"&&t.compliance_status!=="kiv");
+  const _allowExpTxns = _expenseTxns.filter(t=>t.taxAllowable!==false);
+  const _whtTxns      = (agg.schedules?.whtIn||[]);
+  const _payeTxns     = (agg.schedules?.payeIn||[]);
+
+// Pension note
   const _pensionNote = _pensionOK
     ? (_empDed.pension
         ? "Employer deducts 8% of employment income (PRA 2014 S.11) — NTA 2025 S.30(2)(a)(iii). Applied on employment income only, not business/rental income."
@@ -2184,84 +2193,135 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
       label:"Employment Income (annual)",
       value:_empIncomeBase,
       section:"income",
+      drillRows: _empMonthlyComponents ? [
+        {desc:"Basic Salary",    amount:_empMonthlyComponents.basic,     date:"Annual"},
+        ...(_empMonthlyComponents.overtime>0  ?[{desc:"Overtime Pay",        amount:_empMonthlyComponents.overtime,   date:"Annual"}]:[]),
+        ...(_empMonthlyComponents.housing>0   ?[{desc:"Housing Allowance",   amount:_empMonthlyComponents.housing,    date:"Annual"}]:[]),
+        ...(_empMonthlyComponents.transport>0 ?[{desc:"Transport Allowance", amount:_empMonthlyComponents.transport,  date:"Annual"}]:[]),
+        ...(_empMonthlyComponents.bonus>0     ?[{desc:"Bonus / Commission",  amount:_empMonthlyComponents.bonus,      date:"Annual"}]:[]),
+        ...(_empMonthlyComponents.medical>0   ?[{desc:"Medical Benefit",     amount:_empMonthlyComponents.medical,    date:"Annual"}]:[]),
+        ...(_empMonthlyComponents.leave>0     ?[{desc:"Leave Allowance",     amount:_empMonthlyComponents.leave,      date:"Annual"}]:[]),
+      ] : _incomeTxns.filter(t=>t.type==="income"),
+      drillNote:"All emoluments are taxable — NTA 2025 S.3(1)(a). Pension/NHF computed on this income only.",
       note:_empMonthlyComponents
         ? "Basic: ₦"+(_empMonthlyComponents.basic).toLocaleString()
           +(_empMonthlyComponents.overtime>0?"; Overtime: ₦"+_empMonthlyComponents.overtime.toLocaleString():"")
           +(_empMonthlyComponents.housing>0?"; Housing: ₦"+_empMonthlyComponents.housing.toLocaleString():"")
           +(_empMonthlyComponents.transport>0?"; Transport: ₦"+_empMonthlyComponents.transport.toLocaleString():"")
           +(_empMonthlyComponents.bonus>0?"; Bonus: ₦"+_empMonthlyComponents.bonus.toLocaleString():"")
-          +" — all emoluments taxable (NTA 2025 S.3)"
-        : "From employment transactions — NTA 2025 S.3",
+          +" — all emoluments taxable (NTA 2025 S.3). Tap to see breakdown."
+        : "From employment transactions — NTA 2025 S.3. Tap to see transactions.",
     }] : []),
     ...(_otherIncome>0 ? [{
       label:"Other Income (business/rental/investment)",
       value:_otherIncome,
       section:"income",
-      note:"From transactions — business profit, rental income, investment returns — NTA 2025 S.3",
+      drillRows: _incomeTxns,
+      drillNote:"Business profit, rental income, investment returns — NTA 2025 S.3. Pension/NHF do NOT apply to this income.",
+      note:"From transactions — business profit, rental income, investment returns — NTA 2025 S.3. Tap for transaction list.",
     }] : []),
+    ...(cat==="C"&&_gross>0?[{
+      label:"Self-Employment / Business Income",
+      value:_gross,
+      section:"income",
+      drillRows: _incomeTxns,
+      drillNote:"Income from self-employment or business activities — NTA 2025 S.3.",
+      note:"All income transactions — NTA 2025 S.3. Tap to see transactions.",
+    }]:[]),
     {label:"Total Gross Income",
      value:_gross,
      bold:true,
+     drillRows: _incomeTxns,
+     drillNote:"All income transactions contributing to gross income.",
      note:cat==="C"?"Self-employment income — NTA 2025 S.3":"Combined employment + other income — NTA 2025 S.3"},
 
     // ── SECTION 2: Business expense deductions ──────────────────────────────
     ...(_allowExp>0 ? [{
       label:"Less: Allowable Business Expenses",
       value:-_allowExp,
-      note:"Wholly-and-exclusively for business (NTA 2025 S.20) — Cat "+cat+" only",
+      drillRows: _allowExpTxns,
+      drillNote:"Expenses wholly-and-exclusively incurred for the business — NTA 2025 S.20. Tap to see deductible transactions.",
+      note:"Wholly-and-exclusively for business (NTA 2025 S.20) — Cat "+cat+" only. Tap for breakdown.",
     }] : []),
     ...(_allowExp>0 ? [{
       label:"Net Income",
       value:_netIncome,
       bold:true,
+      drillRows: [..._incomeTxns,..._allowExpTxns],
+      drillNote:"Income minus allowable business expenses.",
       note:"After allowable business expenses",
     }] : []),
 
-    // ── SECTION 3: Statutory deductions (on employment income only) ─────────
+    // ── SECTION 3: Statutory deductions ─────────────────────────────────────
     {label:"Less: Pension Contribution (8% of employment income)",
      value:-_pension,
+     drillRows:[{desc:"Employment Income Base",amount:_empIncomeBase,date:"Annual"},{desc:"Pension Rate",amount:0.08,date:"8%"},{desc:"Pension Deduction",amount:-_pension,date:"Annual"}],
+     drillNote:_pensionNote,
      note:_pensionNote},
     {label:"Less: NHF Contribution (2.5% of employment income)",
      value:-_nhf,
-     note:_nhfOK
-       ?(_empDed.nhf
-          ?"Employer deducts NHF on employment income — NTA 2025 S.30(2)(a)(i)"
-          :"Self-contributed to FMBN on employment income (₦"+(_empIncomeBase).toLocaleString()+") — NTA 2025 S.30(2)(a)(i). Keep FMBN receipt.")
-       :"No NHF contribution made. No deduction allowed (NTA 2025 S.30(2)(a)(i)). Business income is not a valid NHF base."},
+     drillRows:[{desc:"Employment Income Base",amount:_empIncomeBase,date:"Annual"},{desc:"NHF Rate",amount:0.025,date:"2.5%"},{desc:"NHF Deduction",amount:-_nhf,date:"Annual"}],
+     drillNote:_nhfOK?"NHF 2.5% on employment income (₦"+(_empIncomeBase).toLocaleString()+") — NTA 2025 S.30(2)(a)(i)":"No NHF contribution made. No deduction allowed (NTA 2025 S.30(2)(a)(i)).",
+     note:_nhfOK?(_empDed.nhf?"Employer deducts NHF on employment income — NTA 2025 S.30(2)(a)(i)":"Self-contributed to FMBN — NTA 2025 S.30(2)(a)(i). Keep FMBN receipt."):"No NHF contribution — no deduction allowed."},
     {label:"Less: Rent Relief",
      value:-_rentRelief,
-     note:_rentPaid===0
-       ?"Not set — enter annual rent paid in Profile to claim (NTA 2025 S.30(2)(a)(vi))"
-       :_empRentInPAYE==="yes"
-       ?"Not applied — employer already factored rent in PAYE (double relief prohibited — NTAA 2025 S.70)"
-       :_empRentInPAYE==="unsure"
-       ?"Held pending — confirm whether employer included rent in PAYE, then update Profile"
-       :"20% of ₦"+((_rentPaid||0).toLocaleString())+" rent paid, capped at ₦500,000 (NTA 2025 S.30(2)(a)(vi))"},
+     drillRows:_rentPaid>0?[{desc:"Annual Rent Paid",amount:_rentPaid,date:"Annual"},{desc:"Relief Rate",amount:0.20,date:"20%"},{desc:"Relief (capped ₦500k)",amount:-_rentRelief,date:"Annual"}]:[],
+     drillNote:_rentPaid===0?"No rent entered. Update in Profile to claim this relief.":"20% of ₦"+_rentPaid.toLocaleString()+" = ₦"+(_rentPaid*0.2).toLocaleString()+((_rentPaid*0.2>500000)?" — capped at ₦500,000":"")+". NTA 2025 S.30(2)(a)(vi).",
+     note:_rentPaid===0?"Not set — enter annual rent paid in Profile to claim (NTA 2025 S.30(2)(a)(vi))":_empRentInPAYE==="yes"?"Not applied — employer already factored rent in PAYE (NTAA 2025 S.70)":_empRentInPAYE==="unsure"?"Held pending — confirm in Profile":("20% of ₦"+((_rentPaid||0).toLocaleString())+" rent paid, capped at ₦500,000 (NTA 2025 S.30(2)(a)(vi))")},
     {label:"Less: NHIS / Life Insurance / Housing Loan Interest",
      value:0,
-     note:"NHIS (S.30(2)(a)(ii)), life insurance (S.30(2)(a)(v)), housing loan interest (S.30(2)(a)(iv)) — enter actual amounts in PIT Calculator"},
+     drillRows:[],
+     drillNote:"NHIS (S.30(2)(a)(ii)), life insurance (S.30(2)(a)(v)), housing loan interest (S.30(2)(a)(iv)) — enter actual amounts in PIT Calculator for precise figures.",
+     note:"NHIS / life insurance / housing loan interest — enter in PIT Calculator"},
 
-    // ── SECTION 4: Chargeable income and tax ───────────────────────────────
+    // ── SECTION 4: Chargeable income and tax ─────────────────────────────────
     {label:"Chargeable Income",
      value:_chargeable,
      bold:true,
-     note:"Subject to graduated PIT rates — NTA 2025 First Schedule (Part I)"},
+     drillRows:[
+       {desc:"Total Gross Income",amount:_gross,date:""},
+       ...(_allowExp>0?[{desc:"Less: Allowable Expenses",amount:-_allowExp,date:""}]:[]),
+       {desc:"Less: Pension",amount:-_pension,date:""},
+       {desc:"Less: NHF",amount:-_nhf,date:""},
+       ...(_rentRelief>0?[{desc:"Less: Rent Relief",amount:-_rentRelief,date:""}]:[]),
+       {desc:"= Chargeable Income",amount:_chargeable,date:""},
+     ],
+     drillNote:"Chargeable income is the amount on which graduated PIT rates are applied — NTA 2025 First Schedule (Part I).",
+     note:"Subject to graduated PIT rates — NTA 2025 First Schedule (Part I). Tap to see components."},
     {label:"Gross PIT (graduated rates)",
      value:_grossPIT,
-     note:"0% on first ₦800k; 15% next ₦2m; 18% next ₦2.2m; 21% next ₦3m; 23% next ₦4m; 25% above — NTA 2025 First Schedule"},
+     drillRows:[
+       {desc:"First ₦800,000 @ 0%",    amount:0,                                                                date:""},
+       {desc:"Next ₦2,000,000 @ 15%",  amount:-Math.min(Math.max(0,_chargeable-800000),2000000)*0.15,         date:""},
+       {desc:"Next ₦2,200,000 @ 18%",  amount:-Math.min(Math.max(0,_chargeable-2800000),2200000)*0.18,        date:""},
+       {desc:"Next ₦3,000,000 @ 21%",  amount:-Math.min(Math.max(0,_chargeable-5000000),3000000)*0.21,        date:""},
+       {desc:"Next ₦4,000,000 @ 23%",  amount:-Math.min(Math.max(0,_chargeable-8000000),4000000)*0.23,        date:""},
+       {desc:"Above ₦12,000,000 @ 25%",amount:-Math.max(0,_chargeable-12000000)*0.25,                         date:""},
+       {desc:"Total Gross PIT",         amount:_grossPIT,                                                       date:""},
+     ],
+     drillNote:"Graduated PIT rates per NTA 2025 First Schedule (Part I). Applied to chargeable income of ₦"+_chargeable.toLocaleString()+".",
+     note:"0% → 25% graduated rates — NTA 2025 First Schedule. Tap to see band computation."},
     {label:"Less: PAYE Credit",
      value:-agg.payeIn,
-     note:(cat==="A"||(cat==="D"&&_catDSubType==="D1"))
-       ?"PAYE deducted at source by employer on employment income — NTAA 2025 S.13"
-       :"Not applicable — "+( cat==="D"&&_catDSubType==="D2"?"D2: employer makes no deductions. Self-assess all income."
-         :"Cat "+cat+" has no employer PAYE. Self-assess directly.")},
+     drillRows:_payeTxns.length>0?_payeTxns:[agg.payeIn>0?{desc:"PAYE deducted at source by employer",amount:agg.payeIn,date:"Annual"}:{desc:"No PAYE credit applicable",amount:0,date:""}],
+     drillNote:(cat==="A"||(cat==="D"&&_catDSubType==="D1"))?"PAYE deducted by employer on employment income — credited against annual PIT liability (NTAA 2025 S.13).":"No PAYE credit. Cat "+(cat==="D"?"D2":""+cat)+": employer makes no deductions. Self-assess all income.",
+     note:(cat==="A"||(cat==="D"&&_catDSubType==="D1"))?"PAYE deducted at source by employer — NTAA 2025 S.13. Tap for schedule.":"Not applicable — self-assess directly."},
     {label:"Less: WHT Credits",
      value:-agg.whtIn,
-     note:"WHT deducted by payers — offset against annual PIT liability (NTA 2025 Ch.Two Pt.IV)"},
+     drillRows:_whtTxns.length>0?_whtTxns:[agg.whtIn>0?{desc:"WHT deducted by payers",amount:agg.whtIn,date:"Annual"}:{desc:"No WHT credits recorded",amount:0,date:""}],
+     drillNote:"WHT deducted by clients/payers on professional fees, rent, dividends etc. Credited against annual PIT liability — NTA 2025 Ch.Two Pt.IV.",
+     note:"WHT credits from payers — NTA 2025 Ch.Two Pt.IV. Tap for schedule."},
     {label:"Net PIT Liability",
      value:_netPIT,
      bold:true, highlight:true,
-     note:"Estimated amount due to NRS on annual self-assessment return (NTAA 2025 S.11) · Due 31 July"},
+     drillRows:[
+       {desc:"Gross PIT",amount:_grossPIT,date:""},
+       {desc:"Less: PAYE Credit",amount:-agg.payeIn,date:""},
+       {desc:"Less: WHT Credits",amount:-agg.whtIn,date:""},
+       {desc:"Net PIT Liability",amount:_netPIT,date:""},
+     ],
+     drillNote:"Net PIT is due on or before 31 July of the following year via annual self-assessment return (NTAA 2025 S.11). Pay via Remita or NRS portal.",
+     note:"Estimated annual PIT due to NRS — NTAA 2025 S.11 · Due 31 July. Tap for working."},
   ] : null;
 
   // CIT working (company)
@@ -2326,6 +2386,68 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   ];
 
   // ── Breakdown modal ────────────────────────────────────────────────────────
+  const DrillModal = ()=>{
+    if(!drillBreakdown) return null;
+    const {title,rows,total,note} = drillBreakdown;
+    const isRate = (r)=>typeof r.amount==="number"&&r.amount>0&&r.amount<1;
+    return(
+      <div style={{position:"fixed",inset:0,background:"rgba(11,22,40,.6)",zIndex:1100,
+        display:"flex",alignItems:"flex-end",justifyContent:"center"}}
+        onClick={()=>setDrillBreakdown(null)}>
+        <div style={{width:"100%",maxWidth:430,background:"#fff",borderRadius:"16px 16px 0 0",
+          maxHeight:"70vh",display:"flex",flexDirection:"column"}}
+          onClick={e=>e.stopPropagation()}>
+          <div style={{padding:"14px 16px 10px",borderBottom:"1px solid #E2E8F0",
+            display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:800,color:"#0B1628"}}>{title}</div>
+              {total!==0&&<div style={{fontSize:12,fontWeight:700,
+                color:total<0?C.red:C.green,marginTop:1}}>
+                {total<0?"("+fmt(Math.abs(total))+")":fmt(total)}
+              </div>}
+            </div>
+            <button onClick={()=>setDrillBreakdown(null)}
+              style={{background:"#F1F5F9",border:"none",borderRadius:8,
+                width:32,height:32,fontSize:16,cursor:"pointer",color:C.muted}}>✕</button>
+          </div>
+          <div style={{overflowY:"auto",padding:"12px 16px 24px"}}>
+            {note&&<div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6,
+              padding:"8px 10px",background:"#F8FAFC",borderRadius:8}}>{note}</div>}
+            {rows&&rows.length>0?(
+              rows.map((r,i)=>(
+                <div key={i} style={{display:"flex",justifyContent:"space-between",
+                  alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F1F5F9"}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:12,color:C.ink,
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {r.desc||r.description||"—"}
+                    </div>
+                    {r.date&&r.date!=="Annual"&&r.date!=="8%"&&r.date!=="2.5%"&&r.date!=="20%"&&(
+                      <div style={{fontSize:10,color:C.muted,marginTop:1}}>{r.date}</div>
+                    )}
+                  </div>
+                  <div style={{fontSize:12,fontWeight:700,flexShrink:0,marginLeft:12,
+                    color:isRate(r)?"#7C3AED":r.amount<0?C.red:r.amount===0?C.muted:C.green,
+                    fontFamily:"monospace"}}>
+                    {isRate(r)?(r.amount*100)+"%"
+                      :r.amount<0?"("+fmt(Math.abs(r.amount))+")"
+                      :r.amount===0?"—"
+                      :fmt(r.amount)}
+                  </div>
+                </div>
+              ))
+            ):(
+              <div style={{textAlign:"center",padding:"24px 0",color:C.muted}}>
+                <div style={{fontSize:24,marginBottom:6}}>📭</div>
+                <div style={{fontSize:12}}>No detail available</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const BreakdownModal = ()=>{
     if(!breakdown) return null;
     const {title, rows, total, working} = breakdown;
@@ -2358,15 +2480,23 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
                 </div>
                 {working.map((step,i)=>{
                   const isIncomeLine = step.section==="income";
+                  const hasDrill = step.drillRows&&(step.drillRows.length>0||step.drillNote);
                   return(
-                  <div key={i} style={{
-                    display:"flex",justifyContent:"space-between",alignItems:"flex-start",
-                    padding:"9px 10px",marginBottom:4,borderRadius:8,
-                    background:step.highlight?"#F0FDF4":step.bold?"#F8FAFC":isIncomeLine?"#F0FDF4":"#fff",
-                    border:`1px solid ${step.highlight?C.green:step.bold?"#E2E8F0":isIncomeLine?"#BBF7D0":"#F1F5F9"}`}}>
+                  <div key={i}
+                    onClick={hasDrill?()=>openDrill(step.label,step.drillRows||[],step.value,step.drillNote):undefined}
+                    style={{
+                      display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+                      padding:"9px 10px",marginBottom:4,borderRadius:8,
+                      cursor:hasDrill?"pointer":"default",
+                      background:step.highlight?"#F0FDF4":step.bold?"#F8FAFC":isIncomeLine?"#F0FDF4":"#fff",
+                      border:`1px solid ${step.highlight?C.green:step.bold?"#E2E8F0":isIncomeLine?"#BBF7D0":"#F1F5F9"}`}}>
                     <div style={{flex:1}}>
                       <div style={{fontSize:12,fontWeight:step.bold?700:400,
-                        color:step.highlight?C.green:isIncomeLine?C.green:C.ink}}>{step.label}</div>
+                        color:step.highlight?C.green:isIncomeLine?C.green:C.ink,
+                        display:"flex",alignItems:"center",gap:4}}>
+                        {step.label}
+                        {hasDrill&&<span style={{fontSize:9,opacity:.45,flexShrink:0}}>↗</span>}
+                      </div>
                       {step.note&&<div style={{fontSize:10,color:C.muted,marginTop:1,lineHeight:1.4}}>{step.note}</div>}
                     </div>
                     <div style={{fontSize:13,fontWeight:step.bold?800:600,
@@ -2436,6 +2566,7 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
 
   return(
     <div style={{paddingBottom:80}}>
+      <DrillModal/>
       <BreakdownModal/>
       {/* Hero */}
       <div className={isCompany?"hero-blue":"hero-green"}>
@@ -2699,15 +2830,23 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
           </div>
           {(isCompany?citWorking:pitWorking)?.map((step,i)=>{
             const isIncomeLine = step.section==="income";
+            const hasDrill = step.drillRows&&(step.drillRows.length>0||step.drillNote);
             return(
-            <div key={i} style={{
-              display:"flex",justifyContent:"space-between",alignItems:"flex-start",
-              padding:"8px 10px",marginBottom:3,borderRadius:8,
-              background:step.highlight?"#F0FDF4":step.bold?"#F8FAFC":isIncomeLine?"#F0FDF4":"#fff",
-              border:`1px solid ${step.highlight?C.green:step.bold?"#E2E8F0":isIncomeLine?"#BBF7D0":"#F1F5F9"}`}}>
+            <div key={i}
+              onClick={hasDrill?()=>openDrill(step.label,step.drillRows||[],step.value,step.drillNote):undefined}
+              style={{
+                display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+                padding:"8px 10px",marginBottom:3,borderRadius:8,
+                cursor:hasDrill?"pointer":"default",
+                background:step.highlight?"#F0FDF4":step.bold?"#F8FAFC":isIncomeLine?"#F0FDF4":"#fff",
+                border:`1px solid ${step.highlight?C.green:step.bold?"#E2E8F0":isIncomeLine?"#BBF7D0":"#F1F5F9"}`}}>
               <div style={{flex:1}}>
                 <div style={{fontSize:12,fontWeight:step.bold?700:400,
-                  color:step.highlight?C.green:isIncomeLine?C.green:C.ink}}>{step.label}</div>
+                  color:step.highlight?C.green:isIncomeLine?C.green:C.ink,
+                  display:"flex",alignItems:"center",gap:4}}>
+                  {step.label}
+                  {hasDrill&&<span style={{fontSize:9,opacity:.4,flexShrink:0}}>↗</span>}
+                </div>
                 {step.note&&<div style={{fontSize:9,color:C.muted,marginTop:1,lineHeight:1.4}}>{step.note}</div>}
               </div>
               <div style={{fontSize:12,fontWeight:step.bold?800:600,

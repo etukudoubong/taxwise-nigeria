@@ -493,16 +493,18 @@ function computePIT(p){
   const annual=monthlyIncome*12, total=annual+otherIncome;
   if(category==="E"||monthlyIncome<=70000&&otherIncome===0)
     return{annual:0,monthly:0,eff:0,exempt:true,totalGross:total,payeCredit:payeDeducted*12,balanceDue:0,refund:payeDeducted*12};
-  // Rent relief — only apply if employer has NOT already included in PAYE
-  // Cat A: check employerRentInPAYE; Cat B/C/D: always apply if rent known
+  // Rent relief
   const _erip = p.employerRentInPAYE||"";
   const _applyRent = rentPaid>0 && _erip!=="yes" && _erip!=="unsure";
   const rentRelief = _applyRent ? Math.min(rentPaid*.2, 500000) : 0;
-  // Enforce: Cat B/C/D cannot claim employer pension — only self-contributed pension counts
-  // pensionAnnual in calculator is the user-entered value so it's already explicit
-  // No additional override needed here — calculator uses explicit user input
-  const pensionDeduction  = pensionAnnual>0 ? pensionAnnual : annual*.08;
-  const nhfDeduction      = nhfAnnual;
+  // Pension 8% — applied on EMPLOYMENT INCOME ONLY (NTA 2025 S.30(2)(a)(iii))
+  // annual = employment income (monthlyIncome * 12)
+  // otherIncome = business/rental — NOT a valid pension base
+  // Cat C (self-employed, no employment income): pension base = 0
+  const empIncomeBase = category==="C" ? 0 : annual;
+  const pensionDeduction = pensionAnnual>0 ? pensionAnnual : (empIncomeBase>0 ? empIncomeBase*.08 : 0);
+  // NHF 2.5% — also on employment income only (NTA 2025 S.30(2)(a)(i))
+  const nhfDeduction = nhfAnnual>0 ? nhfAnnual : 0; // user-entered; don't auto-compute NHF on total
   const nhisDeduction     = nhisAnnual;
   const lifeInsDeduction  = lifeInsAnnual;
   const housingDeduction  = housingLoanInterest;
@@ -943,8 +945,29 @@ function computeAggregates(txns, profile){
     const pensionAllowed = empDed.pension || selfCont.pension;
     const nhfAllowed     = empDed.nhf     || selfCont.nhf;
     const nhisAllowed    = empDed.nhis    || selfCont.nhis;
-    const pensionRelief  = pensionAllowed ? Math.round(gross * 0.08)  : 0; // S.30(2)(a)(iii)
-    const nhfRelief      = nhfAllowed     ? Math.round(gross * 0.025) : 0; // S.30(2)(a)(i)
+
+    // ── EMPLOYMENT INCOME (separate from business/rental income) ──
+    // Pension 8% and NHF 2.5% apply ONLY to income from employment (emoluments)
+    // NOT to business profit, rental income, or investment income
+    // NTA 2025 S.30(2)(a)(iii) — "contributions to a pension fund from income from employment"
+    const empMonthly = (cat==="A"||cat==="B"||(cat==="D"))
+      ? ((profile?.monthlyBasicSalary||0)+(profile?.monthlyOvertime||0)
+        +(profile?.monthlyHousingAllowance||0)+(profile?.monthlyTransportAllowance||0))
+      : 0;
+    const empAnnual = empMonthly*12 + (profile?.annualBonus||0)
+      + (profile?.annualMedicalBenefit||0) + (profile?.annualLeaveAllowance||0);
+    // Employment income base for pension/NHF: use profile salary if provided, else use gross
+    // For Cat C (pure self-employed): pension base = 0 (no emoluments)
+    const employmentIncomeBase = (cat==="C") ? 0
+      : empAnnual > 0 ? empAnnual
+      : (cat==="A"||cat==="B"||(cat==="D")) ? gross  // fallback to transaction income
+      : 0;
+    // Business/other income = total gross minus employment portion
+    const otherIncome_ = Math.max(0, gross - employmentIncomeBase);
+
+    const pensionRelief  = pensionAllowed ? Math.round(employmentIncomeBase * 0.08)  : 0; // S.30(2)(a)(iii) — on employment income only
+    const nhfRelief      = nhfAllowed     ? Math.round(employmentIncomeBase * 0.025) : 0; // S.30(2)(a)(i) — on employment income only
+
     // Rent relief: 20% of annual rent, max ₦500k — NTA 2025 S.30(2)(a)(vi)
     const rentPaid = profile?.rentPaid || 0;
     const employerRentInPAYE = profile?.employerRentInPAYE || "";
@@ -955,9 +978,20 @@ function computeAggregates(txns, profile){
     estPIT = Math.max(0, grossPIT - payeIn - whtIn);
   }
 
+  // Compute employment income for return
+  const _empMon = (!isCompany&&(cat==="A"||cat==="B"||(cat==="D")))
+    ? ((profile?.monthlyBasicSalary||0)+(profile?.monthlyOvertime||0)
+      +(profile?.monthlyHousingAllowance||0)+(profile?.monthlyTransportAllowance||0))
+    : 0;
+  const _empAnn = _empMon*12+(profile?.annualBonus||0)+(profile?.annualMedicalBenefit||0)+(profile?.annualLeaveAllowance||0);
+  const employmentIncome = !isCompany&&cat!=="C"&&_empAnn>0 ? _empAnn : (!isCompany&&cat!=="C"?income:0);
+  const otherIncomeAgg   = !isCompany ? Math.max(0, income - employmentIncome) : 0;
+
   return{
     income, expenses, allowableExpenses,
     net:income-expenses, netAllowable:income-allowableExpenses,
+    employmentIncome,   // income from employment (emoluments)
+    otherIncomeAgg,     // income from business, rental, investment
     vatOut, vatIn, vatNet, vatPayable:Math.max(0,vatNet), vatRefund:Math.max(0,-vatNet),
     whtIn, whtOut, payeIn, payeOut,
     cgtEvents:schedules.cgtEvents.length,
@@ -2084,27 +2118,50 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   //   (iv)  Interest on owner-occupied housing loan
   //   (v)   Life insurance premiums
   //   (vi)  Rent relief — 20% of annual rent, max ₦500,000
-  // For Cat A/B: use employment breakdown if available, else use transactions
-  const _empMonthly = (cat==="A"||cat==="B")&&(profile.monthlyBasicSalary||0)>0
-    ? ((profile.monthlyBasicSalary||0)+(profile.monthlyOvertime||0)+(profile.monthlyHousingAllowance||0)+(profile.monthlyTransportAllowance||0))*12
-      +(profile.annualBonus||0)+(profile.annualMedicalBenefit||0)+(profile.annualLeaveAllowance||0)
+  // ── Employment income vs Other income (must be shown separately) ──────────
+  // Cat A/B/D: have employment income (emoluments)
+  // Cat C:     only business/self-employment income
+  const _empMonthlyComponents = (cat==="A"||cat==="B"||(cat==="D"))&&(profile.monthlyBasicSalary||0)>0
+    ? {
+        basic:   (profile.monthlyBasicSalary||0)*12,
+        overtime:(profile.monthlyOvertime||0)*12,
+        housing: (profile.monthlyHousingAllowance||0)*12,
+        transport:(profile.monthlyTransportAllowance||0)*12,
+        bonus:   (profile.annualBonus||0),
+        medical: (profile.annualMedicalBenefit||0),
+        leave:   (profile.annualLeaveAllowance||0),
+      }
+    : null;
+  const _empAnnual = _empMonthlyComponents
+    ? _empMonthlyComponents.basic+_empMonthlyComponents.overtime+_empMonthlyComponents.housing
+      +_empMonthlyComponents.transport+_empMonthlyComponents.bonus+_empMonthlyComponents.medical
+      +_empMonthlyComponents.leave
     : 0;
-  const _gross     = _empMonthly > 0 ? Math.max(agg.income, _empMonthly) : agg.income;
+  // Employment income base (for pension/NHF computation)
+  const _empIncomeBase = cat==="C" ? 0
+    : _empAnnual > 0 ? _empAnnual
+    : agg.income; // fallback to transactions if no salary entered
+  // Other income = business profit, rental, investment (from transactions)
+  const _otherIncome = Math.max(0, agg.income - _empIncomeBase);
+  // Total gross
+  const _gross = _empIncomeBase + _otherIncome;
+  // Business expense deductions (Cat C/D only)
   const _allowExp  = (isCatCD||isCompany) ? (agg.allowableExpenses||0) : 0;
   const _netIncome = Math.max(0, _gross - _allowExp);
-  // Statutory relief deductions — only if actually contributed (NTA 2025 S.30(2)(a))
-  // Cat B/C/D: employer never deducts — override stale stored values
+
+  // Statutory reliefs — pension and NHF on EMPLOYMENT INCOME ONLY
+  // NTA 2025 S.30(2)(a)(iii): pension contributions from income from employment
   const _empDed_raw = profile.employerDeductions || {};
   const _selfCont   = profile.selfContributions  || {};
   const _catDSubType = profile.catDSubType||"";
-  // D1: employer deducts (use stored empDed); D2/B/C: employer never deducts
   const _empDed = (cat==="B"||cat==="C"||(cat==="D"&&_catDSubType!=="D1"))
     ? {paye:false, pension:false, nhf:false, nhis:false}
     : _empDed_raw;
   const _pensionOK = _empDed.pension || _selfCont.pension;
   const _nhfOK     = _empDed.nhf     || _selfCont.nhf;
-  const _pension   = _pensionOK ? Math.round(_gross * 0.08)  : 0; // S.30(2)(a)(iii)
-  const _nhf       = _nhfOK    ? Math.round(_gross * 0.025) : 0; // S.30(2)(a)(i)
+  // Pension and NHF computed on employment income ONLY — not business income
+  const _pension   = _pensionOK ? Math.round(_empIncomeBase * 0.08)  : 0; // S.30(2)(a)(iii)
+  const _nhf       = _nhfOK    ? Math.round(_empIncomeBase * 0.025) : 0; // S.30(2)(a)(i)
   // Rent relief — NTA 2025 S.30(2)(a)(vi)
   const _rentPaid  = profile.rentPaid || 0;
   const _empRentInPAYE = profile.employerRentInPAYE || "";
@@ -2114,44 +2171,77 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   const _grossPIT   = pitBands(_chargeable);
   const _netPIT     = Math.max(0, _grossPIT - agg.payeIn - agg.whtIn);
 
+  // Pension note
+  const _pensionNote = _pensionOK
+    ? (_empDed.pension
+        ? "Employer deducts 8% of employment income (PRA 2014 S.11) — NTA 2025 S.30(2)(a)(iii). Applied on employment income only, not business/rental income."
+        : "Self-contributed to licensed PFA (NTA 2025 S.30(2)(a)(iii)). Applied on employment income (₦"+(_empIncomeBase).toLocaleString()+") only. Evidence: PFA contribution statement.")
+    : "No pension contribution made. No deduction allowed — NTA 2025 S.30(2)(a)(iii) requires actual contribution. Business income is NOT a valid pension base.";
+
   const pitWorking = !isCompany ? [
-    {label:"Gross Income (annual)",
+    // ── SECTION 1: Income breakdown ─────────────────────────────────────────
+    ...(cat!=="C"&&_empIncomeBase>0 ? [{
+      label:"Employment Income (annual)",
+      value:_empIncomeBase,
+      section:"income",
+      note:_empMonthlyComponents
+        ? "Basic: ₦"+(_empMonthlyComponents.basic).toLocaleString()
+          +(_empMonthlyComponents.overtime>0?"; Overtime: ₦"+_empMonthlyComponents.overtime.toLocaleString():"")
+          +(_empMonthlyComponents.housing>0?"; Housing: ₦"+_empMonthlyComponents.housing.toLocaleString():"")
+          +(_empMonthlyComponents.transport>0?"; Transport: ₦"+_empMonthlyComponents.transport.toLocaleString():"")
+          +(_empMonthlyComponents.bonus>0?"; Bonus: ₦"+_empMonthlyComponents.bonus.toLocaleString():"")
+          +" — all emoluments taxable (NTA 2025 S.3)"
+        : "From employment transactions — NTA 2025 S.3",
+    }] : []),
+    ...(_otherIncome>0 ? [{
+      label:"Other Income (business/rental/investment)",
+      value:_otherIncome,
+      section:"income",
+      note:"From transactions — business profit, rental income, investment returns — NTA 2025 S.3",
+    }] : []),
+    {label:"Total Gross Income",
      value:_gross,
-     note:"Total income from all transactions — NTA 2025 S.3"},
-    {label:"Less: Allowable Business Expenses",
-     value:-_allowExp,
-     note:isCatCD
-       ?"Expenses wholly-and-exclusively for business (NTA 2025 S.20). Cat "+cat+" only."
-       :"Cat "+cat+" — employment income: business expenses not deductible (NTA 2025 S.20(4))"},
-    {label:"Net Income",
-     value:_netIncome,
      bold:true,
-     note:"Gross income less allowable expenses"},
-    {label:"Less: Pension Contribution (8%)",
+     note:cat==="C"?"Self-employment income — NTA 2025 S.3":"Combined employment + other income — NTA 2025 S.3"},
+
+    // ── SECTION 2: Business expense deductions ──────────────────────────────
+    ...(_allowExp>0 ? [{
+      label:"Less: Allowable Business Expenses",
+      value:-_allowExp,
+      note:"Wholly-and-exclusively for business (NTA 2025 S.20) — Cat "+cat+" only",
+    }] : []),
+    ...(_allowExp>0 ? [{
+      label:"Net Income",
+      value:_netIncome,
+      bold:true,
+      note:"After allowable business expenses",
+    }] : []),
+
+    // ── SECTION 3: Statutory deductions (on employment income only) ─────────
+    {label:"Less: Pension Contribution (8% of employment income)",
      value:-_pension,
-     note:_pensionOK
-       ?(_empDed.pension
-          ?"Employer deducts 8% employee pension (PRA 2014 S.11) — NTA 2025 S.30(2)(a)(iii)"
-          :"Self-contributed to licensed PFA — NTA 2025 S.30(2)(a)(iii). Evidence: PFA annual contribution statement.")
-       :"No pension contribution made (employer or employee). No deduction allowed — NTA 2025 S.30(2)(a)(iii) requires actual contribution. Consider contributing directly to a PFA to claim this relief."},
-    {label:"Less: NHF Contribution (2.5%)",
+     note:_pensionNote},
+    {label:"Less: NHF Contribution (2.5% of employment income)",
      value:-_nhf,
      note:_nhfOK
-       ?(_empDed.nhf?"Deducted by employer — NTA 2025 S.30(2)(a)(i)"
-        :"Self-contributed to FMBN — NTA 2025 S.30(2)(a)(i). Keep FMBN receipt as evidence.")
-       :"NOT DEDUCTED — no contribution made. No deduction allowed (NTA 2025 S.30(2)(a)(i))."},
+       ?(_empDed.nhf
+          ?"Employer deducts NHF on employment income — NTA 2025 S.30(2)(a)(i)"
+          :"Self-contributed to FMBN on employment income (₦"+(_empIncomeBase).toLocaleString()+") — NTA 2025 S.30(2)(a)(i). Keep FMBN receipt.")
+       :"No NHF contribution made. No deduction allowed (NTA 2025 S.30(2)(a)(i)). Business income is not a valid NHF base."},
     {label:"Less: Rent Relief",
      value:-_rentRelief,
      note:_rentPaid===0
-       ?"Not set — enter annual rent paid in Profile to claim this relief (NTA 2025 S.30(2)(a)(vi))"
+       ?"Not set — enter annual rent paid in Profile to claim (NTA 2025 S.30(2)(a)(vi))"
        :_empRentInPAYE==="yes"
-       ?"Not applied — your employer has already factored rent into PAYE (to avoid double relief, NTAA 2025 S.70)"
+       ?"Not applied — employer already factored rent in PAYE (double relief prohibited — NTAA 2025 S.70)"
        :_empRentInPAYE==="unsure"
-       ?"Not applied yet — confirm whether employer included rent in PAYE (check payslip or HR), then update in Profile"
+       ?"Held pending — confirm whether employer included rent in PAYE, then update Profile"
        :"20% of ₦"+((_rentPaid||0).toLocaleString())+" rent paid, capped at ₦500,000 (NTA 2025 S.30(2)(a)(vi))"},
     {label:"Less: NHIS / Life Insurance / Housing Loan Interest",
      value:0,
-     note:"NHIS premiums (S.30(2)(a)(ii)), life insurance (S.30(2)(a)(v)), housing loan interest (S.30(2)(a)(iv)) — enter amounts in PIT Calculator"},
+     note:"NHIS (S.30(2)(a)(ii)), life insurance (S.30(2)(a)(v)), housing loan interest (S.30(2)(a)(iv)) — enter actual amounts in PIT Calculator"},
+
+    // ── SECTION 4: Chargeable income and tax ───────────────────────────────
     {label:"Chargeable Income",
      value:_chargeable,
      bold:true,
@@ -2161,9 +2251,10 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
      note:"0% on first ₦800k; 15% next ₦2m; 18% next ₦2.2m; 21% next ₦3m; 23% next ₦4m; 25% above — NTA 2025 First Schedule"},
     {label:"Less: PAYE Credit",
      value:-agg.payeIn,
-     note:cat==="A"||cat==="D"
-       ?"PAYE deducted at source by employer — NTAA 2025 S.13"
-       :"Not applicable — Cat "+cat+" has no employer PAYE"},
+     note:(cat==="A"||(cat==="D"&&_catDSubType==="D1"))
+       ?"PAYE deducted at source by employer on employment income — NTAA 2025 S.13"
+       :"Not applicable — "+( cat==="D"&&_catDSubType==="D2"?"D2: employer makes no deductions. Self-assess all income."
+         :"Cat "+cat+" has no employer PAYE. Self-assess directly.")},
     {label:"Less: WHT Credits",
      value:-agg.whtIn,
      note:"WHT deducted by payers — offset against annual PIT liability (NTA 2025 Ch.Two Pt.IV)"},
@@ -2265,24 +2356,27 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
                 <div style={{fontSize:10,fontWeight:700,letterSpacing:".08em",color:C.muted,marginBottom:10}}>
                   TAX COMPUTATION WORKING
                 </div>
-                {working.map((step,i)=>(
+                {working.map((step,i)=>{
+                  const isIncomeLine = step.section==="income";
+                  return(
                   <div key={i} style={{
                     display:"flex",justifyContent:"space-between",alignItems:"flex-start",
                     padding:"9px 10px",marginBottom:4,borderRadius:8,
-                    background:step.highlight?"#F0FDF4":step.bold?"#F8FAFC":"#fff",
-                    border:`1px solid ${step.highlight?C.green:step.bold?"#E2E8F0":"#F1F5F9"}`}}>
+                    background:step.highlight?"#F0FDF4":step.bold?"#F8FAFC":isIncomeLine?"#F0FDF4":"#fff",
+                    border:`1px solid ${step.highlight?C.green:step.bold?"#E2E8F0":isIncomeLine?"#BBF7D0":"#F1F5F9"}`}}>
                     <div style={{flex:1}}>
                       <div style={{fontSize:12,fontWeight:step.bold?700:400,
-                        color:step.highlight?C.green:C.ink}}>{step.label}</div>
+                        color:step.highlight?C.green:isIncomeLine?C.green:C.ink}}>{step.label}</div>
                       {step.note&&<div style={{fontSize:10,color:C.muted,marginTop:1,lineHeight:1.4}}>{step.note}</div>}
                     </div>
                     <div style={{fontSize:13,fontWeight:step.bold?800:600,
-                      color:step.highlight?C.green:step.value<0?C.red:C.ink,
+                      color:step.highlight?C.green:step.value<0?C.red:isIncomeLine?C.green:C.ink,
                       flexShrink:0,marginLeft:12,fontFamily:"monospace"}}>
                       {step.value<0?"("+fmt(Math.abs(step.value))+")":fmt(step.value)}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
                 <div style={{fontSize:10,color:C.muted,marginTop:8,lineHeight:1.5,
                   padding:"8px 10px",background:"#F8FAFC",borderRadius:8}}>
                   ℹ Estimates based on transactions recorded. Consult a registered tax
@@ -2603,24 +2697,27 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
             </div>
             <span style={{fontSize:11,fontWeight:700,color:C.green}}>{fmt(totalTax)}</span>
           </div>
-          {(isCompany?citWorking:pitWorking)?.map((step,i)=>(
+          {(isCompany?citWorking:pitWorking)?.map((step,i)=>{
+            const isIncomeLine = step.section==="income";
+            return(
             <div key={i} style={{
               display:"flex",justifyContent:"space-between",alignItems:"flex-start",
               padding:"8px 10px",marginBottom:3,borderRadius:8,
-              background:step.highlight?"#F0FDF4":step.bold?"#F8FAFC":"#fff",
-              border:`1px solid ${step.highlight?C.green:step.bold?"#E2E8F0":"#F1F5F9"}`}}>
+              background:step.highlight?"#F0FDF4":step.bold?"#F8FAFC":isIncomeLine?"#F0FDF4":"#fff",
+              border:`1px solid ${step.highlight?C.green:step.bold?"#E2E8F0":isIncomeLine?"#BBF7D0":"#F1F5F9"}`}}>
               <div style={{flex:1}}>
                 <div style={{fontSize:12,fontWeight:step.bold?700:400,
-                  color:step.highlight?C.green:C.ink}}>{step.label}</div>
+                  color:step.highlight?C.green:isIncomeLine?C.green:C.ink}}>{step.label}</div>
                 {step.note&&<div style={{fontSize:9,color:C.muted,marginTop:1,lineHeight:1.4}}>{step.note}</div>}
               </div>
               <div style={{fontSize:12,fontWeight:step.bold?800:600,
-                color:step.highlight?C.green:step.value<0?C.red:C.ink,
+                color:step.highlight?C.green:step.value<0?C.red:isIncomeLine?C.green:C.ink,
                 flexShrink:0,marginLeft:12,fontFamily:"monospace"}}>
                 {step.value<0?"("+fmt(Math.abs(step.value))+")":fmt(step.value)}
               </div>
             </div>
-          ))}
+            );
+          })}
           <div style={{marginTop:8,fontSize:10,color:C.muted,lineHeight:1.5,
             padding:"8px 10px",background:"#F8FAFC",borderRadius:8}}>
             Estimates computed from {txns.length} transactions. 

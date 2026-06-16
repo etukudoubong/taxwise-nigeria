@@ -637,9 +637,10 @@ function classifyTxn(desc, type){
   const d = desc.toLowerCase();
 
   if(type === "income"){
-    if(d.match(/salary|salari|wage|payroll credit|employment income|paye credit|monthly pay/))
+    if(d.match(/salary|salari|wage|payroll|pay.?roll|employment.?income|paye.?credit|monthly.?pay|staff.?pay|emolument|basic.?pay|net.?salary|gross.?pay|monthly.?salary|pay.?for.?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|salary.?for/))
       return{head:"PAYE",icon:"💼",color:C.blue,compliance_required:false,
-        obligation:"Salary taxed via PAYE at source by employer. Not taxed again in self-assessment. PAYE credited against annual return.",
+        obligation:"Salary/employment income — taxable as emolument (NTA 2025 S.3). PAYE deducted at source by employer and credited on annual return (NTAA 2025 S.13).",
+        taxStream:"employment",
         law:"NTA 2025, Ch. Two Pt. I; NTAA 2025 Sec 13"};
 
     if(d.match(/consult|professional fee|advisory fee|technical fee|management fee|legal fee received|audit fee received/))
@@ -946,24 +947,39 @@ function computeAggregates(txns, profile){
     const nhfAllowed     = empDed.nhf     || selfCont.nhf;
     const nhisAllowed    = empDed.nhis    || selfCont.nhis;
 
-    // ── EMPLOYMENT INCOME (separate from business/rental income) ──
-    // Pension 8% and NHF 2.5% apply ONLY to income from employment (emoluments)
-    // NOT to business profit, rental income, or investment income
-    // NTA 2025 S.30(2)(a)(iii) — "contributions to a pension fund from income from employment"
+    // ── EMPLOYMENT INCOME FROM TRANSACTIONS ────────────────────────────────
+    // Primary source: transactions classified as PAYE (salary/wages) or marked as employment
+    // Secondary source: onboarding salary fields (for hand-paid salary not in bank)
+    // Pension 8% and NHF 2.5% apply ONLY to employment income — NTA 2025 S.30(2)(a)(iii)
+    const empTxns = txns.filter(t=>
+      t.compliance_status!=="excluded"&&t.compliance_status!=="kiv"&&t.type==="income"&&(
+        classifyTxn(t.desc,t.type).head==="PAYE"||   // salary/wage keywords in narration
+        t.taxStream==="employment"||                   // manually tagged as employment
+        t.incomeType==="employment"                    // AI-tagged
+      )
+    );
+    const empFromTxns = empTxns.reduce((s,t)=>s+t.amount,0);
+
+    // Hand-paid salary (not in bank): onboarding salary minus what's in transactions
+    // Only top up if taxpayer declared salary at onboarding AND it exceeds what's in transactions
     const empMonthly = (cat==="A"||cat==="B"||(cat==="D"))
       ? ((profile?.monthlyBasicSalary||0)+(profile?.monthlyOvertime||0)
         +(profile?.monthlyHousingAllowance||0)+(profile?.monthlyTransportAllowance||0))
       : 0;
-    const empAnnual = empMonthly*12 + (profile?.annualBonus||0)
+    const empAnnualDeclared = empMonthly*12 + (profile?.annualBonus||0)
       + (profile?.annualMedicalBenefit||0) + (profile?.annualLeaveAllowance||0);
-    // Employment income base for pension/NHF: use profile salary if provided, else use gross
-    // For Cat C (pure self-employed): pension base = 0 (no emoluments)
-    const employmentIncomeBase = (cat==="C") ? 0
-      : empAnnual > 0 ? empAnnual
-      : (cat==="A"||cat==="B"||(cat==="D")) ? gross  // fallback to transaction income
-      : 0;
-    // Business/other income = total gross minus employment portion
-    const otherIncome_ = Math.max(0, gross - employmentIncomeBase);
+    // Employment income base:
+    // - If transactions show employment income → use that (most accurate)
+    // - If declared salary > transaction employment income → use declared (captures hand-paid)
+    // - Cat C: always 0 (no employment income)
+    const employmentIncomeBase = cat==="C" ? 0
+      : Math.max(empFromTxns, empAnnualDeclared);
+    // Other income = non-employment income from transactions
+    const empOtherTxns = txns.filter(t=>
+      t.compliance_status!=="excluded"&&t.compliance_status!=="kiv"&&t.type==="income"&&
+      !empTxns.includes(t)
+    );
+    const otherIncome_ = empOtherTxns.reduce((s,t)=>s+t.amount,0);
 
     const pensionRelief  = pensionAllowed ? Math.round(employmentIncomeBase * 0.08)  : 0; // S.30(2)(a)(iii) — on employment income only
     const nhfRelief      = nhfAllowed     ? Math.round(employmentIncomeBase * 0.025) : 0; // S.30(2)(a)(i) — on employment income only
@@ -978,14 +994,8 @@ function computeAggregates(txns, profile){
     estPIT = Math.max(0, grossPIT - payeIn - whtIn);
   }
 
-  // Compute employment income for return
-  const _empMon = (!isCompany&&(cat==="A"||cat==="B"||(cat==="D")))
-    ? ((profile?.monthlyBasicSalary||0)+(profile?.monthlyOvertime||0)
-      +(profile?.monthlyHousingAllowance||0)+(profile?.monthlyTransportAllowance||0))
-    : 0;
-  const _empAnn = _empMon*12+(profile?.annualBonus||0)+(profile?.annualMedicalBenefit||0)+(profile?.annualLeaveAllowance||0);
-  const employmentIncome = !isCompany&&cat!=="C"&&_empAnn>0 ? _empAnn : (!isCompany&&cat!=="C"?income:0);
-  const otherIncomeAgg   = !isCompany ? Math.max(0, income - employmentIncome) : 0;
+  const employmentIncome = !isCompany ? employmentIncomeBase : 0;
+  const otherIncomeAgg   = !isCompany ? otherIncome_ : 0;
 
   return{
     income, expenses, allowableExpenses,
@@ -2120,31 +2130,47 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   //   (iv)  Interest on owner-occupied housing loan
   //   (v)   Life insurance premiums
   //   (vi)  Rent relief — 20% of annual rent, max ₦500,000
-  // ── Employment income vs Other income (must be shown separately) ──────────
-  // Cat A/B/D: have employment income (emoluments)
-  // Cat C:     only business/self-employment income
+  // ── Employment income vs Other income — derived from TRANSACTIONS ──────────
+  // Primary: transactions classified as PAYE (salary/wages) or tagged as employment
+  // Secondary: onboarding salary fields (for hand-paid amounts not in bank)
+  const _empTxns = txns.filter(t=>
+    t.compliance_status!=="excluded"&&t.compliance_status!=="kiv"&&t.type==="income"&&(
+      classifyTxn(t.desc,t.type).head==="PAYE"||
+      t.taxStream==="employment"||t.incomeType==="employment"
+    )
+  );
+  const _empFromTxns = _empTxns.reduce((s,t)=>s+t.amount,0);
+  const _otherIncTxns = txns.filter(t=>
+    t.compliance_status!=="excluded"&&t.compliance_status!=="kiv"&&
+    t.type==="income"&&!_empTxns.includes(t)
+  );
+  const _otherFromTxns = _otherIncTxns.reduce((s,t)=>s+t.amount,0);
+
+  // Onboarding salary breakdown (for hand-paid top-up)
   const _empMonthlyComponents = (cat==="A"||cat==="B"||(cat==="D"))&&(profile.monthlyBasicSalary||0)>0
     ? {
-        basic:   (profile.monthlyBasicSalary||0)*12,
-        overtime:(profile.monthlyOvertime||0)*12,
-        housing: (profile.monthlyHousingAllowance||0)*12,
+        basic:    (profile.monthlyBasicSalary||0)*12,
+        overtime: (profile.monthlyOvertime||0)*12,
+        housing:  (profile.monthlyHousingAllowance||0)*12,
         transport:(profile.monthlyTransportAllowance||0)*12,
-        bonus:   (profile.annualBonus||0),
-        medical: (profile.annualMedicalBenefit||0),
-        leave:   (profile.annualLeaveAllowance||0),
+        bonus:    (profile.annualBonus||0),
+        medical:  (profile.annualMedicalBenefit||0),
+        leave:    (profile.annualLeaveAllowance||0),
       }
     : null;
-  const _empAnnual = _empMonthlyComponents
+  const _empDeclared = _empMonthlyComponents
     ? _empMonthlyComponents.basic+_empMonthlyComponents.overtime+_empMonthlyComponents.housing
       +_empMonthlyComponents.transport+_empMonthlyComponents.bonus+_empMonthlyComponents.medical
       +_empMonthlyComponents.leave
     : 0;
-  // Employment income base (for pension/NHF computation)
-  const _empIncomeBase = cat==="C" ? 0
-    : _empAnnual > 0 ? _empAnnual
-    : agg.income; // fallback to transactions if no salary entered
-  // Other income = business profit, rental, investment (from transactions)
-  const _otherIncome = Math.max(0, agg.income - _empIncomeBase);
+
+  // Final employment income = max of (transactions, declared)
+  // Captures both bank-paid and hand-paid salary
+  const _empIncomeBase = cat==="C" ? 0 : Math.max(_empFromTxns, _empDeclared);
+  // Hand-paid gap = declared salary not showing in bank (paid in cash/by hand)
+  const _handPaidGap = Math.max(0, _empDeclared - _empFromTxns);
+  // Other income
+  const _otherIncome = _otherFromTxns;
   // Total gross
   const _gross = _empIncomeBase + _otherIncome;
   // Business expense deductions (Cat C/D only)
@@ -2179,6 +2205,15 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
   const _allowExpTxns = _expenseTxns.filter(t=>t.taxAllowable!==false);
   const _whtTxns      = (agg.schedules?.whtIn||[]);
   const _payeTxns     = (agg.schedules?.payeIn||[]);
+  // Employment income drill rows: actual transactions + hand-paid gap if any
+  const _empDrillRows = [
+    ..._empTxns.map(t=>({...t,desc:t.desc+" (bank)",date:t.date})),
+    ...(_handPaidGap>0?[{
+      desc:"Hand-paid / cash salary (declared at onboarding — not in bank statement)",
+      amount:_handPaidGap, date:"Annual",
+      note:"Enter bank transactions if salary is later paid via bank. Update onboarding salary to adjust.",
+    }]:[]),
+  ];
 
 // Pension note
   const _pensionNote = _pensionOK
@@ -2193,47 +2228,40 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
       label:"Employment Income (annual)",
       value:_empIncomeBase,
       section:"income",
-      drillRows: _empMonthlyComponents ? [
-        {desc:"Basic Salary",    amount:_empMonthlyComponents.basic,     date:"Annual"},
-        ...(_empMonthlyComponents.overtime>0  ?[{desc:"Overtime Pay",        amount:_empMonthlyComponents.overtime,   date:"Annual"}]:[]),
-        ...(_empMonthlyComponents.housing>0   ?[{desc:"Housing Allowance",   amount:_empMonthlyComponents.housing,    date:"Annual"}]:[]),
-        ...(_empMonthlyComponents.transport>0 ?[{desc:"Transport Allowance", amount:_empMonthlyComponents.transport,  date:"Annual"}]:[]),
-        ...(_empMonthlyComponents.bonus>0     ?[{desc:"Bonus / Commission",  amount:_empMonthlyComponents.bonus,      date:"Annual"}]:[]),
-        ...(_empMonthlyComponents.medical>0   ?[{desc:"Medical Benefit",     amount:_empMonthlyComponents.medical,    date:"Annual"}]:[]),
-        ...(_empMonthlyComponents.leave>0     ?[{desc:"Leave Allowance",     amount:_empMonthlyComponents.leave,      date:"Annual"}]:[]),
-      ] : _incomeTxns.filter(t=>t.type==="income"),
-      drillNote:"All emoluments are taxable — NTA 2025 S.3(1)(a). Pension/NHF computed on this income only.",
-      note:_empMonthlyComponents
-        ? "Basic: ₦"+(_empMonthlyComponents.basic).toLocaleString()
-          +(_empMonthlyComponents.overtime>0?"; Overtime: ₦"+_empMonthlyComponents.overtime.toLocaleString():"")
-          +(_empMonthlyComponents.housing>0?"; Housing: ₦"+_empMonthlyComponents.housing.toLocaleString():"")
-          +(_empMonthlyComponents.transport>0?"; Transport: ₦"+_empMonthlyComponents.transport.toLocaleString():"")
-          +(_empMonthlyComponents.bonus>0?"; Bonus: ₦"+_empMonthlyComponents.bonus.toLocaleString():"")
+      drillRows: _empDrillRows,
+      drillNote:"All emoluments are taxable — NTA 2025 S.3(1)(a). Pension/NHF apply to this income only, not business/rental income."
+        +(_handPaidGap>0?" Includes ₦"+_handPaidGap.toLocaleString()+" hand-paid/cash salary not appearing in bank (declared at onboarding).":"")
+        +(_empFromTxns>0?" ₦"+_empFromTxns.toLocaleString()+" identified from bank transactions via salary/wage keywords.":""),
+      note:_empFromTxns>0
+        ?"₦"+_empFromTxns.toLocaleString()+" from bank transactions"
+          +(_handPaidGap>0?" + ₦"+_handPaidGap.toLocaleString()+" hand-paid (declared)":"")
           +" — all emoluments taxable (NTA 2025 S.3). Tap to see breakdown."
-        : "From employment transactions — NTA 2025 S.3. Tap to see transactions.",
+        :_empDeclared>0
+          ?"₦"+_empDeclared.toLocaleString()+" declared at onboarding (no salary found in bank — hand-paid or not yet imported). Tap to review."
+          :"No employment income identified. If you receive salary, import bank statements or tag salary transactions. Tap to see current income.",
     }] : []),
     ...(_otherIncome>0 ? [{
       label:"Other Income (business/rental/investment)",
       value:_otherIncome,
       section:"income",
-      drillRows: _incomeTxns,
-      drillNote:"Business profit, rental income, investment returns — NTA 2025 S.3. Pension/NHF do NOT apply to this income.",
-      note:"From transactions — business profit, rental income, investment returns — NTA 2025 S.3. Tap for transaction list.",
+      drillRows: _otherIncTxns,
+      drillNote:"Business profit, rental income, investment returns and all non-employment income — NTA 2025 S.3. Pension and NHF reliefs do NOT apply to this income.",
+      note:_otherFromTxns>0?"₦"+_otherFromTxns.toLocaleString()+" from "+_otherIncTxns.length+" transaction(s) — NTA 2025 S.3. Tap to see list.":"No other income transactions recorded.",
     }] : []),
     ...(cat==="C"&&_gross>0?[{
       label:"Self-Employment / Business Income",
       value:_gross,
       section:"income",
       drillRows: _incomeTxns,
-      drillNote:"Income from self-employment or business activities — NTA 2025 S.3.",
-      note:"All income transactions — NTA 2025 S.3. Tap to see transactions.",
+      drillNote:"Income from self-employment or business activities — NTA 2025 S.3. No pension/NHF base for self-employed (no emoluments).",
+      note:_incomeTxns.length>0?"₦"+_gross.toLocaleString()+" from "+_incomeTxns.length+" transaction(s) — NTA 2025 S.3. Tap to see list.":"No income transactions yet.",
     }]:[]),
     {label:"Total Gross Income",
      value:_gross,
      bold:true,
-     drillRows: _incomeTxns,
-     drillNote:"All income transactions contributing to gross income.",
-     note:cat==="C"?"Self-employment income — NTA 2025 S.3":"Combined employment + other income — NTA 2025 S.3"},
+     drillRows: [..._empDrillRows,..._otherIncTxns],
+     drillNote:"Total gross income = employment income (₦"+_empIncomeBase.toLocaleString()+") + other income (₦"+_otherIncome.toLocaleString()+"). All subject to PIT — NTA 2025 S.3.",
+     note:cat==="C"?"From "+_incomeTxns.length+" transaction(s) — NTA 2025 S.3":"Employment (₦"+_empIncomeBase.toLocaleString()+") + Other (₦"+_otherIncome.toLocaleString()+") — NTA 2025 S.3"},
 
     // ── SECTION 2: Business expense deductions ──────────────────────────────
     ...(_allowExp>0 ? [{
@@ -3573,6 +3601,47 @@ function TxnEditScreen({txn, onSave, onDelete, onBack}){
           <div className="ibox blue" style={{marginBottom:14}}>
             <div className="ititle" style={{color:C.blue}}>{rule.icon} {rule.head}</div>
             <div style={{fontSize:12,color:C.ink,lineHeight:1.5}}>{rule.obligation}</div>
+          </div>
+        )}
+
+        {/* Income type — for employment income identification */}
+        {edit.type==="income"&&(
+          <div className="fg">
+            <label className="lbl">INCOME TYPE</label>
+            <div style={{fontSize:11,color:C.muted,marginBottom:8,lineHeight:1.5}}>
+              Classifying income correctly ensures pension (8%) and NHF (2.5%) are only
+              applied to employment income — NTA 2025 S.30(2)(a)(iii).
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {[
+                {v:"employment",l:"💼 Employment / Salary"},
+                {v:"business",l:"🏢 Business / Trade"},
+                {v:"rental",l:"🏘 Rental Income"},
+                {v:"investment",l:"📈 Investment / Interest"},
+                {v:"other",l:"💰 Other"},
+              ].map(s=>(
+                <button key={s.v} onClick={()=>set("incomeType",s.v)} style={{
+                  padding:"7px 10px",
+                  border:`1.5px solid ${edit.incomeType===s.v?C.blue:C.border}`,
+                  background:edit.incomeType===s.v?C.blueLight:"#fff",
+                  borderRadius:8,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
+                  color:edit.incomeType===s.v?C.blue:C.muted,
+                }}>{s.l}</button>
+              ))}
+            </div>
+            {edit.incomeType==="employment"&&(
+              <div style={{marginTop:6,fontSize:10,color:C.green,lineHeight:1.5,
+                padding:"6px 8px",background:"#F0FDF4",borderRadius:6}}>
+                ✓ Marked as employment income. Pension (8%) and NHF (2.5%) will be
+                computed on this income — NTA 2025 S.30(2)(a)(iii).
+              </div>
+            )}
+            {edit.incomeType&&edit.incomeType!=="employment"&&(
+              <div style={{marginTop:6,fontSize:10,color:C.muted,lineHeight:1.5,
+                padding:"6px 8px",background:"#F8FAFC",borderRadius:6}}>
+                Pension and NHF reliefs do not apply to this income type (NTA 2025 S.30(2)(a)(iii) — employment income only).
+              </div>
+            )}
           </div>
         )}
 

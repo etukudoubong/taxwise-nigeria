@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>TaxWise Diagnostic</title>
+<style>
+body{font-family:monospace;padding:20px;background:#0B1628;color:#fff;}
+.ok{color:#4ADE80;} .err{color:#F87171;} .wait{color:#FCD34D;}
+div{margin:6px 0;padding:6px 10px;background:rgba(255,255,255,.05);border-radius:6px;}
+</style>
+</head>
+<body>
+<h2>TaxWise Diagnostic</h2>
+<div id="log">Starting...</div>
+
+<script>
+const log = document.getElementById('log');
+function add(msg, cls) {
+  const d = document.createElement('div');
+  d.className = cls||'';
+  d.textContent = new Date().toISOString().slice(11,19) + ' ' + msg;
+  log.appendChild(d);
+}
+
+add('Page loaded', 'ok');
+
+// Test 1: React
+const r1 = document.createElement('script');
+r1.src = 'https://unpkg.com/react@18/umd/react.development.js';
+r1.onload = () => add('✓ React loaded: ' + (window.React?.version||'?'), 'ok');
+r1.onerror = (e) => add('✗ React FAILED to load', 'err');
+document.head.appendChild(r1);
+
+// Test 2: ReactDOM
+const r2 = document.createElement('script');
+r2.src = 'https://unpkg.com/react-dom@18/umd/react-dom.development.js';
+r2.onload = () => add('✓ ReactDOM loaded', 'ok');
+r2.onerror = () => add('✗ ReactDOM FAILED', 'err');
+document.head.appendChild(r2);
+
+// Test 3: Supabase
+const r3 = document.createElement('script');
+r3.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+r3.onload = () => {
+  add('✓ Supabase JS loaded', 'ok');
+  // Test actual connection
+  try {
+    const sb = supabase.createClient(
+      'https://rxqhvntlaycobsknmiyn.supabase.co',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ4cWh2bnRsYXljb2Jza25taXluIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MTk0MTMsImV4cCI6MjA5NjA5NTQxM30.uMyuumb-vZJpGnT1csR2svI3e9udzw5SwHWgG5dUBvw'
+    );
+    add('✓ Supabase client created', 'ok');
+    sb.auth.getSession().then(({data,error}) => {
+      if(error) add('✗ getSession error: ' + error.message, 'err');
+      else add('✓ getSession OK — session: ' + (data.session?'logged in':'no session'), 'ok');
+    }).catch(e => add('✗ getSession threw: ' + e.message, 'err'));
+  } catch(e) {
+    add('✗ createClient threw: ' + e.message, 'err');
+  }
+};
+r3.onerror = () => add('✗ Supabase JS FAILED to load', 'err');
+document.head.appendChild(r3);
+
+// Test 4: Paystack
+const r4 = document.createElement('script');
+r4.src = 'https://js.paystack.co/v1/inline.js';
+r4.onload = () => add('✓ Paystack loaded', 'ok');
+r4.onerror = () => add('✗ Paystack FAILED (non-critical)', 'wait');
+document.head.appendChild(r4);
+
+// Check after 5 seconds
+setTimeout(() => {
+  add('--- 5 second check ---', '');
+  add('React: ' + (window.React?'✓':'✗'), window.React?'ok':'err');
+  add('ReactDOM: ' + (window.ReactDOM?'✓':'✗'), window.ReactDOM?'ok':'err');
+  add('Supabase: ' + (window.supabase?'✓':'✗'), window.supabase?'ok':'err');
+}, 5000);
+</script>
+</body>
+</html>

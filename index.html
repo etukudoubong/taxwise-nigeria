@@ -332,35 +332,48 @@ const ROLES = {
   view_only:   { label:"View Only",    desc:"Read-only access to all data" },
 };
 
-async function syncPull(userId){
+async function syncPull(userId, profileId){
   try {
-    const [prof, txns, asst, emps, kiv_] = await Promise.all([
-      sb.from("profiles").select("*").eq("id", userId).single(),
-      sb.from("transactions").select("*").eq("user_id", userId),
-      sb.from("assets").select("*").eq("user_id", userId),
-      sb.from("employees").select("*").eq("user_id", userId),
-      sb.from("kiv").select("*").eq("user_id", userId),
+    // Load all profiles for this user
+    const allProfsQ = await sb.from("profiles").select("*").eq("user_id", userId).order("created_at",{ascending:true});
+    const profileFilter = profileId
+      ? q => q.eq("profile_id", profileId)
+      : q => q.is("profile_id", null);
+    const [txns, asst, emps, kiv_] = await Promise.all([
+      profileFilter(sb.from("transactions").select("*").eq("user_id", userId)),
+      profileFilter(sb.from("assets").select("*").eq("user_id", userId)),
+      profileFilter(sb.from("employees").select("*").eq("user_id", userId)),
+      profileFilter(sb.from("kiv").select("*").eq("user_id", userId)),
     ]);
+    const profiles = (allProfsQ.data && allProfsQ.data.length>0) ? allProfsQ.data : [];
+    const activeProf = profiles.find(p=>p.id===profileId) || profiles[0];
     const store = JSON.parse(localStorage.getItem("taxwise_v1")||"{}");
-    if(prof.data){
+    store.allProfiles = profiles.map(p=>({
+      id:p.id, profileName:p.profile_name||p.name||"Profile",
+      mode:p.mode, companyName:p.company_name, name:p.name,
+    }));
+    if(activeProf){
       store.profile = {
         ...store.profile,
-        name: prof.data.name, tin: prof.data.tin,
-        email: prof.data.email, phone: prof.data.phone,
-        mode: prof.data.mode, empCategory: prof.data.emp_category,
-        employerDeductions: prof.data.employer_deductions||{},
-        companyName: prof.data.company_name,
-        fixedAssets: prof.data.fixed_assets,
-        isProfessional: prof.data.is_professional,
-        sector: prof.data.sector, yearEnd: prof.data.year_end,
-        dataSources: prof.data.data_sources||[],
-        onboarded: prof.data.onboarded,
+        id: activeProf.id,
+        profileName: activeProf.profile_name||activeProf.name||"Profile",
+        name: activeProf.name, tin: activeProf.tin,
+        email: activeProf.email, phone: activeProf.phone,
+        mode: activeProf.mode, empCategory: activeProf.emp_category,
+        employerDeductions: activeProf.employer_deductions||{},
+        companyName: activeProf.company_name,
+        fixedAssets: activeProf.fixed_assets,
+        isProfessional: activeProf.is_professional,
+        sector: activeProf.sector, yearEnd: activeProf.year_end,
+        dataSources: activeProf.data_sources||[],
+        onboarded: activeProf.onboarded,
+        emailReminders: activeProf.email_reminders||false,
       };
     }
     if(txns.data) store.transactions = txns.data.map(t=>({
       id:t.id, date:t.txn_date, desc:t.txn_desc, amount:t.amount,
       type:t.txn_type, source:t.source, compliance_status:t.compliance_status,
-      receipt_url:t.receipt_url||null
+      receipt_url:t.receipt_url||null, profile_id:t.profile_id||null
     }));
     if(asst.data) store.assets = asst.data;
     if(emps.data) store.employees = emps.data;
@@ -376,8 +389,10 @@ async function syncPull(userId){
 async function syncPush(userId, store){
   try {
     const p = store.profile||{};
+    const profileId = p.id||userId;
     await sb.from("profiles").upsert({
-      id: userId,
+      id: profileId,
+      user_id: userId,
       name: p.name, tin: p.tin, email: p.email, phone: p.phone,
       mode: p.mode||"individual", emp_category: p.empCategory||"B",
       employer_deductions: p.employerDeductions||{},
@@ -392,7 +407,7 @@ async function syncPush(userId, store){
     if((store.transactions||[]).length){
       await sb.from("transactions").upsert(
         store.transactions.map(t=>({
-          id:t.id, user_id:userId,
+          id:t.id, user_id:userId, profile_id:profileId,
           txn_date:t.date, txn_desc:t.desc, amount:t.amount,
           txn_type:t.type, source:t.source||"manual",
           compliance_status:t.compliance_status||"pending",
@@ -402,18 +417,18 @@ async function syncPush(userId, store){
     }
     if((store.assets||[]).length){
       await sb.from("assets").upsert(
-        store.assets.map(a=>({...a, user_id:userId}))
+        store.assets.map(a=>({...a, user_id:userId, profile_id:profileId}))
       );
     }
     if((store.employees||[]).length){
       await sb.from("employees").upsert(
-        store.employees.map(e=>({...e, user_id:userId}))
+        store.employees.map(e=>({...e, user_id:userId, profile_id:profileId}))
       );
     }
     if((store.kiv||[]).length){
       await sb.from("kiv").upsert(
         store.kiv.map(k=>({
-          id:k.id, user_id:userId,
+          id:k.id, user_id:userId, profile_id:profileId,
           kiv_date:k.date, kiv_desc:k.desc, amount:k.amount,
           wht_rate:k.wht_rate, wht_amount:k.wht_amount, status:k.status||"pending"
         }))
@@ -2494,7 +2509,89 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
   );
 }
 
-function Dashboard({profile,txns,kiv,onNav,setProfile}){
+
+function ProfileSwitcher({allProfiles, activeProfileId, onSwitch, onAdd, sub}){
+  var open = React.useState(false);
+  var isOpen = open[0]; var setOpen = open[1];
+  if(!allProfiles||allProfiles.length===0) return null;
+  var active = allProfiles.find(function(p){return p.id===activeProfileId;})||allProfiles[0];
+  var label = active.mode==="company"
+    ? (active.companyName||active.profileName||"Company")
+    : (active.profileName||active.name||"Personal");
+  var canAdd = sub && isSubscriptionActive(sub);
+  return React.createElement('div', { style: {position:"relative",zIndex:200}},
+    React.createElement('div', { onClick: function(){setOpen(function(o){return !o;});},
+      style: {display:"flex",alignItems:"center",gap:6,
+        background:"rgba(255,255,255,.12)",borderRadius:20,
+        padding:"5px 10px 5px 8px",cursor:"pointer",
+        border:"1px solid rgba(255,255,255,.2)"}},
+      React.createElement('div', { style: {width:20,height:20,borderRadius:"50%",
+        background:active.mode==="company"?C.blue:C.green,
+        display:"flex",alignItems:"center",justifyContent:"center",
+        fontSize:10,color:"#fff",flexShrink:0}},
+        active.mode==="company"?"B":"P"
+      ),
+      React.createElement('div', { style: {fontSize:11,fontWeight:700,color:"#fff",
+        maxWidth:100,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+        label
+      ),
+      React.createElement('div', { style: {fontSize:9,color:"rgba(255,255,255,.6)"}}, "v")
+    ),
+    isOpen&&React.createElement('div', { style: {
+      position:"absolute",top:"calc(100% + 6px)",left:0,minWidth:200,
+      background:"#fff",borderRadius:12,boxShadow:"0 8px 32px rgba(0,0,0,.18)",
+      border:"1px solid "+C.border,overflow:"hidden"}},
+      React.createElement('div', { style: {padding:"8px 12px",fontSize:10,
+        fontWeight:700,color:C.muted,letterSpacing:".06em",
+        borderBottom:"1px solid "+C.border}}, "YOUR PROFILES"),
+      allProfiles.map(function(p){
+        var pLabel = p.mode==="company"
+          ? (p.companyName||p.profileName||"Company")
+          : (p.profileName||p.name||"Personal");
+        var isActive = p.id===activeProfileId||(allProfiles.length===1&&!activeProfileId);
+        return React.createElement('div', { key: p.id,
+          onClick: function(){onSwitch(p.id); setOpen(false);},
+          style: {display:"flex",alignItems:"center",gap:10,
+            padding:"10px 14px",cursor:"pointer",
+            background:isActive?"#EFF6FF":"#fff",
+            borderBottom:"1px solid "+C.border}},
+          React.createElement('div', { style: {width:28,height:28,borderRadius:"50%",
+            background:p.mode==="company"?C.blueLight:C.greenBg,
+            display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,
+            color:p.mode==="company"?C.blue:C.green}},
+            p.mode==="company"?"B":"P"
+          ),
+          React.createElement('div', { style: {flex:1,minWidth:0}},
+            React.createElement('div', { style: {fontSize:12,fontWeight:700,
+              color:isActive?C.blue:C.ink,overflow:"hidden",
+              textOverflow:"ellipsis",whiteSpace:"nowrap"}}, pLabel),
+            React.createElement('div', { style: {fontSize:10,color:C.muted}},
+              p.mode==="company"?"Company":"Individual")
+          ),
+          isActive&&React.createElement('div', { style: {fontSize:11,color:C.blue,fontWeight:700}}, "OK")
+        );
+      }),
+      React.createElement('div', { onClick: function(){
+          if(canAdd){onAdd();}else{alert("An active subscription is required to add more profiles.");}
+          setOpen(false);
+        },
+        style: {display:"flex",alignItems:"center",gap:8,
+          padding:"10px 14px",cursor:"pointer",
+          background:canAdd?"#F0FDF4":"#F8FAFC",
+          borderTop:"1px solid "+C.border}},
+        React.createElement('div', { style: {width:28,height:28,borderRadius:"50%",
+          background:canAdd?C.green:"#E2E8F0",
+          display:"flex",alignItems:"center",justifyContent:"center",
+          fontSize:18,color:"#fff",fontWeight:700}}, "+"),
+        React.createElement('div', { style: {fontSize:12,fontWeight:700,
+          color:canAdd?C.green:C.muted}},
+          canAdd?"Add new profile":"Subscribe to add profiles")
+      )
+    )
+  );
+}
+
+function Dashboard({profile,txns,kiv,onNav,setProfile,allProfiles,activeProfileId,onSwitchProfile,onAddProfile,sub}){
   // RBAC — same logic as App routing
   const memberRole_ = profile.member_role||"admin";
   const isCompanyMember_ = !!profile.isCompanyMember;
@@ -3081,8 +3178,13 @@ function Dashboard({profile,txns,kiv,onNav,setProfile}){
       , React.createElement(BreakdownModal, {__self: this, __source: {fileName: _jsxFileName, lineNumber: 2765}})
       /* Hero */
       , React.createElement('div', { className: isCompany?"hero-blue":"hero-green", __self: this, __source: {fileName: _jsxFileName, lineNumber: 2767}}
-        , React.createElement('div', { style: {fontSize:11,opacity:.65,letterSpacing:".08em",marginBottom:4,fontWeight:700}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 2768}}
-          , isCompany?profile.companyName||"YOUR COMPANY":profile.name||"YOUR DASHBOARD", " · TAX POSITION"
+        , React.createElement('div', { style: {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}
+          , React.createElement('div', { style: {fontSize:11,opacity:.65,letterSpacing:".08em",fontWeight:700}}
+            , isCompany?profile.companyName||"YOUR COMPANY":profile.name||"YOUR DASHBOARD", " \u00b7 TAX POSITION"
+          )
+          , allProfiles&&allProfiles.length>0&&React.createElement(ProfileSwitcher, {
+            allProfiles:allProfiles, activeProfileId:activeProfileId,
+            onSwitch:onSwitchProfile, onAdd:onAddProfile, sub:sub})
         )
         , React.createElement('div', { onClick: ()=>openBreakdown(isCompany?"CIT Working":"PIT Working",null,totalTax,isCompany?citWorking:pitWorking),
           style: {cursor:"pointer",display:"inline-block"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 2771}}
@@ -10327,9 +10429,11 @@ function App(){
   const handleAuth = async (user) => {
     setAuthUser(user);
     setSyncStatus("syncing");
-    await syncPull(user.id);
+    const storedPid = localStorage.getItem("taxwise_active_profile")||null;
+    await syncPull(user.id, storedPid);
     setSyncStatus("done");
     const s = loadStore();
+    if(s&&s.allProfiles) setAllProfiles(s.allProfiles);
     if(_optionalChain([s, 'optionalAccess', _108 => _108.profile])) setProfileRaw(s.profile);
     if(_optionalChain([s, 'optionalAccess', _109 => _109.transactions])) setTxnsRaw(s.transactions);
     if(_optionalChain([s, 'optionalAccess', _110 => _110.assets])) setAssetsRaw(s.assets);
@@ -10369,6 +10473,11 @@ function App(){
   };
 
   const saved=loadStore();
+  const[allProfiles,setAllProfiles]=useState((saved&&saved.allProfiles)||[]);
+  const[activeProfileId,setActiveProfileId]=useState(
+    localStorage.getItem("taxwise_active_profile")||
+    ((saved&&saved.profile&&saved.profile.id)||null)
+  );
   const[profile,setProfileRaw]=useState(_optionalChain([saved, 'optionalAccess', _114 => _114.profile])||DEFAULT_STORE.profile);
   const[txns,setTxnsRaw]=useState(_optionalChain([saved, 'optionalAccess', _115 => _115.transactions])||DEFAULT_STORE.transactions);
   const[kiv,setKivRaw]=useState(_optionalChain([saved, 'optionalAccess', _116 => _116.kiv])||[]);
@@ -10446,9 +10555,39 @@ function App(){
 
   const setProfile=useCallback(v=>{
     setProfileRaw(v);
-    const store={profile:v,transactions:txns,kiv,employees,assets,connectedBanks};
+    const store={profile:v,transactions:txns,kiv,employees,assets,connectedBanks,allProfiles};
     saveStore(store); doSync(store);
-  },[txns,kiv,employees,assets,connectedBanks,doSync]);
+  },[txns,kiv,employees,assets,connectedBanks,allProfiles,doSync]);
+
+  const switchProfile=useCallback(async(newProfileId)=>{
+    if(!authUser||newProfileId===activeProfileId) return;
+    setActiveProfileId(newProfileId);
+    localStorage.setItem("taxwise_active_profile", newProfileId);
+    setSyncStatus("syncing");
+    await syncPull(authUser.id, newProfileId);
+    const s = loadStore();
+    if(s&&s.allProfiles) setAllProfiles(s.allProfiles);
+    if(s&&s.profile){ setProfileRaw(s.profile); }
+    if(s&&s.transactions) setTxnsRaw(s.transactions);
+    if(s&&s.assets) setAssetsRaw(s.assets);
+    if(s&&s.employees) setEmployeesRaw(s.employees);
+    if(s&&s.kiv) setKivRaw(s.kiv);
+    setSyncStatus("done");
+    setTimeout(()=>setSyncStatus("idle"),3000);
+  },[authUser,activeProfileId]);
+
+  const addNewProfile=useCallback(()=>{
+    // Clear current data and go to onboarding for a new profile
+    const newId = "prof_"+Date.now()+"_"+Math.random().toString(36).substr(2,6);
+    setActiveProfileId(newId);
+    localStorage.setItem("taxwise_active_profile", newId);
+    setProfileRaw({...DEFAULT_STORE.profile, id:newId, onboarded:false});
+    setTxnsRaw([]);
+    setKivRaw([]);
+    setAssetsRaw([]);
+    setEmployeesRaw([]);
+    setScreen("dashboard");
+  },[]);
 
   const setKiv=useCallback(fn=>{
     setKivRaw(prev=>{
@@ -10664,7 +10803,7 @@ function App(){
       return React.createElement(TaxScheduleScreen, { key: profileKey, scheduleKey: key, schedules: agg.schedules, profile: profile, onBack: back, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10130}});
     }
     switch(screen){
-      case "dashboard":  return React.createElement(Dashboard, { key: profileKey, profile: profile, txns: txns, kiv: kiv, onNav: nav, setProfile: setProfile, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10133}});
+      case "dashboard":  return React.createElement(Dashboard, { key: profileKey, profile: profile, txns: txns, kiv: kiv, onNav: nav, setProfile: setProfile, allProfiles: allProfiles, activeProfileId: activeProfileId, onSwitchProfile: switchProfile, onAddProfile: addNewProfile, sub: sub, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10133}});
       case "journal":    return React.createElement(JournalScreen, { key: profileKey, txns: txns, setTxns: setTxns, kiv: kiv, setKiv: setKiv, onNav: nav, profile: profile, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10134}});
       case "calculate":  return React.createElement(CalculateScreen, { key: profile.empCategory+profile.mode, profile: profile, txns: txns, onBack: back, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10135}});
       case "deadlines":  return React.createElement(DeadlinesScreen, { key: profileKey, profile: profile, setProfile: setProfile, txns: txns, onBack: back, onNav: nav, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10136}});

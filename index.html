@@ -359,7 +359,8 @@ async function syncPull(userId){
     }
     if(txns.data) store.transactions = txns.data.map(t=>({
       id:t.id, date:t.txn_date, desc:t.txn_desc, amount:t.amount,
-      type:t.txn_type, source:t.source, compliance_status:t.compliance_status
+      type:t.txn_type, source:t.source, compliance_status:t.compliance_status,
+      receipt_url:t.receipt_url||null
     }));
     if(asst.data) store.assets = asst.data;
     if(emps.data) store.employees = emps.data;
@@ -393,7 +394,8 @@ async function syncPush(userId, store){
           id:t.id, user_id:userId,
           txn_date:t.date, txn_desc:t.desc, amount:t.amount,
           txn_type:t.type, source:t.source||"manual",
-          compliance_status:t.compliance_status||"pending"
+          compliance_status:t.compliance_status||"pending",
+          receipt_url:t.receipt_url||null
         }))
       );
     }
@@ -1378,18 +1380,25 @@ function DataRow({label,value,color,total,sub}){
 function TxnRow({txn,onTap}){
   const r=classifyTxn(txn.desc,txn.type);
   return(
-    React.createElement('div', { className: "txr", onClick: onTap, style: {cursor:"pointer"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1075}}
-      , React.createElement('div', { className: "txr-top", __self: this, __source: {fileName: _jsxFileName, lineNumber: 1076}}
-        , React.createElement('div', { className: "txr-icon", style: {background:r.color+"18"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1077}}, r.icon)
-        , React.createElement('div', { style: S.flex1, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1078}}
-          , React.createElement('div', { style: {fontSize:13,fontWeight:600,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1079}}, txn.desc)
-          , React.createElement('div', { style: {fontSize:10,color:C.muted,marginTop:1}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1080}}, fmtD(txn.date), " · "  , r.head)
+    React.createElement('div', { className: "txr", onClick: onTap, style: {cursor:"pointer"}}
+      , React.createElement('div', { className: "txr-top"}
+        , React.createElement('div', { className: "txr-icon", style: {background:r.color+"18"}}, r.icon)
+        , React.createElement('div', { style: S.flex1}
+          , React.createElement('div', { style: {fontSize:13,fontWeight:600,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}, txn.desc)
+          , React.createElement('div', { style: {fontSize:10,color:C.muted,marginTop:1,display:"flex",alignItems:"center",gap:4}},
+            fmtD(txn.date), " \u00b7 ", r.head
+            , txn.receipt_url&&React.createElement('span', { style: {
+              background:"#EFF6FF",color:C.blue,borderRadius:4,
+              padding:"1px 4px",fontSize:9,fontWeight:700,letterSpacing:".03em"}},
+              "\uD83D\uDCCE receipt"
+            )
+          )
         )
-        , React.createElement('div', { style: {textAlign:"right",flexShrink:0}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1082}}
-          , React.createElement('div', { style: {fontSize:13,fontWeight:700,color:txn.type==="income"?C.green:C.red}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1083}}
+        , React.createElement('div', { style: {textAlign:"right",flexShrink:0}}
+          , React.createElement('div', { style: {fontSize:13,fontWeight:700,color:txn.type==="income"?C.green:C.red}}
             , txn.type==="income"?"+":"-", fmt(txn.amount)
           )
-          , React.createElement('span', { className: "pill", style: {background:r.color+"15",color:r.color,fontSize:9}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1086}}, r.head)
+          , React.createElement('span', { className: "pill", style: {background:r.color+"15",color:r.color,fontSize:9}}, r.head)
         )
       )
     )
@@ -5008,8 +5017,141 @@ function TxnEditScreen({txn, onSave, onDelete, onBack}){
           )
         )
 
-        , React.createElement('button', { className: "btn btn-blue" , onClick: ()=>onSave(edit), disabled: !edit.desc.trim()||!edit.amount, __self: this, __source: {fileName: _jsxFileName, lineNumber: 4705}}, "Save Changes"
+        /* ── Receipt Upload ──────────────────────────────────────── */
+        , (()=>{
+          const[uploading,setUploading]=React.useState(false);
+          const[uploadErr,setUploadErr]=React.useState("");
+          const[viewing,setViewing]=React.useState(false);
+          const isPdf=edit.receipt_url&&edit.receipt_url.toLowerCase().includes(".pdf");
 
+          const onFileChange=async(e)=>{
+            const file=e.target.files&&e.target.files[0];
+            if(!file)return;
+            if(file.size>5*1024*1024){setUploadErr("File too large — max 5 MB");return;}
+            setUploading(true);setUploadErr("");
+            try{
+              const userId=(await sb.auth.getUser()).data.user.id;
+              const ext=file.name.split(".").pop();
+              const path=userId+"/"+edit.id+"_"+Date.now()+"."+ext;
+              const{error:upErr}=await sb.storage.from("receipts").upload(path,file,{upsert:true});
+              if(upErr)throw upErr;
+              const{data:urlData}=sb.storage.from("receipts").getPublicUrl(path);
+              set("receipt_url",urlData.publicUrl);
+            }catch(err){
+              setUploadErr("Upload failed: "+(err.message||String(err)));
+            }finally{setUploading(false);}
+          };
+
+          const onRemove=async()=>{
+            if(!window.confirm("Remove this receipt?"))return;
+            try{
+              const userId=(await sb.auth.getUser()).data.user.id;
+              const parts=edit.receipt_url.split("/receipts/");
+              if(parts[1]){await sb.storage.from("receipts").remove([decodeURIComponent(parts[1])]);}
+            }catch(_){}
+            set("receipt_url","");
+          };
+
+          return React.createElement('div', { style: {marginBottom:16}},
+            React.createElement('label', { className: "lbl"}, "\uD83D\uDCCE AUDIT EVIDENCE — RECEIPT / INVOICE"),
+            React.createElement('div', { style: {fontSize:11,color:C.muted,marginBottom:8,lineHeight:1.5}},
+              "Attach a photo or PDF of the receipt, invoice, or WHT credit note. Stored securely for NRS audit defence."
+            ),
+            edit.receipt_url?(
+              React.createElement('div', { style: {border:"1px solid "+C.greenBorder,borderRadius:10,
+                background:C.greenBg,padding:"10px 12px"}},
+                React.createElement('div', { style: {display:"flex",alignItems:"center",gap:10}},
+                  React.createElement('div', { style: {fontSize:22}}, isPdf?"\uD83D\uDCC4":"\uD83D\uDDBC\uFE0F"),
+                  React.createElement('div', { style: {flex:1,minWidth:0}},
+                    React.createElement('div', { style: {fontSize:12,fontWeight:700,color:C.green}}, "\u2713 Receipt attached"),
+                    React.createElement('div', { style: {fontSize:10,color:C.muted,marginTop:1,
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                      edit.receipt_url.split("/").pop()
+                    )
+                  ),
+                  React.createElement('div', { style: {display:"flex",gap:6,flexShrink:0}},
+                    React.createElement('button', { onClick: ()=>setViewing(true),
+                      style: {padding:"6px 10px",background:C.blue,border:"none",borderRadius:7,
+                        color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}},
+                      "View"
+                    ),
+                    React.createElement('button', { onClick: onRemove,
+                      style: {padding:"6px 10px",background:"#FEF2F2",border:"1px solid #FECACA",
+                        borderRadius:7,color:"#DC2626",fontSize:11,fontWeight:700,
+                        cursor:"pointer",fontFamily:"inherit"}},
+                      "Remove"
+                    )
+                  )
+                ),
+                viewing&&React.createElement('div', { style: {
+                  position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9999,
+                  background:"rgba(0,0,0,.92)",display:"flex",flexDirection:"column"}},
+                  React.createElement('div', { style: {display:"flex",justifyContent:"space-between",
+                    alignItems:"center",padding:"12px 16px",flexShrink:0}},
+                    React.createElement('div', { style: {color:"#fff",fontSize:13,fontWeight:700}}, "\uD83D\uDCCE Receipt"),
+                    React.createElement('div', { style: {display:"flex",gap:8}},
+                      React.createElement('a', { href: edit.receipt_url, target: "_blank",
+                        rel: "noopener noreferrer",
+                        style: {padding:"7px 12px",background:"rgba(255,255,255,.15)",
+                          borderRadius:8,color:"#fff",fontSize:11,fontWeight:700,
+                          textDecoration:"none",border:"1px solid rgba(255,255,255,.2)"}},
+                        "Open \u2197"
+                      ),
+                      React.createElement('button', { onClick: ()=>setViewing(false),
+                        style: {padding:"7px 12px",background:"rgba(255,255,255,.15)",
+                          border:"1px solid rgba(255,255,255,.2)",borderRadius:8,
+                          color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",
+                          fontFamily:"inherit"}},
+                        "\u2715 Close"
+                      )
+                    )
+                  ),
+                  React.createElement('div', { style: {flex:1,overflow:"auto",
+                    display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
+                    isPdf
+                      ? React.createElement('iframe', { src: edit.receipt_url,
+                          style: {width:"100%",height:"100%",border:"none",borderRadius:8,
+                            background:"#fff",minHeight:400}})
+                      : React.createElement('img', { src: edit.receipt_url, alt: "Receipt",
+                          style: {maxWidth:"100%",maxHeight:"100%",borderRadius:8,
+                            objectFit:"contain",boxShadow:"0 4px 24px rgba(0,0,0,.5)"}})
+                  )
+                )
+              )
+            ):(
+              React.createElement('div', null,
+                React.createElement('label', { style: {
+                  display:"flex",alignItems:"center",gap:10,
+                  border:"2px dashed "+C.border,borderRadius:10,padding:"14px 16px",
+                  cursor:uploading?"not-allowed":"pointer",
+                  background:uploading?"#F8FAFC":"#fff",
+                  opacity:uploading?.6:1}},
+                  React.createElement('input', { type: "file",
+                    accept: "image/jpeg,image/png,image/webp,application/pdf",
+                    style: {display:"none"},
+                    disabled: uploading,
+                    onChange: onFileChange}),
+                  React.createElement('div', { style: {fontSize:24}}, uploading?"\u23F3":"\uD83D\uDCF7"),
+                  React.createElement('div', null,
+                    React.createElement('div', { style: {fontSize:12,fontWeight:700,color:C.ink}},
+                      uploading?"Uploading...":"Tap to attach receipt or invoice"
+                    ),
+                    React.createElement('div', { style: {fontSize:10,color:C.muted,marginTop:1}},
+                      "JPG, PNG, WebP or PDF \u00b7 max 5 MB"
+                    )
+                  )
+                ),
+                uploadErr&&React.createElement('div', { style: {
+                  marginTop:6,fontSize:11,color:"#DC2626",
+                  padding:"6px 10px",background:"#FEF2F2",borderRadius:6}},
+                  "\u26A0\uFE0F ", uploadErr
+                )
+              )
+            )
+          );
+        })()
+
+        , React.createElement('button', { className: "btn btn-blue", onClick: ()=>onSave(edit), disabled: !edit.desc.trim()||!edit.amount}, "Save Changes"
         )
       )
     )

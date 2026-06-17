@@ -8043,7 +8043,7 @@ function CalculateScreen({profile,txns,onBack}){
   );
 }
 
-function DeadlinesScreen({profile,onBack,setProfile}){
+function DeadlinesScreen({profile,txns=[],onBack,setProfile,onNav}){
   const isCompany=profile.mode==="company";
   const [deadlineTab,setDeadlineTab]=useState("deadlines"); // "deadlines"|"rev360"
   const [emailReminders,setEmailReminders]=useState(profile.emailReminders||false);
@@ -8068,71 +8068,57 @@ function DeadlinesScreen({profile,onBack,setProfile}){
       show:!isCompany&&(profile.empCategory==="B"||(profile.empCategory==="D"&&profile.catDSubType==="D2"))},
   ].filter(d=>d.show!==false);
 
-  // Rev360 readiness checklist items
-  const rev360Items = [
-    {
-      category:"Identity & Registration",
-      items:[
-        {id:"tin",label:"Valid TIN (Tax Identification Number)",
-          desc:"Obtain from JTB or NRS if not yet registered. Required for all filings on Rev360.",
-          done:!!(profile.tin)},
-        {id:"name",label:"Legal name matches TIN registration",
-          desc:"Your name on Rev360 must match exactly what is on your TIN certificate.",
-          done:!!(profile.name)},
-        {id:"email",label:"Valid email address on file",
-          desc:"Rev360 sends OTPs and notices to your registered email.",
-          done:!!(profile.email)},
-        {id:"phone",label:"Valid phone number linked to account",
-          desc:"Used for 2FA and account recovery on the NRS portal.",
-          done:!!(profile.phone)},
-      ]
-    },
-    {
-      category:"Income Records",
-      items:[
-        {id:"employer",label:"Employer name and PAYE deduction records",
-          desc:"Obtain annual PAYE summary from HR or payroll. Required for annual return.",
-          done:!!(profile.employerName)},
-        {id:"gross",label:"Declared gross salary for the tax year",
-          desc:"Your official gross package — needed to compute correct annual PIT.",
-          done:!!(profile.declaredGrossSalary)},
-        {id:"txns",label:"Bank statement transactions imported",
-          desc:"Import at least one bank statement to document your income sources.",
-          done:false}, // dynamic — passed in
-        {id:"wht",label:"WHT credit notes from clients/payers",
-          desc:"Collect Form WHT 01 from every client that deducted WHT from your fees.",
-          done:false},
-      ]
-    },
-    {
-      category:"Deductions & Reliefs",
-      items:[
-        {id:"rent",label:"Rent receipt or tenancy agreement for rent relief",
-          desc:"20% of annual rent paid, capped ₦500k. Keep evidence.",
-          done:!!(profile.rentPaid)},
-        {id:"pension",label:"Pension contribution statement (PFAstatement)",
-          desc:"Obtain annual statement from your PFA showing total contributions.",
-          done:!!(_optionalChain([profile, 'access', _88 => _88.employerDeductions, 'optionalAccess', _89 => _89.pension])||_optionalChain([profile, 'access', _90 => _90.selfContributions, 'optionalAccess', _91 => _91.pension]))},
-        {id:"nhf",label:"NHF contribution statement from FMBN",
-          desc:"Required to claim 2.5% NHF relief. Obtain from FMBN or employer.",
-          done:!!(_optionalChain([profile, 'access', _92 => _92.employerDeductions, 'optionalAccess', _93 => _93.nhf])||_optionalChain([profile, 'access', _94 => _94.selfContributions, 'optionalAccess', _95 => _95.nhf]))},
-      ]
-    },
-    {
-      category:"Compliance",
-      items:[
-        {id:"prev_returns",label:"Previous years' tax returns filed",
-          desc:"Outstanding returns from prior years must be cleared before Rev360 accepts new filings.",
-          done:false},
-        {id:"no_debt",label:"No outstanding tax debts",
-          desc:"Clear any outstanding PAYE, WHT, or PIT balances before filing on Rev360.",
-          done:false},
-        {id:"taxwise",label:"TaxWise tax computation completed",
-          desc:"Your estimated PIT/PAYE reconciliation from TaxWise serves as your computation worksheet.",
-          done:true}, // always true if they're using TaxWise
-      ]
-    },
-  ];
+  // Rev360 readiness checklist items — dynamic
+  const rev360Items = (()=>{
+    const agg_ = computeAggregates(txns, profile);
+    const active_ = txns.filter(t=>t.compliance_status!=="excluded");
+    const yr = new Date().getFullYear();
+    const txnMths = new Set(active_.map(t=>(t.date||"").slice(0,7))
+      .filter(m=>m.startsWith(String(yr))));
+    const pastMths = new Date().getMonth()+1;
+    const allCovered = txnMths.size >= pastMths;
+    const whtConfirmed = active_.some(t=>t.whtConfirmed||t.whtFlag);
+    const pendingCompl = active_.filter(t=>
+      t.compliance_status==="pending"&&classifyTxn(t.desc,t.type).compliance_required).length;
+    const kivCount = txns.filter(t=>t.compliance_status==="kiv").length;
+    const p60Done = (profile.p60GrossAnnual||0)>0;
+    const cat = profile.empCategory||"A";
+    const payeOk = cat==="B"||cat==="C"||(agg_.payeIn>0)||!!(profile.declaredGrossSalary);
+    return [
+      { category:"Identity & Registration", items:[
+        {id:"tin",  label:"Valid TIN registered", done:!!(profile.tin),
+          hint:!profile.tin?"Enter TIN in Profile \u2192 Edit Setup":null, nav:"editSetup"},
+        {id:"name", label:"Legal name on file",   done:!!(profile.name)},
+        {id:"email",label:"Email address on file", done:!!(profile.email)},
+        {id:"phone",label:"Phone number on file",  done:!!(profile.phone)},
+      ]},
+      { category:"Income Records", items:[
+        {id:"txns", label:"Bank statements ("+txnMths.size+"/"+pastMths+" months)",
+          done:allCovered,
+          hint:allCovered?null:(pastMths-txnMths.size)+" month(s) missing \u2014 import now",
+          nav:"upload"},
+        ...(cat==="A"||(cat==="D"&&profile.catDSubType==="D1")?[
+          {id:"employer",label:"Employer PAYE records",     done:!!(profile.employerName)&&payeOk, nav:"editSetup"},
+          {id:"gross",   label:"Declared gross salary",     done:!!(profile.declaredGrossSalary),  nav:"editSetup"},
+          {id:"p60",     label:"Employer certificate (P60)",done:p60Done,                          nav:"profile"},
+        ]:[]),
+        ...((agg_.whtIn>0||cat==="C"||cat==="D")?[
+          {id:"wht",label:"WHT credit notes confirmed",done:whtConfirmed,nav:"upload"},
+        ]:[]),
+      ]},
+      { category:"Deductions & Reliefs", items:[
+        {id:"rent",   label:"Rent receipt for rent relief", done:!!(profile.rentPaid), nav:"editSetup"},
+        {id:"pension",label:"Pension contribution statement",done:!!(_optionalChain([profile, 'access', _88 => _88.employerDeductions, 'optionalAccess', _89 => _89.pension])||_optionalChain([profile, 'access', _90 => _90.selfContributions, 'optionalAccess', _91 => _91.pension]))},
+        {id:"nhf",    label:"NHF contribution statement",   done:!!(_optionalChain([profile, 'access', _92 => _92.employerDeductions, 'optionalAccess', _93 => _93.nhf])||_optionalChain([profile, 'access', _94 => _94.selfContributions, 'optionalAccess', _95 => _95.nhf]))},
+      ]},
+      { category:"Computation & Compliance", items:[
+        {id:"pit",       label:"PIT self-assessment computed",done:txns.length>0||(agg_.estPIT||0)>0,nav:"dashboard"},
+        {id:"kiv",       label:"KIV cleared ("+kivCount+" item"+(kivCount!==1?"s":"")+")",done:kivCount===0,nav:"journal"},
+        {id:"compliance",label:"Compliance resolved ("+pendingCompl+" pending)",done:pendingCompl===0,nav:"journal"},
+        {id:"taxwise",   label:"Computation downloaded",done:false,nav:"taxsummary"},
+      ]},
+    ];
+  })();
 
   const totalItems = rev360Items.reduce((s,cat)=>s+cat.items.length,0);
   const doneItems  = rev360Items.reduce((s,cat)=>s+cat.items.filter(i=>i.done).length,0);
@@ -8244,24 +8230,35 @@ function DeadlinesScreen({profile,onBack,setProfile}){
             )
 
             , rev360Items.map((cat,ci)=>(
-              React.createElement('div', { key: ci, className: "card", style: S.mb8, __self: this, __source: {fileName: _jsxFileName, lineNumber: 7941}}
-                , React.createElement('div', { className: "ctitle", __self: this, __source: {fileName: _jsxFileName, lineNumber: 7942}}, cat.category)
+              React.createElement('div', { key: ci, className: "card", style: S.mb8},
+                React.createElement('div', { className: "ctitle"}, cat.category)
                 , cat.items.map((item,ii)=>(
-                  React.createElement('div', { key: ii, style: {display:"flex",gap:10,alignItems:"flex-start",
-                    padding:"8px 0",
-                    borderBottom:ii<cat.items.length-1?"1px solid #F1F5F9":"none"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 7944}}
-                    , React.createElement('div', { style: {width:20,height:20,borderRadius:"50%",flexShrink:0,marginTop:1,
-                      background:item.done?"#059669":"#E2E8F0",
-                      display:"flex",alignItems:"center",justifyContent:"center"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 7947}}
-                      , React.createElement('span', { style: {fontSize:10,color:"#fff",fontWeight:700}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 7950}}
-                        , item.done?"✓":"!"
+                  React.createElement('div', { key: ii, style: {
+                    padding:"9px 10px",marginBottom:4,borderRadius:9,
+                    background:item.done?"#F0FDF4":"#FEF2F2",
+                    border:"1px solid "+(item.done?"#BBF7D0":"#FECACA"),
+                    display:"flex",alignItems:"flex-start",gap:8}},
+                    React.createElement('div', { style: {width:18,height:18,borderRadius:"50%",flexShrink:0,marginTop:1,
+                      background:item.done?C.green:"#DC2626",
+                      display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",fontWeight:700}},
+                      item.done?"\u2713":"!"
+                    )
+                    , React.createElement('div', { style: {flex:1,minWidth:0}},
+                      React.createElement('div', { style: {fontSize:12,fontWeight:600,color:item.done?C.green:"#DC2626",lineHeight:1.3}},
+                        item.label
+                      )
+                      , item.hint&&!item.done&&(
+                        React.createElement('div', { style: {fontSize:10,color:"#92400E",marginTop:2,lineHeight:1.4}},
+                          item.hint
+                        )
                       )
                     )
-                    , React.createElement('div', { style: {flex:1}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 7954}}
-                      , React.createElement('div', { style: {fontSize:12,fontWeight:600,
-                        color:item.done?C.ink:C.muted}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 7955}}, item.label)
-                      , React.createElement('div', { style: {fontSize:10,color:C.muted,marginTop:2,lineHeight:1.5}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 7957}}
-                        , item.desc
+                    , item.nav&&!item.done&&onNav&&(
+                      React.createElement('button', { onClick: ()=>onNav(item.nav),
+                        style: {flexShrink:0,padding:"3px 8px",background:"#DC2626",border:"none",
+                          borderRadius:6,color:"#fff",fontSize:10,fontWeight:700,
+                          cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}},
+                        "Fix \u2192"
                       )
                     )
                   )
@@ -8269,8 +8266,50 @@ function DeadlinesScreen({profile,onBack,setProfile}){
               )
             ))
 
+            , (()=>{
+              const allItems = rev360Items.flatMap(cat=>cat.items);
+              const firstIncomplete = allItems.find(item=>!item.done);
+              const allDone = !firstIncomplete;
+              if(allDone) return React.createElement('div', { style: {
+                background:"linear-gradient(135deg,#065F46,#059669)",
+                borderRadius:12,padding:"14px 16px",marginBottom:10,color:"#fff",
+                display:"flex",alignItems:"center",justifyContent:"space-between"}},
+                React.createElement('div', null,
+                  React.createElement('div', { style: {fontSize:13,fontWeight:700}}, "\uD83C\uDF89 All items ready!")
+                  , React.createElement('div', { style: {fontSize:11,opacity:.75,marginTop:2}}, "You're ready to file on Rev360")
+                )
+                , onNav&&React.createElement('button', { onClick: ()=>onNav("taxsummary"),
+                  style: {padding:"7px 12px",background:"rgba(255,255,255,.2)",border:"1px solid rgba(255,255,255,.3)",
+                    borderRadius:8,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}},
+                  "Go to Rev360 \u2192"
+                )
+              );
+              return React.createElement('div', { style: {
+                background:"#FFFBEB",border:"1px solid #FDE68A",
+                borderRadius:12,padding:"12px 14px",marginBottom:10}},
+                React.createElement('div', { style: {fontSize:10,fontWeight:700,color:"#92400E",
+                  letterSpacing:".06em",marginBottom:6}}, "NEXT ACTION")
+                , React.createElement('div', { style: {fontSize:12,fontWeight:600,color:"#92400E",marginBottom:4}},
+                  firstIncomplete.label
+                )
+                , firstIncomplete.hint&&(
+                  React.createElement('div', { style: {fontSize:11,color:"#B45309",marginBottom:6,lineHeight:1.4}},
+                    firstIncomplete.hint
+                  )
+                )
+                , firstIncomplete.nav&&onNav&&(
+                  React.createElement('button', { onClick: ()=>onNav(firstIncomplete.nav),
+                    style: {padding:"7px 12px",background:"#D97706",border:"none",
+                      borderRadius:8,color:"#fff",fontSize:11,fontWeight:700,
+                      cursor:"pointer",fontFamily:"inherit"}},
+                    "Go there now \u2192"
+                  )
+                )
+              );
+            })()
+
             , React.createElement('div', { style: {fontSize:10,color:C.muted,textAlign:"center",
-              padding:"8px 16px",lineHeight:1.6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 7966}}, "TaxCalc.ng and TaxWise Nigeria are independent tools. They do not submit filings or remit taxes. Access Rev360 directly at"
+              padding:"8px 16px",lineHeight:1.6}}, "TaxCalc.ng and TaxWise Nigeria are independent tools. They do not submit filings or remit taxes. Access Rev360 directly at"
 
                      , " "
               , React.createElement('span', { style: {color:C.blue}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 7970}}, "rev360.nrs.gov.ng")
@@ -8516,11 +8555,50 @@ Personal drawings/withdrawals by sole traders are NOT salary and are NOT deducti
 `;
 
 function AgentScreen({profile,txns,onBack}){
-  const[msgs,setMsgs]=useState([{role:"assistant",text:`Hello${profile.name?` ${profile.name.split(" ")[0]}`:""}! I'm your TaxWise AI agent, trained on the Nigeria Tax Act 2025, Tax Administration Act 2025 and NRS Establishment Act 2025.\n\nI know your profile and transactions, so I can give you personalised tax advice. What would you like to know?`}]);
+  const agg = React.useMemo(()=>computeAggregates(txns,profile),[txns,profile]);
+  const isCompany = profile.mode==="company";
+  const firstName = profile.name?profile.name.split(" ")[0]:"";
+
+  const buildOpener = ()=>{
+    if(!txns||txns.length===0){
+      return "Hi"+(firstName?" "+firstName:"")+"! I'm your TaxWise AI Tax Agent.\n\n"
+        +"No transactions yet. Import a bank statement for a personalised tax position.\n\n"
+        +"Ask me anything about Nigerian tax law.";
+    }
+    const yr = new Date().getFullYear();
+    const mths = new Set(txns.filter(t=>t.compliance_status!=="excluded")
+      .map(t=>(t.date||"").slice(0,7)).filter(m=>m.startsWith(String(yr))));
+    const missing = (new Date().getMonth()+1) - mths.size;
+    const bal  = Math.max(0,(agg.estPIT||0)-(agg.payeIn||0)-(agg.whtIn||0));
+    const rfnd = Math.max(0,(agg.payeIn||0)+(agg.whtIn||0)-(agg.estPIT||0));
+    const kiv  = txns.filter(t=>t.compliance_status==="kiv").length;
+    const pend = txns.filter(t=>t.compliance_status==="pending"
+      &&classifyTxn(t.desc,t.type).compliance_required).length;
+    const urgent=[], watch=[], good=[];
+    if((agg.whtOut||0)>0) urgent.push("WHT of "+fmt(agg.whtOut)+" to remit — due 21st");
+    if((agg.vatPayable||0)>0) urgent.push("VAT of "+fmt(agg.vatPayable)+" due 21st");
+    if(pend>0) urgent.push(pend+" transaction(s) have unresolved compliance actions");
+    if(missing>0) watch.push(missing+" month(s) of "+yr+" not yet imported");
+    if(kiv>0) watch.push(kiv+" KIV transaction(s) need classification");
+    if(!isCompany&&bal>0) watch.push("Self-assessment balance: "+fmt(bal)+" due 31 Jul "+(yr+1));
+    if(!isCompany&&rfnd>0) good.push("Possible PIT refund of "+fmt(rfnd));
+    if(isCompany&&(agg.estCIT||0)>0) watch.push("Estimated CIT: "+fmt(agg.estCIT));
+    const lines = ["Hi"+(firstName?" "+firstName:"")+"! "+txns.length+" transactions analysed."];
+    if(agg.income>0) lines.push((isCompany?"Revenue":"Income")+": "+fmt(agg.income)
+      +(agg.expenses>0?"  |  Expenses: "+fmt(agg.expenses):"")
+      +(!isCompany&&(agg.estPIT||0)>0?"  |  Est. PIT: "+fmt(agg.estPIT||0):""));
+    if(urgent.length) lines.push("\nNeeds action:\n- "+urgent.join("\n- "));
+    if(watch.length)  lines.push("\nWatch:\n- "+watch.join("\n- "));
+    if(good.length)   lines.push("\nGood:\n- "+good.join("\n- "));
+    if(!urgent.length&&!watch.length&&!good.length) lines.push("\nAll clear.");
+    lines.push("\nAsk me anything or tap a suggestion.");
+    return lines.join("\n");
+  };
+
+  const[msgs,setMsgs]=useState(()=>[{role:"assistant",text:buildOpener()}]);
   const[input,setInput]=useState("");
   const[loading,setLoading]=useState(false);
   const endRef=useRef(null);
-  const agg=computeAggregates(txns,profile);
   useEffect(()=>{_optionalChain([endRef, 'access', _96 => _96.current, 'optionalAccess', _97 => _97.scrollIntoView, 'call', _98 => _98({behavior:"smooth"})]);},[msgs,loading]);
 
   const send=async()=>{
@@ -8567,12 +8645,16 @@ Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocale
   };
 
   const suggestions=profile.mode==="company"
-    ?["What is our CIT liability?","When must we file VAT?","Can we claim CA on our vehicle?","What PAYE do we owe?"]
-    :["How much PAYE on my salary?","When is my annual return due?","What is WHT and how does it affect me?","Am I eligible for rent relief?"];
+    ?["What is our CIT liability?","When must we file VAT?","Can we claim CA on our vehicle?","What PAYE do we owe?","How do we remit WHT?"]
+    :["How much PAYE on my salary?","When is my annual return due?","What is WHT and how does it affect me?","Am I eligible for rent relief?","How do I reduce my tax bill?"];
 
   return(
     React.createElement('div', { style: {display:"flex",flexDirection:"column",height:"100%",paddingBottom:0}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 8268}}
-      , React.createElement(Hdr, { title: "AI Tax Agent"  , onBack: onBack, subtitle: "NTA 2025 · NTAA 2025 · NRS Act 2025"        , __self: this, __source: {fileName: _jsxFileName, lineNumber: 8269}})
+      , React.createElement(Hdr, { title: "AI Tax Agent"  , onBack: onBack, subtitle: "NTA 2025 \u00B7 NTAA 2025 \u00B7 NRS Act 2025",
+        right: React.createElement('button', { onClick: ()=>setMsgs([{role:"assistant",text:buildOpener()}]),
+          style: {padding:"5px 10px",background:"#EFF6FF",border:"1px solid #BFDBFE",
+            borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",
+            color:C.blue,fontFamily:"inherit"}}, "\u21BA Refresh"), __self: this, __source: {fileName: _jsxFileName, lineNumber: 8269}})
       , React.createElement('div', { style: {flex:1,overflowY:"auto",padding:"12px 14px 8px",display:"flex",flexDirection:"column",gap:8}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 8270}}
         , msgs.map((m,i)=>(
           m.role==="assistant"?(
@@ -8596,9 +8678,12 @@ Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocale
         )
         , React.createElement('div', { ref: endRef, __self: this, __source: {fileName: _jsxFileName, lineNumber: 8291}})
       )
-      , msgs.length<=1&&(
-        React.createElement('div', { style: {padding:"0 14px 8px",display:"flex",flexWrap:"wrap",gap:6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 8294}}
-          , suggestions.map(s=>React.createElement('button', { key: s, className: "chip", onClick: ()=>setInput(s), __self: this, __source: {fileName: _jsxFileName, lineNumber: 8295}}, s))
+      , msgs.length<=3&&(
+        React.createElement('div', { style: {padding:"0 14px 6px",display:"flex",flexWrap:"wrap",gap:5}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 8294}}
+          , suggestions.slice(0,msgs.length<=1?5:3).map(s=>(
+            React.createElement('button', { key: s, className: "chip", onClick: ()=>setInput(s),
+              style: {fontSize:10,padding:"5px 9px"}}, s)
+          ))
         )
       )
       , React.createElement('div', { style: {padding:"8px 14px max(18px,env(safe-area-inset-bottom))",borderTop:"1px solid #E2E8F0",display:"flex",gap:8,background:"#fff"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 8298}}
@@ -10439,7 +10524,7 @@ function App(){
       case "dashboard":  return React.createElement(Dashboard, { key: profileKey, profile: profile, txns: txns, kiv: kiv, onNav: nav, setProfile: setProfile, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10133}});
       case "journal":    return React.createElement(JournalScreen, { key: profileKey, txns: txns, setTxns: setTxns, kiv: kiv, setKiv: setKiv, onNav: nav, profile: profile, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10134}});
       case "calculate":  return React.createElement(CalculateScreen, { key: profile.empCategory+profile.mode, profile: profile, txns: txns, onBack: back, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10135}});
-      case "deadlines":  return React.createElement(DeadlinesScreen, { key: profileKey, profile: profile, setProfile: setProfile, txns: txns, onBack: back, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10136}});
+      case "deadlines":  return React.createElement(DeadlinesScreen, { key: profileKey, profile: profile, setProfile: setProfile, txns: txns, onBack: back, onNav: nav, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10136}});
       case "vat":        return React.createElement(VATScreen, { key: profileKey, profile: profile, txns: txns, onBack: back, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10137}});
       case "faq":        return React.createElement(FAQScreen, { onBack: back, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10138}});
       case "subscribe":  return canViewBilling ? React.createElement(SubscriptionScreen, { profile: profile, authUser: authUser, sub: sub, onBack: back, onSubscribed: ()=>{getSubscription(authUser.id).then(setSub);back();}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 10139}}) : React.createElement(AccessDenied, { msg: "Subscription & Billing — Admin role required."      , __self: this, __source: {fileName: _jsxFileName, lineNumber: 10139}});

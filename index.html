@@ -386,6 +386,7 @@ async function syncPush(userId, store){
       sector: p.sector, year_end: p.yearEnd,
       data_sources: p.dataSources||[],
       onboarded: p.onboarded||false,
+      email_reminders: p.emailReminders||false,
       updated_at: new Date().toISOString(),
     });
     if((store.transactions||[]).length){

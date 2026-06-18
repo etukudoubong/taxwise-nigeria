@@ -368,6 +368,9 @@ async function syncPull(userId, profileId){
         dataSources: activeProf.data_sources||[],
         onboarded: activeProf.onboarded,
         emailReminders: activeProf.email_reminders||false,
+        businessRegStatus: activeProf.business_reg_status||null,
+        businessAccountType: activeProf.business_account_type||null,
+        directorPayMethod: activeProf.director_pay_method||null,
       };
     }
     if(txns.data) store.transactions = txns.data.map(t=>({
@@ -402,6 +405,9 @@ async function syncPush(userId, store){
       data_sources: p.dataSources||[],
       onboarded: p.onboarded||false,
       email_reminders: p.emailReminders||false,
+      business_reg_status: p.businessRegStatus||null,
+      business_account_type: p.businessAccountType||null,
+      director_pay_method: p.directorPayMethod||null,
       updated_at: new Date().toISOString(),
     });
     if((store.transactions||[]).length){
@@ -1000,10 +1006,24 @@ function computeAggregates(txns, profile){
         || descLower.includes("plus vat")
         || descLower.includes("incl. vat")
         || descLower.includes("incl vat");
-      if(vatExplicit && (r.head==="VAT+CIT"||r.head==="WHT+VAT") && isVatReg){
-        const vat=t.amount*.075;
-        vatOut+=vat;
-        schedules.vatOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:vat,rate:"7.5%",type:"Output VAT",law:"NTA 2025 Ch.Four Sec 52"});
+      // GAP 6 FIX: Honour vatSupplyType for mixed supplies
+      // vatSupplyType: "standard" (7.5%), "zero" (0% but input VAT recoverable), "exempt" (no VAT, no recovery)
+      const supplyType = t.vatSupplyType || "standard";
+      if(vatExplicit && isVatReg && supplyType !== "exempt"){
+        const vatRate = supplyType === "zero" ? 0 : 0.075;
+        const vat = t.amount * vatRate;
+        if(supplyType === "standard"){
+          vatOut+=vat;
+          schedules.vatOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:vat,rate:"7.5%",type:"Output VAT",law:"NTA 2025 Ch.Four Sec 52"});
+        }
+        // Zero-rated: no VAT collected but flag for input VAT recovery eligibility
+        if(supplyType === "zero"){
+          schedules.vatOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:0,rate:"0%",type:"Zero-rated Supply",law:"NTA 2025 Ch.Four — exports, medical, food, education"});
+        }
+      }
+      // Exempt supplies: explicitly excluded from VAT computation
+      if(vatExplicit && isVatReg && supplyType === "exempt"){
+        schedules.vatOut.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:0,rate:"N/A",type:"Exempt Supply (no VAT)",law:"NTA 2025 Ch.Four — petroleum, land, transport, EVs"});
       }
 
       // PAYE credit: Cat A always; Cat D only if D1 (employer deducts)
@@ -2230,6 +2250,101 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
                      , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 1850}}, "Rent relief of "   , fmt(Math.min((data.rentPaid||0)*.2,500000))), " will be applied (20% of ₦"
                        , (data.rentPaid||0).toLocaleString(), ", capped at ₦500,000)."
                   )
+                )
+              )
+            )
+          )
+
+          /* ── CAT C: BUSINESS REGISTRATION ROUTING (GAP 10) ── */
+          , data.empCategory==="C"&&(
+            React.createElement(React.Fragment, null
+              , React.createElement('div', { className: "fg"}
+                , React.createElement('label', { className: "lbl"}, "IS YOUR BUSINESS FORMALLY REGISTERED?")
+                , React.createElement('div', { style: {fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}},
+                  "This determines which tax pathway applies. Registered businesses (CAC-registered sole proprietorships or LTDs) may have different tax obligations from unregistered freelancers/traders."
+                )
+                , React.createElement('div', { style: {display:"flex",flexDirection:"column",gap:8}}
+                  , [
+                    {v:"registered",   label:"Yes — registered with CAC",          sub:"Sole proprietorship, LTD, or other incorporated entity"},
+                    {v:"unregistered", label:"No — informal / freelance / trader", sub:"Income is personal income taxed under direct assessment"},
+                  ].map(function(opt){
+                    var sel = (data.businessRegStatus||"") === opt.v;
+                    return React.createElement('div', { key: opt.v,
+                      onClick: function(){set("businessRegStatus", opt.v);},
+                      style: {borderRadius:10,border:"2px solid "+(sel?C.green:C.border),
+                        padding:"10px 14px",cursor:"pointer",
+                        background:sel?"#F0FDF4":"#fff"}},
+                      React.createElement('div', { style: {fontSize:13,fontWeight:700,color:sel?C.green:C.ink}}, opt.label),
+                      React.createElement('div', { style: {fontSize:10,color:C.muted,marginTop:2}}, opt.sub)
+                    );
+                  })
+                )
+              )
+              , data.businessRegStatus==="registered"&&(
+                React.createElement(React.Fragment, null
+                  , React.createElement('div', { className: "fg"}
+                    , React.createElement('label', { className: "lbl"}, "DO CLIENTS PAY INTO A DEDICATED BUSINESS ACCOUNT OR YOUR PERSONAL ACCOUNT?")
+                    , React.createElement('div', { style: {fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}},
+                      "If clients pay into your personal account, TaxWise will help you tag those credits as business revenue separately from personal inflows."
+                    )
+                    , React.createElement('div', { style: {display:"flex",gap:8}}
+                      , [
+                        {v:"personal",  label:"Personal account"},
+                        {v:"business",  label:"Dedicated business account"},
+                        {v:"both",      label:"Both accounts"},
+                      ].map(function(opt){
+                        var sel = (data.businessAccountType||"") === opt.v;
+                        return React.createElement('button', { key: opt.v,
+                          onClick: function(){set("businessAccountType", opt.v);},
+                          style: {flex:1,padding:"9px 8px",fontSize:11,fontWeight:700,
+                            border:"1.5px solid "+(sel?C.blue:C.border),
+                            background:sel?C.blueLight:"#fff",borderRadius:8,
+                            cursor:"pointer",fontFamily:"inherit",
+                            color:sel?C.blue:C.muted}}, opt.label);
+                      })
+                    )
+                  )
+                  , data.businessAccountType==="personal"&&(
+                    React.createElement('div', { style: {background:"#FEF9C3",border:"1px solid #FDE68A",borderRadius:10,padding:"10px 12px",fontSize:11,color:"#92400E",lineHeight:1.6}},
+                      React.createElement('strong', null, "Important: "),
+                      "When importing your bank statement, use the Client Tag feature to bulk-tag credits from the same corporate sender as business revenue. This separates client payments from personal inflows and prevents personal transfers from inflating your taxable income."
+                    )
+                  )
+                  , React.createElement('div', { className: "fg"}
+                    , React.createElement('label', { className: "lbl"}, "DO YOU PAY YOURSELF A SALARY OR TAKE DRAWINGS FROM THE BUSINESS?")
+                    , React.createElement('div', { style: {display:"flex",gap:8}}
+                      , [
+                        {v:"salary",   label:"Formal salary (PAYE)"},
+                        {v:"dividend", label:"Dividends (WHT)"},
+                        {v:"drawings", label:"Drawings / loans"},
+                        {v:"none",     label:"Not yet"},
+                      ].map(function(opt){
+                        var sel = (data.directorPayMethod||"") === opt.v;
+                        return React.createElement('button', { key: opt.v,
+                          onClick: function(){set("directorPayMethod", opt.v);},
+                          style: {flex:1,padding:"9px 6px",fontSize:10,fontWeight:700,
+                            border:"1.5px solid "+(sel?C.blue:C.border),
+                            background:sel?C.blueLight:"#fff",borderRadius:8,
+                            cursor:"pointer",fontFamily:"inherit",
+                            color:sel?C.blue:C.muted}}, opt.label);
+                      })
+                    )
+                    , data.directorPayMethod==="salary"&&React.createElement('div', { style: {marginTop:6,fontSize:10,color:C.blue,padding:"6px 8px",background:C.blueLight,borderRadius:6,lineHeight:1.5}},
+                      "Formal salary: the company deducts PAYE before paying you. Tag credits from your company as Director Salary in TxnEditScreen. The PAYE your company deducted is a credit against your personal PIT."
+                    )
+                    , data.directorPayMethod==="dividend"&&React.createElement('div', { style: {marginTop:6,fontSize:10,color:C.purple,padding:"6px 8px",background:C.purpleBg,borderRadius:6,lineHeight:1.5}},
+                      "Dividends: your company deducts 10% WHT before paying you. Tag credits from your company as Director Dividend. The WHT deducted is your advance tax credit."
+                    )
+                    , data.directorPayMethod==="drawings"&&React.createElement('div', { style: {marginTop:6,fontSize:10,color:C.green,padding:"6px 8px",background:"#F0FDF4",borderRadius:6,lineHeight:1.5}},
+                      "Drawings are not a salary — they are not taxed as personal income in your hands (they are taxed at the company level). Tag credits from your company as Director Loan Repayment in TxnEditScreen."
+                    )
+                  )
+                )
+              )
+              , data.businessRegStatus==="unregistered"&&(
+                React.createElement('div', { style: {background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,padding:"12px 14px",fontSize:11,color:C.blue,lineHeight:1.6}},
+                  React.createElement('strong', null, "Unregistered business: "),
+                  "All your business income is personal income taxed under Direct Assessment. Tax is computed on NET PROFIT (revenue minus allowable costs). When you import bank statements, tag income credits as Business/Trade revenue and tag corresponding expense debits as Business/Trade expenses to arrive at your true taxable profit."
                 )
               )
             )
@@ -5252,6 +5367,30 @@ function TxnEditScreen({txn, onSave, onDelete, onBack}){
                 )
               ):null;
             })()
+          )
+        )
+
+        /* GAP 6: VAT supply type for income transactions */
+        , edit.type==="income"&&edit.vatFlag&&(
+          React.createElement('div', { className: "fg"}
+            , React.createElement('label', { className: "lbl"}, "VAT SUPPLY TYPE — NTA 2025 Ch.Four")
+            , React.createElement('div', { style: {fontSize:11,color:C.muted,marginBottom:8,lineHeight:1.5}},
+              "VAT-registered businesses must classify each supply. Standard-rated (7.5%): general goods/services. Zero-rated (0%): exports, medical goods, food, education — input VAT still recoverable. Exempt: petroleum, land, transport, EVs — no VAT charged and no input VAT recovery."
+            )
+            , React.createElement('div', { style: {display:"flex",gap:6,flexWrap:"wrap"}},
+              [{v:"standard",l:"Standard 7.5%",c:C.amber},
+               {v:"zero",    l:"Zero-rated 0%",c:C.blue},
+               {v:"exempt",  l:"Exempt",       c:C.muted}].map(function(s){
+                var sel=(edit.vatSupplyType||"standard")===s.v;
+                return React.createElement('button', {key:s.v,
+                  onClick:function(){set("vatSupplyType",s.v);},
+                  style:{padding:"7px 12px",fontSize:11,fontWeight:700,fontFamily:"inherit",
+                    cursor:"pointer",borderRadius:8,
+                    border:"1.5px solid "+(sel?s.c:C.border),
+                    background:sel?"#FFFBEB":"#fff",
+                    color:sel?s.c:C.muted}},s.l);
+              })
+            )
           )
         )
 
@@ -10787,7 +10926,8 @@ function App(){
       saveSettings({ownAccounts:next,importRules});
       // Retroactively reclassify existing transactions with updated own accounts
       setTxnsRaw(prevTxns=>{
-        const reclassified = applyImportRules(prevTxns, next, importRules, true, profile);
+        const reclassified_ = applyImportRules(prevTxns, next, importRules, true, profile);
+        const reclassified = detectReimbursementPairs(reclassified_);
         saveStore({profile,transactions:reclassified,kiv,employees,assets,connectedBanks,ownAccounts:next,importRules});
         return reclassified;
       });
@@ -10802,7 +10942,8 @@ function App(){
       saveSettings({ownAccounts,importRules:next});
       // Retroactively reclassify existing transactions with updated rules
       setTxnsRaw(prevTxns=>{
-        const reclassified = applyImportRules(prevTxns, ownAccounts, next, true, profile);
+        const reclassified_ = applyImportRules(prevTxns, ownAccounts, next, true, profile);
+        const reclassified = detectReimbursementPairs(reclassified_);
         saveStore({profile,transactions:reclassified,kiv,employees,assets,connectedBanks,ownAccounts,importRules:next});
         return reclassified;
       });
@@ -11933,6 +12074,82 @@ function applyImportRules(transactions, ownAccounts=[], importRules=[], retroact
       }
     }
 
+    return t;
+  });
+}
+
+// GAP 12: Debit-credit reimbursement pairing engine
+// Detects debit transactions followed within 14 days by an identical/near-identical credit
+// from a corporate/business source — flags as probable expense reimbursement
+function detectReimbursementPairs(transactions){
+  const expenses = transactions.filter(t=>t.type==="expense"&&t.amount>0&&!t.reimbPaired);
+  const incomes  = transactions.filter(t=>t.type==="income"&&t.amount>0&&!t.reimbPaired);
+  const paired   = new Set();
+  const suggestions = [];
+
+  for(const exp of expenses){
+    if(paired.has(exp.id)) continue;
+    const expDate = new Date(exp.date||"");
+    if(isNaN(expDate)) continue;
+
+    for(const inc of incomes){
+      if(paired.has(inc.id)) continue;
+      const incDate = new Date(inc.date||"");
+      if(isNaN(incDate)) continue;
+
+      // Credit must come AFTER the debit
+      const daysDiff = (incDate - expDate) / 86400000;
+      if(daysDiff < 0 || daysDiff > 14) continue;
+
+      // Amount must match within 2%
+      const amtRatio = Math.abs(inc.amount - exp.amount) / Math.max(exp.amount, 1);
+      if(amtRatio > 0.02) continue;
+
+      // Income should look like a corporate/internal transfer
+      const incDesc = (inc.desc||"").toLowerCase();
+      const looksInternal = incDesc.includes("reimb")||incDesc.includes("refund")||
+        incDesc.includes("expense")||incDesc.includes("recov")||
+        incDesc.includes("trf")||incDesc.includes("transfer")||
+        incDesc.includes("ltd")||incDesc.includes("limited")||
+        incDesc.includes("nig")||incDesc.includes("plc");
+
+      if(!looksInternal) continue;
+
+      // Only flag if expense is > 5000 (filter trivial amounts)
+      if(exp.amount < 5000) continue;
+
+      paired.add(exp.id);
+      paired.add(inc.id);
+      suggestions.push({
+        expId: exp.id,
+        incId: inc.id,
+        amount: exp.amount,
+        expDesc: exp.desc,
+        incDesc: inc.desc,
+        expDate: exp.date,
+        incDate: inc.date,
+        daysDiff: Math.round(daysDiff),
+      });
+      break;
+    }
+  }
+
+  // Return transactions with reimbursement pair suggestions flagged
+  return transactions.map(t=>{
+    const pair = suggestions.find(s=>s.incId===t.id);
+    if(pair){
+      return {...t,
+        possibleReimb: true,
+        reimbPairExpId: pair.expId,
+        reimbPairAmount: pair.amount,
+        reimbPairExpDesc: pair.expDesc,
+        autoRule: "Possible reimbursement: matches debit of "+
+          "N"+pair.amount.toLocaleString()+" on "+pair.expDate+
+          " ("+pair.daysDiff+" day"+(pair.daysDiff!==1?"s":"")+" gap). "+
+          "Confirm in Edit Transaction if this is a business expense refund.",
+        needsReview: true,
+      };
+    }
     return t;
   });
 }

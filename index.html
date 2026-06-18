@@ -12204,6 +12204,36 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
   const [dateFrom, setDateFrom] = useState(""); // optional date range filter
   const [dateTo,   setDateTo]   = useState("");
   const [payerClassifications, setPayerClassifications] = useState({}); // FIX 3: payer group -> classification
+  const [reviewPage, setReviewPage] = useState(0); // PERFORMANCE: paginate large transaction lists
+  const REVIEW_PAGE_SIZE = 100;
+
+  // PERFORMANCE FIX: memoize expensive grouping/filtering so it only recomputes
+  // when the preview array actually changes, not on every checkbox click re-render.
+  // Critical for large imports (5,000+ transactions).
+  const whtItemsMemo = React.useMemo(function(){
+    return preview.filter(function(t){return t.whtShortfall&&t.included&&t.type==="income";});
+  }, [preview]);
+
+  const recurringGroupsMemo = React.useMemo(function(){
+    const normalisePayer = function(desc){
+      return (desc||"")
+        .toLowerCase()
+        .replace(/\d{6,}/g,"")
+        .replace(/\d{2}[\/\-]\d{2}[\/\-]\d{2,4}/g,"")
+        .replace(/[^a-z\s]/g,"")
+        .trim()
+        .split(/\s+/).slice(0,4).join(" ");
+    };
+    const incomeItems = preview.filter(function(t){return t.type==="income"&&t.included&&!t.whtShortfall;});
+    const groups = {};
+    incomeItems.forEach(function(t){
+      const key = normalisePayer(t.desc);
+      if(key.length<4) return;
+      if(!groups[key]) groups[key]=[];
+      groups[key].push(t);
+    });
+    return Object.entries(groups).filter(function(g){return g[1].length>=2;});
+  }, [preview]);
 
   const parseCSVText = (text) => {
     const lines = text.split(/\r?\n/).filter(l=>l.trim());
@@ -12542,6 +12572,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
             const rulesApplied3 = applyImportRules(formatted2, ownAccounts, importRules, profile);
             const dedupApplied3 = detectDuplicates(rulesApplied3, txns);
             setPreview(dedupApplied3);
+            setReviewPage(0);
             setMode("map");
             setProcessing(false);
             return;
@@ -12693,6 +12724,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     const rulesApplied2 = applyImportRules(formatted, ownAccounts, importRules, profile);
     const dedupApplied2 = detectDuplicates(rulesApplied2, txns);
     setPreview(dedupApplied2);
+            setReviewPage(0);
     setProcessing(false);
     setMode("review");
   };
@@ -12787,6 +12819,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
     const rulesApplied = applyImportRules(rangeFiltered, ownAccounts, importRules);
     const dedupApplied = detectDuplicates(rulesApplied, txns);
     setPreview(dedupApplied);
+            setReviewPage(0);
     setMode("review");
   };
 
@@ -13024,26 +13057,11 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
 
         /* ── Recurring Credit Payer Grouping (FIX 3) ── */
         , (()=>{
-          // Group income transactions by a normalised payer key (first ~24 chars of narration, stripped of dates/refs)
-          const normalisePayer = function(desc){
-            return (desc||"")
-              .toLowerCase()
-              .replace(/\d{6,}/g,"")           // strip long reference numbers
-              .replace(/\d{2}[\/\-]\d{2}[\/\-]\d{2,4}/g,"") // strip dates
-              .replace(/[^a-z\s]/g,"")          // strip punctuation/numbers
-              .trim()
-              .split(/\s+/).slice(0,4).join(" "); // first 4 words
-          };
-          const incomeItems = preview.filter(function(t){return t.type==="income"&&t.included&&!t.whtShortfall;});
-          const groups = {};
-          incomeItems.forEach(function(t){
-            const key = normalisePayer(t.desc);
-            if(key.length<4) return; // too short/generic to group meaningfully
-            if(!groups[key]) groups[key]=[];
-            groups[key].push(t);
-          });
-          const recurringGroups = Object.entries(groups).filter(function(g){return g[1].length>=2;});
+          const recurringGroups = recurringGroupsMemo;
           if(!recurringGroups.length) return null;
+          // Cap rendering to first 30 groups for performance on very large imports
+          const displayGroups = recurringGroups.length > 30 ? recurringGroups.slice(0,30) : recurringGroups;
+          const hiddenCount = recurringGroups.length - displayGroups.length;
 
           const classOptions = [
             {v:"business_revenue", l:"Business / Client Revenue (taxable)"},
@@ -13061,7 +13079,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
             , React.createElement('div', { style: {fontSize:10,color:"#1D4ED8",marginTop:2,marginBottom:8}}
               , recurringGroups.length, " sender(s) appear ", recurringGroups.length>1?"multiple times":"repeatedly", " in this statement. Confirm or correct how each group should be classified \u2014 this applies the same classification to all transactions from that sender in this import."
             )
-            , recurringGroups.map(function(g){
+            , displayGroups.map(function(g){
               const key = g[0]; const items = g[1];
               const total = items.reduce(function(s,t){return s+t.amount;},0);
               const sample = items[0].desc;
@@ -13126,13 +13144,19 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
                 )
               );
             })
+            , hiddenCount>0&&React.createElement('div', { style: {fontSize:10,color:"#1D4ED8",marginTop:4}},
+              "+"+hiddenCount+" more recurring payer group(s) not shown."
+            )
           );
         })()
 
                 /* ── WHT Shortfall Banner — with dropdown classification (FIX 2) ── */
         , (()=>{
-          const whtItems = preview.filter(t=>t.whtShortfall&&t.included&&t.type==="income");
-          if(!whtItems.length) return null;
+          const whtItemsFull = whtItemsMemo;
+          if(!whtItemsFull.length) return null;
+          // Cap rendering to first 30 for performance on very large imports
+          const whtItems = whtItemsFull.length > 30 ? whtItemsFull.slice(0,30) : whtItemsFull;
+          const whtHiddenCount = whtItemsFull.length - whtItems.length;
           const classOptions = [
             {v:"wht_confirmed", l:"Yes — WHT was deducted (use gross amount)"},
             {v:"full_amount",   l:"No — this is the full amount received"},
@@ -13219,11 +13243,12 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
                   )
                 );
               })
+              , whtHiddenCount>0&&React.createElement('div', { style: {fontSize:10,color:"#6D28D9",marginTop:4}},
+                "+"+whtHiddenCount+" more flagged transaction(s) not shown — review in Journal after import."
+              )
             )
           );
         })()
-
-                /* Asset confirmation banner */
         , preview.some(t=>t.needsCapexConfirm||t.type==="asset")&&(
           React.createElement('div', { style: {background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:10,
             padding:"10px 12px",marginBottom:10,fontSize:11,color:"#92400E",lineHeight:1.6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 12013}}
@@ -13243,7 +13268,31 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
           )
         )
 
-        , preview.map((t,i)=>{
+        /* PERFORMANCE: paginate large transaction lists to avoid rendering thousands of rows at once */
+        , preview.length > REVIEW_PAGE_SIZE && React.createElement('div', { style: {
+            display:"flex",justifyContent:"space-between",alignItems:"center",
+            padding:"8px 12px",marginBottom:6,background:"#F8FAFC",borderRadius:8,fontSize:11}},
+          React.createElement('span', { style: {color:C.muted,fontWeight:600}},
+            "Showing "+(reviewPage*REVIEW_PAGE_SIZE+1)+"–"+Math.min((reviewPage+1)*REVIEW_PAGE_SIZE,preview.length)+" of "+preview.length
+          ),
+          React.createElement('div', { style: {display:"flex",gap:6}},
+            React.createElement('button', { onClick: ()=>setReviewPage(p=>Math.max(0,p-1)), disabled: reviewPage===0,
+              style: {padding:"5px 10px",fontSize:11,fontWeight:700,borderRadius:6,
+                border:"1px solid "+C.border,background:reviewPage===0?"#F1F5F9":"#fff",
+                color:reviewPage===0?C.muted:C.blue,cursor:reviewPage===0?"default":"pointer",fontFamily:"inherit"}}, "← Prev"
+            ),
+            React.createElement('button', { onClick: ()=>setReviewPage(p=>Math.min(Math.ceil(preview.length/REVIEW_PAGE_SIZE)-1,p+1)),
+              disabled: (reviewPage+1)*REVIEW_PAGE_SIZE>=preview.length,
+              style: {padding:"5px 10px",fontSize:11,fontWeight:700,borderRadius:6,
+                border:"1px solid "+C.border,
+                background:(reviewPage+1)*REVIEW_PAGE_SIZE>=preview.length?"#F1F5F9":"#fff",
+                color:(reviewPage+1)*REVIEW_PAGE_SIZE>=preview.length?C.muted:C.blue,
+                cursor:(reviewPage+1)*REVIEW_PAGE_SIZE>=preview.length?"default":"pointer",fontFamily:"inherit"}}, "Next →"
+            )
+          )
+        )
+
+        , preview.slice(reviewPage*REVIEW_PAGE_SIZE, (reviewPage+1)*REVIEW_PAGE_SIZE).map((t,i)=>{
           const isAsset = t.type==="asset";
           const rowBorder = isAsset
             ? "1.5px solid #F59E0B"

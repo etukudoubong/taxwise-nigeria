@@ -4744,25 +4744,47 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav,profile}){
         )
       )
 
-      /* ── Tab pills ─────────────────────────────────────────── */
-      , React.createElement('div', { className: "tabs", style: {padding:"4px 12px 0"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 4102}}
-        , ["all","income","expense","vat","wht","paye","cgt","kiv","personal","excluded"].map(f=>{
+      /* ── Tab pills — only show tabs relevant to this user's data/category ── */
+      , React.createElement('div', { className: "tabs", style: {padding:"4px 12px 0"}}
+        , (()=>{
+          const isCompany_ = profile.mode==="company";
+          const cat_ = profile.empCategory||"A";
           const excCount = txns.filter(t=>t.compliance_status==="excluded").length;
           const personalCount = txns.filter(t=>t.taxStream==="personal_transfer"||t.taxStream==="reimbursement"||t.taxStream==="own_account_transfer"||t.taxStream==="own_savings_transfer").length;
-          return(
+          const vatCount = txns.filter(t=>t.vatFlag).length;
+          const whtCount = txns.filter(t=>t.whtFlag||t.whtConfirmed).length;
+          const payeCount = txns.filter(t=>t.taxStream==="employment").length;
+          const cgtCount = txns.filter(t=>classifyTxn(t.desc,t.type).head==="CGT-EVENT").length;
+          // Always show: all, income, expense, kiv (if any), excluded (if any)
+          // Conditionally show: vat (if VAT-registered or has VAT txns), wht (if Cat C/D/company or has WHT txns),
+          // paye (if Cat A/D1 or has employment txns), cgt (if any CGT events), personal (if any)
+          const allTabs = [
+            {f:"all",      always:true},
+            {f:"income",   always:true},
+            {f:"expense",  always:true},
+            {f:"vat",      show: profile.vatRegistered || vatCount>0},
+            {f:"wht",      show: isCompany_ || cat_==="C" || cat_==="D" || whtCount>0},
+            {f:"paye",     show: isCompany_ || cat_==="A" || cat_==="D" || payeCount>0},
+            {f:"cgt",      show: cgtCount>0},
+            {f:"kiv",      show: (kivTxns&&kivTxns.length>0)},
+            {f:"personal", show: personalCount>0},
+            {f:"excluded", show: excCount>0},
+          ];
+          const visibleTabs = allTabs.filter(t=>t.always||t.show).map(t=>t.f);
+          return visibleTabs.map(f=>(
             React.createElement('button', { key: f, className: "tab", onClick: ()=>setFilter(f), style: {
               background:filter===f?(f==="excluded"?"#DC2626":f==="personal"?"#D97706":C.blue):"#fff",
               color:filter===f?"#fff":f==="excluded"?"#DC2626":f==="personal"?"#D97706":C.slate,
               borderColor:filter===f?(f==="excluded"?"#DC2626":f==="personal"?"#D97706":C.blue):f==="excluded"?"#FCA5A5":f==="personal"?"#FDE68A":C.border,
-            }, __self: this, __source: {fileName: _jsxFileName, lineNumber: 4107}}
+            }}
               , f==="kiv"?`⏸ KIV${kivTxns&&kivTxns.length>0?` (${kivTxns.length})`:""}`
                :f==="cgt"?"📊 CGT"
                :f==="personal"?`👥 Personal${personalCount>0?` (${personalCount})`:""}`
                :f==="excluded"?`✗ Excluded${excCount>0?` (${excCount})`:""}`
                :f.toUpperCase()
             )
-          );
-        })
+          ));
+        })()
       )
 
       , React.createElement('div', { className: "pad", style: {paddingTop:10}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 4122}}

@@ -1519,6 +1519,27 @@ function ScoreRing({score}){
   );
 }
 
+// Compact info tooltip — shows a small (i) icon; tapping reveals the legal/
+// explanatory text inline. Used in onboarding to keep the default view clean
+// while keeping full legal detail one tap away.
+function InfoTip({children, label="Why we ask this"}){
+  const [open, setOpen] = React.useState(false);
+  return React.createElement('div', { style: {marginBottom:open?8:4}}
+    , React.createElement('div', { onClick: ()=>setOpen(o=>!o),
+        style: {display:"inline-flex",alignItems:"center",gap:4,cursor:"pointer",
+          fontSize:10,fontWeight:700,color:C.blue}},
+        React.createElement('span', { style: {width:14,height:14,borderRadius:"50%",
+          background:C.blueLight,color:C.blue,display:"flex",alignItems:"center",
+          justifyContent:"center",fontSize:9,fontWeight:800}}, "i"),
+        open?"Hide details":label
+      )
+    , open&&React.createElement('div', { style: {fontSize:11,color:C.muted,marginTop:6,
+        lineHeight:1.6,padding:"8px 10px",background:"#F8FAFC",borderRadius:8}},
+        children
+      )
+  );
+}
+
 function OnboardingScreen({onComplete, editMode=false, initialData=null}){
   const[step,setStep]=useState(editMode?1:0);
   const[data,setData]=useState(initialData||{
@@ -1652,13 +1673,11 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
           )
           , data.empCategory==="A"&&(
             React.createElement(React.Fragment, null
-              , React.createElement('div', { className: "fg", __self: this, __source: {fileName: _jsxFileName, lineNumber: 1244}}
-                , React.createElement('label', { className: "lbl", __self: this, __source: {fileName: _jsxFileName, lineNumber: 1245}}, "WHICH DEDUCTIONS DOES YOUR EMPLOYER MAKE?"     )
-                , React.createElement('div', { style: {fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1246}}, "Tick each deduction your employer makes. For anything your employer does NOT deduct, we will ask whether you made the contribution yourself — because the law only allows a deduction for contributions "
-
-
-                           , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 1249}}, "actually made" ), "(NTA 2025 S.30(2)(a); PRA 2014 S.11)."
-
+              , React.createElement('div', { className: "fg"}
+                , React.createElement('label', { className: "lbl"}, "WHICH DEDUCTIONS DOES YOUR EMPLOYER MAKE?"     )
+                , React.createElement(InfoTip, { label:"Why we ask this"}
+                  , "Tick each deduction your employer makes. For anything your employer does NOT deduct, we will ask whether you made the contribution yourself — because the law only allows a deduction for contributions "
+                  , React.createElement('strong', null, "actually made" ), " (NTA 2025 S.30(2)(a); PRA 2014 S.11)."
                 )
                 , [
                   {k:"paye",    label:"PAYE (Income Tax)",
@@ -1702,15 +1721,11 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
                       )
                       /* If employer does NOT deduct (and it's claimable by self) — ask if employee self-contributed */
                       , !empDoes&&d.selfNote&&(
-                        React.createElement('div', { style: {padding:"10px 12px",background:"#FFFBEB",borderTop:"1px solid #FEF3C7"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1294}}
-                          , React.createElement('div', { style: {fontSize:11,color:"#92400E",marginBottom:8,lineHeight:1.5}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1295}}, "⚖ "
-                             , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 1296}}, "Your employer does not deduct "     , d.label, "."), " Did you make this contribution yourself directly?"
-
+                        React.createElement('div', { style: {padding:"10px 12px",background:"#FFFBEB",borderTop:"1px solid #FEF3C7"}}
+                          , React.createElement('div', { style: {fontSize:11,color:"#92400E",marginBottom:6,lineHeight:1.5}}, "⚖ "
+                             , React.createElement('strong', null, "Your employer does not deduct "     , d.label, "."), " Did you make this contribution yourself directly?"
                           )
-                          , React.createElement('div', { style: {fontSize:10,color:"#78350F",marginBottom:10,lineHeight:1.5,
-                            padding:"6px 8px",background:"rgba(255,255,255,.6)",borderRadius:6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1299}}
-                            , d.selfNote
-                          )
+                          , React.createElement(InfoTip, { label:"Details"}, d.selfNote)
                           , React.createElement('div', { style: S.rowGap8, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1303}}
                             , [{v:true,l:"Yes — I contributed myself"},{v:false,l:"No — not contributed"}].map(opt=>(
                               React.createElement('div', { key: String(opt.v), onClick: ()=>toggleSC(d.k),
@@ -1971,14 +1986,11 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
               )
 
               , data.rentPaid>0&&(
-                React.createElement('div', { className: "fg", __self: this, __source: {fileName: _jsxFileName, lineNumber: 1563}}
-                  , React.createElement('label', { className: "lbl", __self: this, __source: {fileName: _jsxFileName, lineNumber: 1564}}, "HAS YOUR EMPLOYER ALREADY INCLUDED YOUR RENT IN THE PAYE COMPUTATION?"          )
-                  , React.createElement('div', { style: {fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1565}}, "Some employers factor rent allowance or housing allowance into the PAYE calculation before remitting to the IRS. If your employer has already accounted for rent relief in your PAYE, claiming it again here would be "
-
-
-                             , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 1568}}, "double relief" ), " — which is a tax offence under NTAA 2025 S.70. Check your payslip or ask your HR/payroll department."
-
-
+                React.createElement('div', { className: "fg"}
+                  , React.createElement('label', { className: "lbl"}, "HAS YOUR EMPLOYER ALREADY INCLUDED YOUR RENT IN THE PAYE COMPUTATION?"          )
+                  , React.createElement(InfoTip, { label:"Why this matters"}
+                    , "Some employers factor rent allowance or housing allowance into the PAYE calculation before remitting to the IRS. If your employer has already accounted for rent relief in your PAYE, claiming it again here would be "
+                    , React.createElement('strong', null, "double relief" ), " — which is a tax offence under NTAA 2025 S.70. Check your payslip or ask your HR/payroll department."
                   )
                   , ["yes","no","unsure"].map(opt=>(
                     React.createElement('div', { key: opt, onClick: ()=>set("employerRentInPAYE",opt),
@@ -2039,14 +2051,13 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
           /* Cat B — employer makes NO deductions; ask what employee contributes themselves */
           , data.empCategory==="B"&&(
             React.createElement(React.Fragment, null
-              , React.createElement('div', { className: "ibox amber" , style: {marginBottom:4}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1631}}
-                , React.createElement('div', { className: "ititle", style: {color:C.amber}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1632}}, "Category B — Self-Assessment Required"    )
-                , React.createElement('p', { style: {fontSize:12,color:C.ink,lineHeight:1.6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1633}}, "Your employer does not deduct PAYE, pension, NHF or NHIS. Under NTA 2025, you must file a self-assessment return and pay PIT directly. All employment income — salary, overtime, bonuses, commissions, and allowances — is taxable. Reliefs are available "
-
-
-
-                       , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 1637}}, "only for contributions you actually make yourself"      ), " — you cannot claim a deduction for a contribution not made (NTA 2025 S.30(2)(a))."
-
+              , React.createElement('div', { className: "ibox amber" , style: {marginBottom:4}}
+                , React.createElement('div', { className: "ititle", style: {color:C.amber}}, "Category B — Self-Assessment Required"    )
+                , React.createElement('p', { style: {fontSize:12,color:C.ink,lineHeight:1.6,marginBottom:0}}, "Your employer does not deduct PAYE, pension, NHF or NHIS. You must file a self-assessment return and pay PIT directly."
+                )
+                , React.createElement(InfoTip, { label:"More detail"}
+                  , "All employment income — salary, overtime, bonuses, commissions, and allowances — is taxable. Reliefs are available "
+                  , React.createElement('strong', null, "only for contributions you actually make yourself"), " — you cannot claim a deduction for a contribution not made (NTA 2025 S.30(2)(a))."
                 )
               )
 
@@ -2068,11 +2079,10 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
               /* Employment benefits — only show if salary > minimum wage */
               , (data.monthlyBasicSalary||0)>70000&&(
                 React.createElement(React.Fragment, null
-                  , React.createElement('div', { className: "fg", __self: this, __source: {fileName: _jsxFileName, lineNumber: 1660}}
-                    , React.createElement('label', { className: "lbl", __self: this, __source: {fileName: _jsxFileName, lineNumber: 1661}}, "EMPLOYMENT BENEFITS & ALLOWANCES"   )
-                    , React.createElement('div', { style: {fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 1662}}, "All employment benefits are taxable under NTA 2025 S.3 unless specifically exempted. Enter the amounts you typically receive per month."
-
-
+                  , React.createElement('div', { className: "fg"}
+                    , React.createElement('label', { className: "lbl"}, "EMPLOYMENT BENEFITS & ALLOWANCES"   )
+                    , React.createElement(InfoTip, { label:"Why we ask this"}
+                      , "All employment benefits are taxable under NTA 2025 S.3 unless specifically exempted. Enter the amounts you typically receive per month."
                     )
 
                     /* Overtime */
@@ -2271,8 +2281,8 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
             React.createElement(React.Fragment, null
               , React.createElement('div', { className: "fg"}
                 , React.createElement('label', { className: "lbl"}, "IS YOUR BUSINESS FORMALLY REGISTERED?")
-                , React.createElement('div', { style: {fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}},
-                  "This determines which tax pathway applies. Registered businesses (CAC-registered sole proprietorships or LTDs) may have different tax obligations from unregistered freelancers/traders."
+                , React.createElement(InfoTip, { label:"Why we ask this"}
+                  , "This determines which tax pathway applies. Registered businesses (CAC-registered sole proprietorships or LTDs) may have different tax obligations from unregistered freelancers/traders."
                 )
                 , React.createElement('div', { style: {display:"flex",flexDirection:"column",gap:8}}
                   , [
@@ -2295,8 +2305,8 @@ function OnboardingScreen({onComplete, editMode=false, initialData=null}){
                 React.createElement(React.Fragment, null
                   , React.createElement('div', { className: "fg"}
                     , React.createElement('label', { className: "lbl"}, "DO CLIENTS PAY INTO A DEDICATED BUSINESS ACCOUNT OR YOUR PERSONAL ACCOUNT?")
-                    , React.createElement('div', { style: {fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.6}},
-                      "If clients pay into your personal account, TaxWise will help you tag those credits as business revenue separately from personal inflows."
+                    , React.createElement(InfoTip, { label:"Why we ask this"}
+                      , "If clients pay into your personal account, TaxWise will help you tag those credits as business revenue separately from personal inflows."
                     )
                     , React.createElement('div', { style: {display:"flex",gap:8}}
                       , [

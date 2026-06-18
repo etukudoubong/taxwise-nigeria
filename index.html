@@ -637,12 +637,25 @@ function computePIT(p){
 
 function computeCIT(profit,turnover,assets=0,isPro=false){
   const isSmall=turnover<=50e6&&assets<=250e6&&!isPro;
-  const cit=isSmall?0:profit*.30;
-  const dev=isSmall?0:profit*.04;
-  const minETR=turnover>=20e9?Math.max(0,profit*.15-cit-dev):0;
-  const total=cit+dev+minETR;
-  return{isSmall,tier:isSmall?"Small Company (0%)":"Standard (30%+4%)",
-    cit,dev,minETR,total,eff:profit?(total/profit)*100:0};
+  if(isSmall) return{isSmall,tier:"Small Company (0%)",cit:0,dev:0,minETR:0,minTax:0,applyMinTax:false,total:0,eff:0};
+  const cit=profit*.30;
+  const dev=profit*.04;
+  // GAP 3 FIX: Minimum tax — NTA 2025 S.34: 0.5% of gross turnover
+  // Applies when company has a loss OR when CIT+TET < minimum tax
+  // Exemptions: new companies in first 4 years, companies in agriculture, small companies
+  const minTax=turnover*0.005; // 0.5% of gross turnover
+  const grossTax=cit+dev;
+  // Global Minimum ETR (Pillar Two): applies only to MNEs with turnover >= N20bn
+  const minETR=turnover>=20e9?Math.max(0,profit*.15-grossTax):0;
+  const applyMinTax = profit<=0 || grossTax<minTax;
+  const effectiveTax = applyMinTax ? minTax : grossTax;
+  const total=effectiveTax+minETR;
+  return{isSmall,
+    tier:applyMinTax?"Minimum Tax (0.5% turnover)":"Standard (30%+4%)",
+    cit:applyMinTax?0:cit,
+    dev:applyMinTax?0:dev,
+    minETR,minTax,applyMinTax,
+    total,eff:turnover?(total/turnover)*100:0};
 }
 
 function computeWHT(amount,type){
@@ -958,6 +971,25 @@ function computeAggregates(txns, profile){
           schedules.whtIn.push({id:t.id,date:t.date,desc:t.desc,gross:t.amount,tax:wht,rate:"10%",type:"WHT Credit",status:"confirmed",law:"NTA 2025 Ch.Two Pt.IV"});
         }
       }
+      // GAP 14 FIX: Also pick up auto-detected WHT (round-percentage drop detection)
+      // whtShortfallRate is set by the import engine when a 5% or 10% drop is detected
+      // Wire it into whtIn so it actually reduces the PIT liability
+      if(!whtExplicit && t.whtShortfallRate && t.type==="income" && (isCatCD||isCompany)){
+        const whtAutoRate = t.whtShortfallRate/100;
+        const grossEst = Math.round(t.amount / (1 - whtAutoRate));
+        const whtAuto = grossEst - t.amount;
+        if(whtAuto>0){
+          whtIn+=whtAuto;
+          schedules.whtIn.push({
+            id:t.id, date:t.date, desc:t.desc,
+            gross:grossEst, tax:whtAuto,
+            rate:t.whtShortfallRate+"%",
+            type:"WHT Credit (auto-detected)",
+            status:"estimated — confirm in Journal",
+            law:"NTA 2025 Ch.Two Pt.IV / NTAA 2025 S.13"
+          });
+        }
+      }
 
       // VAT output: ONLY if VAT-registered AND taxpayer/AI has confirmed VAT was charged
       // (t.vatFlag===true) OR narration explicitly states "VAT"/"value added tax"
@@ -1158,18 +1190,35 @@ function computeAggregates(txns, profile){
     const terminalTaxable  = gratuityTaxable + severanceTaxable + leaveTaxable + otherTermTaxable;
 
     const pensionRelief  = pensionAllowed ? Math.round(employmentIncomeBase_ * 0.08)  : 0; // S.30(2)(a)(iii) — on employment income only
-    const nhfRelief      = nhfAllowed     ? Math.round(employmentIncomeBase_ * 0.025) : 0; // S.30(2)(a)(i) — on employment income only
+    // GAP 2 FIX: NHF auto-calculation — 2.5% of employment income when allowed
+    // Previously only used manually entered nhfAnnual from profile; now auto-computes from employment base
+    const nhfStored = _optionalChain([profile, 'optionalAccess', _23 => _23.nhfAnnual]) || 0;
+    const nhfRelief = nhfAllowed
+      ? (nhfStored > 0 ? nhfStored : Math.round(employmentIncomeBase_ * 0.025))
+      : 0; // S.30(2)(a)(i) — on employment income only
+
+    // GAP 1: NHIS auto-calculation — 1.75% of employment income (NHA 2022)
+    const nhisStored = _optionalChain([profile, 'optionalAccess', _24 => _24.nhisAnnual]) || 0;
+    const nhisAllowed2 = empDed.nhis || selfCont.nhis;
+    const nhisRelief = nhisAllowed2
+      ? (nhisStored > 0 ? nhisStored : Math.round(employmentIncomeBase_ * 0.0175))
+      : 0;
 
     // Rent relief: 20% of annual rent, max ₦500k — NTA 2025 S.30(2)(a)(vi)
     const rentPaid = _optionalChain([profile, 'optionalAccess', _21 => _21.rentPaid]) || 0;
     const employerRentInPAYE = _optionalChain([profile, 'optionalAccess', _22 => _22.employerRentInPAYE]) || "";
     const applyRentRelief = rentPaid > 0 && employerRentInPAYE !== "yes" && employerRentInPAYE !== "unsure";
     const rentRelief = applyRentRelief ? Math.min(rentPaid * 0.2, 500000) : 0;
-    const chargeableBase = Math.max(0, netIncome - pensionRelief - nhfRelief - rentRelief);
+    const chargeableBase = Math.max(0, netIncome - pensionRelief - nhfRelief - nhisRelief - rentRelief);
     // Add taxable portion of terminal benefits to chargeable income
     const chargeable = chargeableBase + terminalTaxable;
     const grossPIT = pitBands(chargeable);
-    estPIT = Math.max(0, grossPIT - payeIn - whtIn);
+    const pitBeforeCredits = Math.max(0, grossPIT - payeIn - whtIn);
+    // GAP 9 FIX: Minimum PIT — NTA 2025 S.37: 1% of gross income
+    // Applies when computed PIT < 1% of gross income (exemption: Cat E and income <= minimum wage threshold)
+    const grossIncomeForMinPIT = income; // total gross before any deductions
+    const minPIT = cat === "E" ? 0 : Math.round(grossIncomeForMinPIT * 0.01);
+    estPIT = Math.max(pitBeforeCredits, minPIT);
   }
 
   const employmentIncome = !isCompany ? employmentIncomeBase_ : 0;
@@ -1183,7 +1232,7 @@ function computeAggregates(txns, profile){
     vatOut, vatIn, vatNet, vatPayable:Math.max(0,vatNet), vatRefund:Math.max(0,-vatNet),
     whtIn, whtOut, payeIn, payeOut,
     cgtEvents:schedules.cgtEvents.length,
-    estCIT:isCompany?Math.max(0,income-expenses)*.30:0,
+    estCIT:isCompany?(()=>{ const r=computeCIT(Math.max(0,income-allowableExpenses),income,0,false); return r.total; })():0,
     estPIT,
     schedules,
     txnCount:txns.length,

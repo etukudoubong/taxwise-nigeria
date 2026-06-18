@@ -2766,6 +2766,34 @@ function ProfileSwitcher({allProfiles, activeProfileId, onSwitch, onAdd, sub}){
   );
 }
 
+// Reusable collapsible card — secondary/contextual info starts collapsed with
+// a one-line summary, expands on tap. Reduces visual crowding when many
+// conditional cards are relevant simultaneously.
+function CollapsibleCard({title, badge, badgeColor, summary, borderColor, defaultOpen=false, children}){
+  const [open, setOpen] = React.useState(defaultOpen);
+  return React.createElement('div', { className: "card", style: {
+    borderLeft: borderColor ? "3px solid "+borderColor : undefined,
+    cursor:"pointer", marginBottom:8}},
+    React.createElement('div', { onClick: ()=>setOpen(o=>!o),
+      style: {display:"flex",justifyContent:"space-between",alignItems:"center"}},
+      React.createElement('div', { style: {flex:1,minWidth:0}},
+        React.createElement('div', { style: {display:"flex",alignItems:"center",gap:8}},
+          React.createElement('div', { className: "ctitle", style: {marginBottom:0}}, title),
+          badge&&React.createElement('span', { style: {fontSize:9,fontWeight:700,padding:"2px 7px",
+            borderRadius:100,background:(badgeColor||C.amber)+"18",color:badgeColor||C.amber}}, badge)
+        ),
+        !open&&summary&&React.createElement('div', { style: {fontSize:11,color:C.muted,marginTop:4,
+          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, summary)
+      ),
+      React.createElement('div', { style: {fontSize:14,color:C.muted,flexShrink:0,marginLeft:8,
+        transform:open?"rotate(180deg)":"none",transition:"transform .15s"}}, "\u25BE")
+    ),
+    open&&React.createElement('div', { style: {marginTop:10,paddingTop:10,borderTop:"1px solid "+C.border}},
+      children
+    )
+  );
+}
+
 function Dashboard({profile,txns,kiv,onNav,setProfile,allProfiles,activeProfileId,onSwitchProfile,onAddProfile,sub}){
   // RBAC — same logic as App routing
   const memberRole_ = profile.member_role||"admin";
@@ -3784,44 +3812,37 @@ function Dashboard({profile,txns,kiv,onNav,setProfile,allProfiles,activeProfileI
           )
         )
 
-        /* ── Foreign Currency Salary Notice ──────────────────────── */
+        /* ── Foreign Currency Salary Notice (collapsible) ──────────── */
         , !isCompany&&profile.salaryCurrency&&profile.salaryCurrency!=="NGN"&&(profile.salaryFxRate||0)>0&&(
-          React.createElement('div', { className: "card", style: {borderLeft:`3px solid ${C.blue}`}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3196}}
-            , React.createElement('div', { style: {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3197}}
-              , React.createElement('div', { className: "ctitle", style: S.mb0, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3198}}, "FOREIGN CURRENCY SALARY"  )
-              , React.createElement('span', { style: {fontSize:10,fontWeight:700,padding:"2px 8px",
-                borderRadius:100,background:C.blueLight,color:C.blue}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3199}}
-                , profile.salaryCurrency
-              )
-            )
-            , React.createElement('div', { style: {display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3204}}
-              , React.createElement('div', { style: {background:"#F8FAFC",borderRadius:8,padding:"8px 10px"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3205}}
-                , React.createElement('div', { style: {fontSize:9,color:C.muted,marginBottom:1}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3206}}, "FOREIGN SALARY" )
-                , React.createElement('div', { style: S.ink13b, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3207}}
+          React.createElement(CollapsibleCard, {
+            title:"FOREIGN CURRENCY SALARY", badge:profile.salaryCurrency, badgeColor:C.blue, borderColor:C.blue,
+            summary:profile.salaryCurrency+" "+(profile.monthlyBasicSalary||0).toLocaleString()+"/mo \u2192 "+fmt((profile.monthlyBasicSalary||0)*(profile.salaryFxRate||0))+" at CBN rate"},
+            React.createElement('div', { style: {display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}
+              , React.createElement('div', { style: {background:"#F8FAFC",borderRadius:8,padding:"8px 10px"}}
+                , React.createElement('div', { style: {fontSize:9,color:C.muted,marginBottom:1}}, "FOREIGN SALARY" )
+                , React.createElement('div', { style: S.ink13b}
                   , profile.salaryCurrency, " " , (profile.monthlyBasicSalary||0).toLocaleString()
                 )
-                , React.createElement('div', { style: S.muted9, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3210}}, "per month" )
+                , React.createElement('div', { style: S.muted9}, "per month" )
               )
-              , React.createElement('div', { style: {background:"#F8FAFC",borderRadius:8,padding:"8px 10px"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3212}}
-                , React.createElement('div', { style: {fontSize:9,color:C.muted,marginBottom:1}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3213}}, "CBN RATE" )
-                , React.createElement('div', { style: {fontSize:13,fontWeight:700,color:C.amber}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3214}}, "₦"
+              , React.createElement('div', { style: {background:"#F8FAFC",borderRadius:8,padding:"8px 10px"}}
+                , React.createElement('div', { style: {fontSize:9,color:C.muted,marginBottom:1}}, "CBN RATE" )
+                , React.createElement('div', { style: {fontSize:13,fontWeight:700,color:C.amber}}, "₦"
                   , (profile.salaryFxRate||0).toLocaleString()
                 )
-                , React.createElement('div', { style: S.muted9, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3217}}, "per " , profile.salaryCurrency)
+                , React.createElement('div', { style: S.muted9}, "per " , profile.salaryCurrency)
               )
-              , React.createElement('div', { style: {background:"#F0FDF4",borderRadius:8,padding:"8px 10px"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3219}}
-                , React.createElement('div', { style: {fontSize:9,color:C.muted,marginBottom:1}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3220}}, "NAIRA EQUIVALENT" )
-                , React.createElement('div', { style: {fontSize:13,fontWeight:700,color:C.green}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3221}}
+              , React.createElement('div', { style: {background:"#F0FDF4",borderRadius:8,padding:"8px 10px"}}
+                , React.createElement('div', { style: {fontSize:9,color:C.muted,marginBottom:1}}, "NAIRA EQUIVALENT" )
+                , React.createElement('div', { style: {fontSize:13,fontWeight:700,color:C.green}}
                   , fmt((profile.monthlyBasicSalary||0)*(profile.salaryFxRate||0))
                 )
-                , React.createElement('div', { style: S.muted9, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3224}}, "per month" )
+                , React.createElement('div', { style: S.muted9}, "per month" )
               )
             )
             , React.createElement('div', { style: {fontSize:10,color:C.muted,lineHeight:1.6,
-              padding:"6px 8px",background:"#F8FAFC",borderRadius:6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3227}}, "PIT is computed on the Naira equivalent at the CBN rate on the date of receipt — NTA 2025. Update the exchange rate in Profile if the CBN rate changes."
-
-
-              , profile.salaryFxDate&&React.createElement('span', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 3231}}, " Rate date: "   , profile.salaryFxDate, ".")
+              padding:"6px 8px",background:"#F8FAFC",borderRadius:6}}, "PIT is computed on the Naira equivalent at the CBN rate on the date of receipt — NTA 2025. Update the exchange rate in Profile if the CBN rate changes."
+              , profile.salaryFxDate&&React.createElement('span', null, " Rate date: "   , profile.salaryFxDate, ".")
             )
           )
         )
@@ -3834,47 +3855,33 @@ function Dashboard({profile,txns,kiv,onNav,setProfile,allProfiles,activeProfileI
           const isHigh = baseline.variance >  0.05;
           const pct    = Math.abs(Math.round(baseline.variance*100));
           return(
-            React.createElement('div', { className: "card", style: {borderLeft:`3px solid ${C.amber}`}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3244}}
-              , React.createElement('div', { style: {display:"flex",justifyContent:"space-between",
-                alignItems:"center",marginBottom:8}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3245}}
-                , React.createElement('div', { className: "ctitle", style: S.mb0, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3247}}, "SALARY VARIANCE DETECTED"
-
+            React.createElement(CollapsibleCard, {
+              title:"SALARY VARIANCE DETECTED",
+              badge:"\u26a0 "+pct+"% "+(isLow?"below":"above")+" baseline", badgeColor:C.amber, borderColor:C.amber,
+              summary:baseline.currentMonth+": "+fmt(baseline.currentMonthTotal)+" vs baseline "+fmt(baseline.baseline)},
+              React.createElement('div', { style: {display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}
+                , React.createElement('div', { style: {background:"#F8FAFC",borderRadius:8,padding:"8px 10px"}}
+                  , React.createElement('div', { style: {fontSize:9,color:C.muted,marginBottom:1}}, "3-MONTH BASELINE" )
+                  , React.createElement('div', { style: {fontSize:14,fontWeight:700,color:C.ink}}, fmt(baseline.baseline))
+                  , React.createElement('div', { style: S.muted9}, "Avg monthly employment income"   )
                 )
-                , React.createElement('span', { style: {fontSize:10,fontWeight:700,padding:"2px 8px",
-                  borderRadius:100,background:C.amberBg,color:C.amber}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3250}}, "⚠ "
-                   , pct, "% " , isLow?"below":"above", " baseline"
-                )
-              )
-              , React.createElement('div', { style: {display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3255}}
-                , React.createElement('div', { style: {background:"#F8FAFC",borderRadius:8,padding:"8px 10px"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3256}}
-                  , React.createElement('div', { style: {fontSize:9,color:C.muted,marginBottom:1}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3257}}, "3-MONTH BASELINE" )
-                  , React.createElement('div', { style: {fontSize:14,fontWeight:700,color:C.ink}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3258}}, fmt(baseline.baseline))
-                  , React.createElement('div', { style: S.muted9, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3259}}, "Avg monthly employment income"   )
-                )
-                , React.createElement('div', { style: {background:"#FFFBEB",borderRadius:8,padding:"8px 10px"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3261}}
-                  , React.createElement('div', { style: {fontSize:9,color:C.muted,marginBottom:1}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3262}}, baseline.currentMonth, " ACTUAL" )
-                  , React.createElement('div', { style: {fontSize:14,fontWeight:700,color:C.amber}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3263}}, fmt(baseline.currentMonthTotal))
-                  , React.createElement('div', { style: S.muted9, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3264}}, pct, "% " , isLow?"lower":"higher", " than usual"  )
+                , React.createElement('div', { style: {background:"#FFFBEB",borderRadius:8,padding:"8px 10px"}}
+                  , React.createElement('div', { style: {fontSize:9,color:C.muted,marginBottom:1}}, baseline.currentMonth, " ACTUAL" )
+                  , React.createElement('div', { style: {fontSize:14,fontWeight:700,color:C.amber}}, fmt(baseline.currentMonthTotal))
+                  , React.createElement('div', { style: S.muted9}, pct, "% " , isLow?"lower":"higher", " than usual"  )
                 )
               )
               , isLow&&(
                 React.createElement('div', { style: {background:"#FFFBEB",border:"1px solid #FDE68A",
-                  borderRadius:8,padding:"8px 10px",fontSize:11,color:"#92400E",lineHeight:1.6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3268}}, "Your employment income is lower than usual this month. Possible reasons:"
-
-                  , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 3271}}, " (1)" ), " Your employer made additional deductions before paying you (cooperative contribution, loan repayment, salary advance) — if so, add them in Profile → Salary Deductions so your gross income is correctly reconstructed."
-
-
-                  , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 3274}}, " (2)" ), " You received part of your salary via a different channel not imported yet."
-                  , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 3275}}, " (3)" ), " Salary was delayed and will appear in next month's statement."
+                  borderRadius:8,padding:"8px 10px",fontSize:11,color:"#92400E",lineHeight:1.6}}, "Your employment income is lower than usual this month. Possible reasons:"
+                  , React.createElement('strong', null, " (1)" ), " Your employer made additional deductions before paying you (cooperative contribution, loan repayment, salary advance) — if so, add them in Profile → Salary Deductions so your gross income is correctly reconstructed."
+                  , React.createElement('strong', null, " (2)" ), " You received part of your salary via a different channel not imported yet."
+                  , React.createElement('strong', null, " (3)" ), " Salary was delayed and will appear in next month's statement."
                 )
               )
               , isHigh&&(
                 React.createElement('div', { style: {background:"#FFFBEB",border:"1px solid #FDE68A",
-                  borderRadius:8,padding:"8px 10px",fontSize:11,color:"#92400E",lineHeight:1.6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 3279}}, "Your employment income is higher than usual this month. This could be a bonus, annual increment, back-pay, or overtime — all taxable as employment income. If this is a one-off large payment (severance, gratuity), see the import review for the terminal benefits prompt."
-
-
-
-
+                  borderRadius:8,padding:"8px 10px",fontSize:11,color:"#92400E",lineHeight:1.6}}, "Your employment income is higher than usual this month. This could be a bonus, annual increment, back-pay, or overtime — all taxable as employment income. If this is a one-off large payment (severance, gratuity), see the import review for the terminal benefits prompt."
                 )
               )
             )
@@ -3897,11 +3904,10 @@ function Dashboard({profile,txns,kiv,onNav,setProfile,allProfiles,activeProfileI
           const uniqueEmpDescPrefixes = new Set(empDescs);
           const likelyMultipleEmployers = monthsWithMultiple>0 || uniqueEmpDescPrefixes.size>2;
 
-          return React.createElement('div', { className: "card", style: {
-            borderLeft:"3px solid "+C.amber,marginBottom:8}},
-            React.createElement('div', { className: "ctitle", style: {color:C.amber,marginBottom:6}},
-              "CAT B — SELF-ASSESSMENT RECONCILIATION REQUIRED"
-            ),
+          return React.createElement(CollapsibleCard, {
+            title:"CAT B — SELF-ASSESSMENT RECONCILIATION REQUIRED",
+            badge:likelyMultipleEmployers?"Multiple sources":null, badgeColor:C.red, borderColor:C.amber,
+            summary:"PIT self-assessment due: "+fmt(agg.estPIT)+" by 31 July"+(likelyMultipleEmployers?" — multiple income sources detected":"")},
             React.createElement('div', { style: {fontSize:11,color:C.ink,lineHeight:1.6,marginBottom:8}},
               "As a Cat B employee (employer makes no PAYE deductions), you must file an annual self-assessment return directly with NRS and pay your full PIT liability by 31 July. No PAYE credits apply."
             ),

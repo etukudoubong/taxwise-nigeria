@@ -8942,6 +8942,7 @@ Income: ₦${agg.income.toLocaleString()} | Expenses: ₦${agg.expenses.toLocale
 }
 
 function ProfileScreen({profile,setProfile,txns,setTxns,assets,setAssets,onBack,authUser,onSignOut,onEditSetup,onNav,ownAccountsCount,importRulesCount,sub,importRules,setImportRules,setOwnAccounts,isOnline,lastSynced,syncQueue}){
+  const isCompany = profile.mode==="company";
   const[edit,setEdit]=useState({...profile});
   const agg=computeAggregates(txns,profile);
   const [signingOut, setSigningOut] = useState(false);

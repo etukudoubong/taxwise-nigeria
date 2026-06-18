@@ -13061,13 +13061,14 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
           );
         })()
 
-        /* ── Recurring Credit Payer Grouping (FIX 3) ── */
+        /* ── Recurring Credit Payer Grouping (FIX 3) — collapsible ── */
         , (()=>{
           const recurringGroups = recurringGroupsMemo;
           if(!recurringGroups.length) return null;
           // Cap rendering to first 30 groups for performance on very large imports
           const displayGroups = recurringGroups.length > 30 ? recurringGroups.slice(0,30) : recurringGroups;
           const hiddenCount = recurringGroups.length - displayGroups.length;
+          const unclassifiedCount = displayGroups.filter(function(g){return !payerClassifications[g[0]];}).length;
 
           const classOptions = [
             {v:"business_revenue", l:"Business / Client Revenue (taxable)"},
@@ -13079,11 +13080,15 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
             {v:"keep_as_is",       l:"Keep current classification \u2014 no change"},
           ];
 
-          return React.createElement('div', { style: {background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,
-            padding:"10px 12px",marginBottom:8,fontSize:11,color:"#1E40AF",lineHeight:1.6}}
-            , React.createElement('strong', null, "Recurring payer groups detected")
-            , React.createElement('div', { style: {fontSize:10,color:"#1D4ED8",marginTop:2,marginBottom:8}}
-              , recurringGroups.length, " sender(s) appear ", recurringGroups.length>1?"multiple times":"repeatedly", " in this statement. Confirm or correct how each group should be classified \u2014 this applies the same classification to all transactions from that sender in this import."
+          return React.createElement(CollapsibleCard, {
+            title:"RECURRING PAYER GROUPS DETECTED",
+            badge:unclassifiedCount>0?(unclassifiedCount+" need review"):"All reviewed",
+            badgeColor:unclassifiedCount>0?C.blue:C.green,
+            borderColor:C.blue,
+            defaultOpen:unclassifiedCount>0,
+            summary:recurringGroups.length+" sender(s) appear "+(recurringGroups.length>1?"multiple times":"repeatedly")+" \u2014 tap to confirm classification"}
+            , React.createElement('div', { style: {fontSize:10,color:"#1D4ED8",marginBottom:8}}
+              , "Confirm or correct how each group should be classified \u2014 this applies the same classification to all transactions from that sender in this import."
             )
             , displayGroups.map(function(g){
               const key = g[0]; const items = g[1];
@@ -13156,13 +13161,14 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
           );
         })()
 
-                /* ── WHT Shortfall Banner — with dropdown classification (FIX 2) ── */
+                /* ── WHT Shortfall Banner — collapsible, dropdown classification (FIX 2) ── */
         , (()=>{
           const whtItemsFull = whtItemsMemo;
           if(!whtItemsFull.length) return null;
           // Cap rendering to first 30 for performance on very large imports
           const whtItems = whtItemsFull.length > 30 ? whtItemsFull.slice(0,30) : whtItemsFull;
           const whtHiddenCount = whtItemsFull.length - whtItems.length;
+          const whtUnclassified = whtItems.filter(function(t){return !t.whtReviewClass;}).length;
           const classOptions = [
             {v:"wht_confirmed", l:"Yes — WHT was deducted (use gross amount)"},
             {v:"full_amount",   l:"No — this is the full amount received"},
@@ -13172,11 +13178,15 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
             {v:"other", l:"Other — needs manual review"},
           ];
           return(
-            React.createElement('div', { style: {background:"#F5F3FF",border:"1px solid #DDD6FE",borderRadius:10,
-              padding:"10px 12px",marginBottom:8,fontSize:11,color:"#4C1D95",lineHeight:1.6}}
-              , React.createElement('strong', null, "Possible WHT deduction detected")
-              , React.createElement('div', { style: {fontSize:10,color:"#6D28D9",marginTop:2,marginBottom:8}}
-                , whtItems.length, " payment(s) appear to be slightly below a round number. This CAN indicate Withholding Tax, but can also be a savings product transfer, loan disbursement, or discount. Select the correct classification for each one below."
+            React.createElement(CollapsibleCard, {
+              title:"POSSIBLE WHT DEDUCTION DETECTED",
+              badge:whtUnclassified>0?(whtUnclassified+" need review"):"All reviewed",
+              badgeColor:whtUnclassified>0?C.purple:C.green,
+              borderColor:C.purple,
+              defaultOpen:whtUnclassified>0,
+              summary:whtItems.length+" payment(s) appear slightly below a round number \u2014 tap to confirm classification"}
+              , React.createElement('div', { style: {fontSize:10,color:"#6D28D9",marginBottom:8}}
+                , "This CAN indicate Withholding Tax, but can also be a savings product transfer, loan disbursement, or discount. Select the correct classification for each one below."
               )
               , whtItems.map((t,i)=>{
                 const selectedClass = t.whtReviewClass || "";

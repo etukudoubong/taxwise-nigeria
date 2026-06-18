@@ -769,6 +769,17 @@ function getDaysLeft(type){
 function classifyTxn(desc, type){
   const d = desc.toLowerCase();
 
+  // ── Bank savings/investment product detection (own-wallet transfers) ──────
+  // OPay Owealth, Spend & Save, Kuda Save, PiggyVest, Cowrywise etc. move money
+  // between the user's OWN wallets at a fixed percentage. This is NOT WHT and
+  // NOT third-party income/expense — it is a personal savings reallocation.
+  if(d.match(/owealth|o-wealth|o\s+wealth|spend\s*(and|&)\s*save|spendandsave|kuda\s*save|piggyvest|piggy\s*vest|piggybank|safelock|flexnaira|cowrywise|cowry\s*wise|autosave|auto-save|auto\s+save|round-?up\s+sav|target\s*sav|goal\s*sav|fixed\s*sav|moneybox|money\s*box/)){
+    return{head:"Savings",icon:"🐷",color:"#0EA5E9",compliance_required:false,
+      taxStream:"own_savings_transfer",
+      obligation:"This is a personal savings/investment product transfer (e.g. OPay Owealth, Spend & Save, PiggyVest, Kuda Save) — money moving between your own wallets. Not WHT, not third-party income or expense. Excluded from tax computation.",
+      law:"NTA 2025 S.3 — transfers between a taxpayer's own accounts are not assessable income or deductible expense"};
+  }
+
   if(type === "income"){
     if(d.match(/salary|salari|wage|payroll|pay.?roll|employment.?income|paye.?credit|monthly.?pay|staff.?pay|emolument|basic.?pay|net.?salary|gross.?pay|monthly.?salary|pay.?for.?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|salary.?for/))
       return{head:"PAYE",icon:"💼",color:C.blue,compliance_required:false,
@@ -957,7 +968,7 @@ function computeAggregates(txns, profile){
     if(t.type==="income"){
       // Personal transfers, reimbursements and own-account transfers are non-taxable
       // They are excluded via compliance_status but double-check taxStream
-      if(t.taxStream==="personal_transfer"||t.taxStream==="reimbursement") continue;
+      if(t.taxStream==="personal_transfer"||t.taxStream==="reimbursement"||t.taxStream==="own_savings_transfer") continue;
       income+=t.amount;
 
       // WHT credits: ONLY include if taxpayer has explicitly confirmed WHT was deducted
@@ -4731,7 +4742,7 @@ function JournalScreen({txns,setTxns,kiv,setKiv,onNav,profile}){
       , React.createElement('div', { className: "tabs", style: {padding:"4px 12px 0"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 4102}}
         , ["all","income","expense","vat","wht","paye","cgt","kiv","personal","excluded"].map(f=>{
           const excCount = txns.filter(t=>t.compliance_status==="excluded").length;
-          const personalCount = txns.filter(t=>t.taxStream==="personal_transfer"||t.taxStream==="reimbursement"||t.taxStream==="own_account_transfer").length;
+          const personalCount = txns.filter(t=>t.taxStream==="personal_transfer"||t.taxStream==="reimbursement"||t.taxStream==="own_account_transfer"||t.taxStream==="own_savings_transfer").length;
           return(
             React.createElement('button', { key: f, className: "tab", onClick: ()=>setFilter(f), style: {
               background:filter===f?(f==="excluded"?"#DC2626":f==="personal"?"#D97706":C.blue):"#fff",
@@ -11996,13 +12007,38 @@ function applyImportRules(transactions, ownAccounts=[], importRules=[], retroact
       }
     }
 
+    // ── BANK SAVINGS/INVESTMENT PRODUCT EXCLUSION ────────────────────────────
+    // Nigerian fintech apps move money between a user's own wallets at fixed
+    // percentages (e.g. OPay Owealth round-up, Spend & Save, PiggyVest auto-save,
+    // Kuda Save, Cowrywise auto-invest). These percentage-based internal transfers
+    // look identical to WHT deductions (a round-percentage drop from a base amount)
+    // but are NOT third-party tax withholding — they are the user's own money
+    // moving to their own savings/investment sub-account.
+    const bankProductKeywords = [
+      "owealth","o-wealth","o wealth",                          // OPay
+      "spend and save","spend & save","spendandsave","spend.save", // OPay/Kuda
+      "kuda save","kuda.save","save.*kuda",                     // Kuda
+      "piggyvest","piggy vest","piggybank","safelock","flexnaira", // PiggyVest
+      "cowrywise","cowry.wise",                                  // Cowrywise
+      "autosave","auto.save","auto-save","round.?up.?sav",       // generic round-up savings
+      "target.?sav","goal.?sav","fixed.?sav",                    // generic savings goals
+      "wallet.?to.?wallet","internal.?transfer.?savings",
+      "investment.?wallet","cashback.?wallet",
+      "vault","moneybox","money.box",                            // other fintech savings vaults
+    ];
+    const isBankSavingsProduct = bankProductKeywords.some(kw => {
+      try { return new RegExp(kw, "i").test(rawDesc); }
+      catch(e) { return rawDesc.toLowerCase().includes(kw); }
+    });
+
     // ── 6. WHT shortfall detection ───────────────────────────────────────────
     // Many Nigerian companies deduct WHT (5% or 10%) before paying professional
     // fees without stating "WHT" in the narration.
     // Detection: amount is a round number minus exactly 5% or 10%
     // e.g. ₦190,000 received = ₦200,000 gross minus 10% WHT
     // Only flag for corporate senders on income transactions
-    if(base.type==="income" && base.amount>0){
+    // EXCLUDE bank savings/investment products — these are not WHT
+    if(base.type==="income" && base.amount>0 && !isBankSavingsProduct){
       const amt = base.amount;
       const senderType = classifySender(rawDesc);
       if(senderType==="corporate"||senderType==="unknown"){
@@ -12167,6 +12203,7 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
   const [progress, setProgress] = useState("");
   const [dateFrom, setDateFrom] = useState(""); // optional date range filter
   const [dateTo,   setDateTo]   = useState("");
+  const [payerClassifications, setPayerClassifications] = useState({}); // FIX 3: payer group -> classification
 
   const parseCSVText = (text) => {
     const lines = text.split(/\r?\n/).filter(l=>l.trim());
@@ -12831,11 +12868,11 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
           )
         )
         /* ── Personal / Reimbursement review banner ───────── */
-        , preview.some(t=>t.needsReview&&(t.taxStream==="personal_transfer"||t.taxStream==="reimbursement"||t.taxStream==="own_account_transfer"))&&(
+        , preview.some(t=>t.needsReview&&(t.taxStream==="personal_transfer"||t.taxStream==="reimbursement"||t.taxStream==="own_account_transfer"||t.taxStream==="own_savings_transfer"))&&(
           React.createElement('div', { style: {background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:10,
             padding:"10px 12px",marginBottom:8,fontSize:11,color:"#92400E",lineHeight:1.6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 11794}}
             , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 11796}}, "👥 Personal / Non-Taxable inflows flagged"     ), " —"
-            , preview.filter(t=>t.needsReview&&(t.taxStream==="personal_transfer"||t.taxStream==="reimbursement"||t.taxStream==="own_account_transfer")).length, " transaction(s) have been automatically excluded as probable personal transfers, reimbursements, or self-transfers. Review them below — tick to include if they are actually taxable income, or leave unticked to keep excluded. After import, review all flagged items in Journal → "
+            , preview.filter(t=>t.needsReview&&(t.taxStream==="personal_transfer"||t.taxStream==="reimbursement"||t.taxStream==="own_account_transfer"||t.taxStream==="own_savings_transfer")).length, " transaction(s) have been automatically excluded as probable personal transfers, reimbursements, bank savings products, or self-transfers. Review them below — tick to include if they are actually taxable income, or leave unticked to keep excluded. After import, review all flagged items in Journal → "
 
 
                      , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 11800}}, "Personal tab" ), "."
@@ -12985,71 +13022,208 @@ function CSVUploadScreen({setTxns, txns, assets, setAssets, profile, authUser, o
           );
         })()
 
-        /* ── WHT Shortfall Banner ───────────────────────────────── */
+        /* ── Recurring Credit Payer Grouping (FIX 3) ── */
+        , (()=>{
+          // Group income transactions by a normalised payer key (first ~24 chars of narration, stripped of dates/refs)
+          const normalisePayer = function(desc){
+            return (desc||"")
+              .toLowerCase()
+              .replace(/\d{6,}/g,"")           // strip long reference numbers
+              .replace(/\d{2}[\/\-]\d{2}[\/\-]\d{2,4}/g,"") // strip dates
+              .replace(/[^a-z\s]/g,"")          // strip punctuation/numbers
+              .trim()
+              .split(/\s+/).slice(0,4).join(" "); // first 4 words
+          };
+          const incomeItems = preview.filter(function(t){return t.type==="income"&&t.included&&!t.whtShortfall;});
+          const groups = {};
+          incomeItems.forEach(function(t){
+            const key = normalisePayer(t.desc);
+            if(key.length<4) return; // too short/generic to group meaningfully
+            if(!groups[key]) groups[key]=[];
+            groups[key].push(t);
+          });
+          const recurringGroups = Object.entries(groups).filter(function(g){return g[1].length>=2;});
+          if(!recurringGroups.length) return null;
+
+          const classOptions = [
+            {v:"business_revenue", l:"Business / Client Revenue (taxable)"},
+            {v:"employment",       l:"Employment / Salary"},
+            {v:"personal",         l:"Personal / Family Transfer (non-taxable)"},
+            {v:"savings_product",  l:"Bank Savings/Investment Product (excluded)"},
+            {v:"loan",             l:"Loan Disbursement (excluded)"},
+            {v:"reimbursement",    l:"Expense Reimbursement (excluded)"},
+            {v:"keep_as_is",       l:"Keep current classification \u2014 no change"},
+          ];
+
+          return React.createElement('div', { style: {background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,
+            padding:"10px 12px",marginBottom:8,fontSize:11,color:"#1E40AF",lineHeight:1.6}}
+            , React.createElement('strong', null, "Recurring payer groups detected")
+            , React.createElement('div', { style: {fontSize:10,color:"#1D4ED8",marginTop:2,marginBottom:8}}
+              , recurringGroups.length, " sender(s) appear ", recurringGroups.length>1?"multiple times":"repeatedly", " in this statement. Confirm or correct how each group should be classified \u2014 this applies the same classification to all transactions from that sender in this import."
+            )
+            , recurringGroups.map(function(g){
+              const key = g[0]; const items = g[1];
+              const total = items.reduce(function(s,t){return s+t.amount;},0);
+              const sample = items[0].desc;
+              const currentClass = payerClassifications[key] || "";
+              return React.createElement('div', { key: key, style: {background:"#DBEAFE",borderRadius:8,
+                padding:"8px 10px",marginBottom:6}}
+                , React.createElement('div', { style: {marginBottom:6}}
+                  , React.createElement('div', { style: {fontSize:11,fontWeight:700,color:"#1E40AF",
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, sample)
+                  , React.createElement('div', { style: {fontSize:10,color:"#1D4ED8",marginTop:2}}
+                    , items.length, " transactions \u00b7 Total: ", fmt(total)
+                  )
+                )
+                , React.createElement('label', { style: {fontSize:9,fontWeight:700,color:"#1D4ED8",
+                  display:"block",marginBottom:4,letterSpacing:".04em"}}, "CLASSIFY ALL "+items.length+" TRANSACTIONS FROM THIS SENDER AS:")
+                , React.createElement('select', { value: currentClass,
+                  onChange: function(e){
+                    const cls = e.target.value;
+                    setPayerClassifications(function(prev){return {...prev, [key]:cls};});
+                    if(cls==="keep_as_is"||!cls) return;
+                    const ids = items.map(function(t){return t.id;});
+                    setPreview(function(prev){return prev.map(function(p){
+                      if(!ids.includes(p.id)) return p;
+                      if(cls==="business_revenue"){
+                        return {...p, incomeType:"business", taxStream:"business",
+                          autoRule:"Confirmed as business/client revenue \u2014 recurring payer group"};
+                      }
+                      if(cls==="employment"){
+                        return {...p, incomeType:"employment", taxStream:"employment",
+                          autoRule:"Confirmed as employment income \u2014 recurring payer group"};
+                      }
+                      if(cls==="personal"){
+                        return {...p, taxStream:"personal_transfer", included:false, compliance_status:"excluded",
+                          autoRule:"Confirmed as personal/family transfer \u2014 excluded from income"};
+                      }
+                      if(cls==="savings_product"){
+                        return {...p, taxStream:"own_savings_transfer", included:false, compliance_status:"excluded",
+                          autoRule:"Confirmed as bank savings/investment product \u2014 excluded from income"};
+                      }
+                      if(cls==="loan"){
+                        return {...p, taxStream:"loan_disbursement", included:false, compliance_status:"excluded",
+                          autoRule:"Confirmed as loan disbursement \u2014 excluded from income"};
+                      }
+                      if(cls==="reimbursement"){
+                        return {...p, taxStream:"reimbursement", included:false, compliance_status:"excluded",
+                          autoRule:"Confirmed as expense reimbursement \u2014 excluded from income"};
+                      }
+                      return p;
+                    });});
+                  },
+                  style: {width:"100%",padding:"8px 10px",fontSize:11,fontWeight:600,
+                    borderRadius:7,border:"1.5px solid "+(currentClass?"#1D4ED8":"#BFDBFE"),
+                    background:"#fff",color:"#1E40AF",fontFamily:"inherit"}}
+                  , React.createElement('option', { value: ""}, "\u2014 Select classification for this group \u2014")
+                  , classOptions.map(function(opt){
+                    return React.createElement('option', { key: opt.v, value: opt.v}, opt.l);
+                  })
+                )
+                , currentClass&&currentClass!=="keep_as_is"&&React.createElement('div', { style: {marginTop:6,fontSize:10,
+                  padding:"5px 8px",borderRadius:6,background:"#F0FDF4",color:C.green}}
+                  , "\u2713 Applied to all "+items.length+" transactions from this sender"
+                )
+              );
+            })
+          );
+        })()
+
+                /* ── WHT Shortfall Banner — with dropdown classification (FIX 2) ── */
         , (()=>{
           const whtItems = preview.filter(t=>t.whtShortfall&&t.included&&t.type==="income");
           if(!whtItems.length) return null;
+          const classOptions = [
+            {v:"wht_confirmed", l:"Yes — WHT was deducted (use gross amount)"},
+            {v:"full_amount",   l:"No — this is the full amount received"},
+            {v:"savings_product", l:"This is a savings/investment product transfer (OPay Owealth, Spend&Save, PiggyVest, etc.)"},
+            {v:"loan_disbursement", l:"This is a loan disbursement (lender deducted fees/interest upfront)"},
+            {v:"discount_applied", l:"This is the discounted/net price after a seller discount"},
+            {v:"other", l:"Other — needs manual review"},
+          ];
           return(
             React.createElement('div', { style: {background:"#F5F3FF",border:"1px solid #DDD6FE",borderRadius:10,
-              padding:"10px 12px",marginBottom:8,fontSize:11,color:"#4C1D95",lineHeight:1.6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 11952}}
-              , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 11954}}, "📋 Possible WHT deduction detected"    )
-              , React.createElement('div', { style: {fontSize:10,color:"#6D28D9",marginTop:2,marginBottom:8}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 11955}}
-                , whtItems.length, " payment(s) appear to be slightly below a round number — this pattern typically indicates Withholding Tax was deducted at source by the payer before remitting to you. Confirm each one to record the correct gross amount and claim your WHT credit on your annual return."
-
-
-
+              padding:"10px 12px",marginBottom:8,fontSize:11,color:"#4C1D95",lineHeight:1.6}}
+              , React.createElement('strong', null, "Possible WHT deduction detected")
+              , React.createElement('div', { style: {fontSize:10,color:"#6D28D9",marginTop:2,marginBottom:8}}
+                , whtItems.length, " payment(s) appear to be slightly below a round number. This CAN indicate Withholding Tax, but can also be a savings product transfer, loan disbursement, or discount. Select the correct classification for each one below."
               )
-              , whtItems.map((t,i)=>(
-                React.createElement('div', { key: i, style: {background:"#EDE9FE",borderRadius:8,
-                  padding:"8px 10px",marginBottom:6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 11962}}
-                  , React.createElement('div', { style: {display:"flex",justifyContent:"space-between",
-                    alignItems:"flex-start",marginBottom:6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 11964}}
-                    , React.createElement('div', { style: S.flex1, __self: this, __source: {fileName: _jsxFileName, lineNumber: 11966}}
-                      , React.createElement('div', { style: {fontSize:11,fontWeight:700,color:"#4C1D95",
-                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 11967}}
-                        , t.desc
-                      )
-                      , React.createElement('div', { style: {fontSize:10,color:"#6D28D9",marginTop:2}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 11971}}, "Received: "
-                         , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 11972}}, fmt(t.amount))
-                        , " → ", "Possible gross: "  , React.createElement('strong', {__self: this, __source: {fileName: _jsxFileName, lineNumber: 11973}}, fmt(t.whtShortfallGross))
-                        , " ", "(", t.whtShortfallRate, "% WHT = "   , fmt(t.whtShortfallAmt), ")"
-                      )
+              , whtItems.map((t,i)=>{
+                const selectedClass = t.whtReviewClass || "";
+                return React.createElement('div', { key: i, style: {background:"#EDE9FE",borderRadius:8,
+                  padding:"8px 10px",marginBottom:6}}
+                  , React.createElement('div', { style: {marginBottom:8}}
+                    , React.createElement('div', { style: {fontSize:11,fontWeight:700,color:"#4C1D95",
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}
+                      , t.desc
+                    )
+                    , React.createElement('div', { style: {fontSize:10,color:"#6D28D9",marginTop:2}}, "Received: "
+                       , React.createElement('strong', null, fmt(t.amount))
+                      , " \u2192 ", "Possible gross: "  , React.createElement('strong', null, fmt(t.whtShortfallGross))
+                      , " ", "(", t.whtShortfallRate, "% gap = "   , fmt(t.whtShortfallAmt), ")"
                     )
                   )
-                  , React.createElement('div', { style: {display:"flex",gap:6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 11978}}
-                    , React.createElement('button', { onClick: ()=>{
-                      setPreview(prev=>prev.map(p=>p.id===t.id?{
-                        ...p,
-                        whtConfirmed:true,
-                        amount:t.whtShortfallGross,      // upgrade to gross
-                        whtCreditAmount:t.whtShortfallAmt,
-                        whtFlag:true,
-                        autoRule:`WHT confirmed: gross ₦${_optionalChain([t, 'access', _159 => _159.whtShortfallGross, 'optionalAccess', _160 => _160.toLocaleString, 'call', _161 => _161()])} — ${t.whtShortfallRate}% WHT (₦${_optionalChain([t, 'access', _162 => _162.whtShortfallAmt, 'optionalAccess', _163 => _163.toLocaleString, 'call', _164 => _164()])}) deducted by payer`,
-                        needsReview:false,
-                      }:p));
-                    }, style: {flex:2,padding:"6px 8px",fontSize:10,fontWeight:700,
-                      background:"#7C3AED",border:"none",borderRadius:7,
-                      color:"#fff",cursor:"pointer",fontFamily:"inherit"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 11979}}, "✓ Yes — WHT was deducted. Use gross ₦"
-                              , fmt(t.whtShortfallGross)
-                    )
-                    , React.createElement('button', { onClick: ()=>{
-                      setPreview(prev=>prev.map(p=>p.id===t.id?{
-                        ...p,whtShortfall:false,needsReview:false,
-                        autoRule:"WHT shortfall dismissed — amount confirmed as net received",
-                      }:p));
-                    }, style: {flex:1,padding:"6px 8px",fontSize:10,fontWeight:700,
-                      background:"#EDE9FE",border:"1px solid #DDD6FE",borderRadius:7,
-                      color:"#6D28D9",cursor:"pointer",fontFamily:"inherit"}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 11994}}, "No — this is the full amount"
-
-                    )
+                  , React.createElement('label', { style: {fontSize:9,fontWeight:700,color:"#6D28D9",
+                    display:"block",marginBottom:4,letterSpacing:".04em"}}, "WHAT IS THIS TRANSACTION?")
+                  , React.createElement('select', { value: selectedClass,
+                    onChange: function(e){
+                      const cls = e.target.value;
+                      setPreview(function(prev){return prev.map(function(p){
+                        if(p.id!==t.id) return p;
+                        if(cls==="wht_confirmed"){
+                          return {...p, whtReviewClass:cls, whtConfirmed:true,
+                            amount:t.whtShortfallGross, whtCreditAmount:t.whtShortfallAmt,
+                            whtFlag:true, needsReview:false,
+                            autoRule:"WHT confirmed: gross "+fmt(t.whtShortfallGross)+" \u2014 "+t.whtShortfallRate+"% WHT ("+fmt(t.whtShortfallAmt)+") deducted by payer"};
+                        }
+                        if(cls==="full_amount"){
+                          return {...p, whtReviewClass:cls, whtShortfall:false, needsReview:false,
+                            autoRule:"WHT shortfall dismissed \u2014 amount confirmed as full amount received"};
+                        }
+                        if(cls==="savings_product"){
+                          return {...p, whtReviewClass:cls, whtShortfall:false, needsReview:false,
+                            taxStream:"own_savings_transfer", included:false, compliance_status:"excluded",
+                            autoRule:"Reclassified as bank savings/investment product transfer \u2014 excluded from income"};
+                        }
+                        if(cls==="loan_disbursement"){
+                          return {...p, whtReviewClass:cls, whtShortfall:false, needsReview:false,
+                            taxStream:"loan_disbursement", included:false, compliance_status:"excluded",
+                            autoRule:"Reclassified as loan disbursement (net of upfront fees) \u2014 excluded from income, principal is not taxable"};
+                        }
+                        if(cls==="discount_applied"){
+                          return {...p, whtReviewClass:cls, whtShortfall:false, needsReview:false,
+                            autoRule:"Reclassified as discounted/net sale price \u2014 not a WHT deduction"};
+                        }
+                        return {...p, whtReviewClass:cls, needsReview:true,
+                          autoRule:"Marked for manual review \u2014 classification undetermined"};
+                      });});
+                    },
+                    style: {width:"100%",padding:"8px 10px",fontSize:11,fontWeight:600,
+                      borderRadius:7,border:"1.5px solid "+(selectedClass?"#7C3AED":"#DDD6FE"),
+                      background:"#fff",color:"#4C1D95",fontFamily:"inherit"}}
+                    , React.createElement('option', { value: ""}, "\u2014 Select classification \u2014")
+                    , classOptions.map(function(opt){
+                      return React.createElement('option', { key: opt.v, value: opt.v}, opt.l);
+                    })
                   )
-                )
-              ))
+                  , selectedClass&&React.createElement('div', { style: {marginTop:6,fontSize:10,
+                    padding:"5px 8px",borderRadius:6,
+                    background:selectedClass==="wht_confirmed"?"#F0FDF4":"#FFFBEB",
+                    color:selectedClass==="wht_confirmed"?C.green:"#92400E"}}
+                    , selectedClass==="wht_confirmed"&&"\u2713 Will use gross amount and record WHT credit"
+                    , selectedClass==="full_amount"&&"\u2713 Amount kept as received \u2014 no WHT credit recorded"
+                    , selectedClass==="savings_product"&&"\u2713 Excluded from income \u2014 personal savings transfer"
+                    , selectedClass==="loan_disbursement"&&"\u2713 Excluded from income \u2014 loan principal is not taxable"
+                    , selectedClass==="discount_applied"&&"\u2713 Kept as net amount \u2014 not treated as WHT"
+                    , selectedClass==="other"&&"\u26A0 Flagged for manual review in Journal after import"
+                  )
+                );
+              })
             )
           );
         })()
 
-        /* Asset confirmation banner */
+                /* Asset confirmation banner */
         , preview.some(t=>t.needsCapexConfirm||t.type==="asset")&&(
           React.createElement('div', { style: {background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:10,
             padding:"10px 12px",marginBottom:10,fontSize:11,color:"#92400E",lineHeight:1.6}, __self: this, __source: {fileName: _jsxFileName, lineNumber: 12013}}
